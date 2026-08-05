@@ -1,0 +1,192 @@
+"""FastAPI application entry point / composition root.
+
+Run with:
+    uvicorn app.main:app --reload
+"""
+import asyncio
+import logging
+import sys
+import uuid as uuid_lib
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from sqlalchemy.exc import SQLAlchemyError
+
+if sys.platform == "win32":
+    # psycopg3's async mode cannot run on Windows' default ProactorEventLoop
+    # (raises psycopg.InterfaceError at the first async connection attempt).
+    # This must be set before uvicorn's asyncio.run() creates the event loop,
+    # i.e. at import time of this module, not inside an async function.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+from app.api.router import api_router
+from app.core.config import get_settings
+from app.core.exceptions import register_exception_handlers
+from app.core.logging import setup_logging
+from app.core.openapi import patch_openapi_with_examples
+from app.db.session import AsyncSessionLocal, check_database_connection
+from app.repositories.chat_session_repository import ChatSessionRepository
+from app.repositories.user_repository import UserRepository
+from app.services.chat_session_service import ChatSessionService
+from app.services.session_resolution import get_or_create_swagger_demo_session
+
+setup_logging()
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown hook.
+
+    Verifies the database is reachable once, at boot, so a misconfigured
+    DATABASE_URL is caught immediately in the logs. The app still finishes
+    starting even if this check fails — that keeps `/health` available to
+    report the failure (and recover automatically once the database comes
+    back) instead of crash-looping a process an orchestrator would just
+    keep restarting into the same error.
+    """
+    logger.info("DATABASE_URL (masked): %s", settings.masked_database_url)
+    logger.info(
+        "Embedding config: model=%s dimensions=%d",
+        settings.EMBEDDING_MODEL,
+        settings.EMBEDDING_DIMENSIONS,
+    )
+    logger.info(
+        "LLM config: model=%s timeout_seconds=%.1f max_retries=%d temperature=%.2f",
+        settings.ollama_chat_model,
+        settings.LLM_TIMEOUT_SECONDS,
+        settings.LLM_MAX_RETRIES,
+        settings.LLM_TEMPERATURE,
+    )
+    if settings.OLLAMA_USE_GPU:
+        logger.info(
+            "LLM execution: GPU enabled (host=%s num_gpu=%s num_thread=%s)",
+            settings.ollama_host,
+            settings.OLLAMA_NUM_GPU if settings.OLLAMA_NUM_GPU is not None else "default",
+            settings.OLLAMA_NUM_THREAD if settings.OLLAMA_NUM_THREAD is not None else "default",
+        )
+    else:
+        logger.info(
+            "LLM execution: CPU fallback (host=%s num_gpu=0 num_thread=%s)",
+            settings.ollama_host,
+            settings.OLLAMA_NUM_THREAD if settings.OLLAMA_NUM_THREAD is not None else "default",
+        )
+
+    try:
+        await check_database_connection()
+    except SQLAlchemyError as exc:
+        logger.error(
+            "STARTUP CHECK FAILED: could not connect to the database. "
+            "Verify DATABASE_URL in .env and that the database is reachable. "
+            "Error: %s",
+            exc,
+        )
+    else:
+        logger.info("Startup check passed: database connection OK")
+        app.state.swagger_example_user_email = (
+            f"swagger-{uuid_lib.uuid4().hex[:8]}@example.com"
+        )
+        logger.info(
+            "Swagger example user email set to %s",
+            app.state.swagger_example_user_email,
+        )
+        try:
+            async with AsyncSessionLocal() as session:
+                users = await UserRepository(session).list_active(limit=1)
+                if users:
+                    app.state.swagger_example_user_id = str(users[0].id)
+                    logger.info(
+                        "Swagger example user_id set to first active user %s",
+                        app.state.swagger_example_user_id,
+                    )
+                    demo_session_id = await get_or_create_swagger_demo_session(
+                        users=UserRepository(session),
+                        sessions=ChatSessionRepository(session),
+                        session_service=ChatSessionService(session),
+                        user_id=users[0].id,
+                    )
+                    app.state.swagger_example_session_id = str(demo_session_id)
+                    logger.info(
+                        "Swagger example session_id set to %s",
+                        app.state.swagger_example_session_id,
+                    )
+        except SQLAlchemyError as exc:
+            logger.warning("Could not load Swagger example ids: %s", exc)
+
+        # Warm up Ollama chat model in background so first user request completes in <5s
+        async def _warmup_ollama() -> None:
+            try:
+                from app.llm.ollama_client import OllamaLLMClient
+                client = OllamaLLMClient()
+                await client.warmup()
+                await client.close()
+            except Exception as exc:
+                logger.warning("Ollama background warmup error: %s", exc)
+
+        asyncio.create_task(_warmup_ollama())
+
+        # Force OpenAPI rebuild after startup examples are known, so the first
+        # /docs hit never serves a schema generated without those patches.
+        app.openapi_schema = None
+
+    yield
+
+    logger.info("Application shutting down")
+
+
+def create_app() -> FastAPI:
+    """Application factory.
+
+    A factory (rather than a bare module-level `FastAPI()`) keeps `main.py`
+    importable for tests without side effects beyond constructing the app,
+    and keeps configuration/wiring in one place.
+    """
+    app = FastAPI(
+        title=settings.APP_NAME,
+        version=settings.APP_VERSION,
+        debug=settings.DEBUG,
+        lifespan=lifespan,
+    )
+
+    register_exception_handlers(app)
+    app.include_router(api_router)
+
+    def custom_openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+
+        from fastapi.openapi.utils import get_openapi
+
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            openapi_version=app.openapi_version,
+            description=app.description,
+            routes=app.routes,
+        )
+        example_user_id = getattr(app.state, "swagger_example_user_id", None)
+        example_user_email = getattr(app.state, "swagger_example_user_email", None)
+        example_session_id = getattr(app.state, "swagger_example_session_id", None)
+        if example_user_id or example_user_email or example_session_id:
+            patch_openapi_with_examples(
+                schema,
+                example_user_id=example_user_id,
+                example_user_email=example_user_email,
+                example_session_id=example_session_id,
+            )
+
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi
+
+    return app
+
+
+app = create_app()
+
+
+@app.get("/", tags=["root"])
+async def root() -> dict[str, str]:
+    return {"service": settings.APP_NAME, "version": settings.APP_VERSION}

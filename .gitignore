@@ -1,0 +1,99 @@
+# =========================
+# Environment & Secrets
+# =========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.p12
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+htmlcov/
+.coverage
+coverage.xml
+*.log
+
+# =========================
+# Node / Frontend
+# =========================
+node_modules/
+.pnp
+.pnp.js
+frontend/dist/
+frontend/build/
+frontend/.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# Build outputs (root-level)
+# =========================
+dist/
+build/
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/settings.json
+*.suo
+*.user
+
+# =========================
+# Cursor AI IDE
+# =========================
+.cursor/
+
+# =========================
+# Docker
+# =========================
+docker-compose.override.yml
+
+# =========================
+# Database / Storage
+# =========================
+*.sqlite
+*.db
+chroma_db/
+vector_store/
+db/data/
+db/pgdata/
+
+# =========================
+# Backend Uploads (user files)
+# =========================
+backend/uploads/
+
+# =========================
+# Alembic migrations
+# Keep versions tracked (they are source code).
+# Uncomment ONLY if you want to exclude generated revisions:
+# backend/alembic/versions/
+
+# =========================
+# Temp / Generated Artifacts
+# =========================
+implementation_plan.md
+*.tmp
+*.bak
