@@ -9,8 +9,34 @@ export const apiClient = axios.create({
   headers: {
     Accept: 'application/json',
   },
-  timeout: 120_000,
+  timeout: 600_000,
 })
+
+apiClient.interceptors.request.use(
+  (config) => {
+    console.log("[12] AXIOS REQUEST");
+    console.log(config.method);
+    console.log(config.url);
+    console.log(config.data);
+    return config;
+  },
+  (error) => {
+    console.error("[14] AXIOS ERROR", error);
+    return Promise.reject(error);
+  }
+);
+
+apiClient.interceptors.response.use(
+  (response) => {
+    console.log("[13] AXIOS RESPONSE");
+    console.log(response.status);
+    return response;
+  },
+  (error) => {
+    console.error("[14] AXIOS ERROR", error);
+    return Promise.reject(error);
+  }
+);
 
 export function getApiErrorMessage(error: unknown): string {
   if (!axios.isAxiosError(error)) {

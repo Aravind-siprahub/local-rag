@@ -5,6 +5,8 @@ directly (e.g. `from app.processing.parser import parse_file`) to avoid
 pulling the full ORM stack when only pure functions are needed.
 """
 
+from app.processing import chunker, cleaner, parser, processor
+
 __all__ = [
     "cleaner",
     "chunker",

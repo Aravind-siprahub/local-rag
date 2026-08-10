@@ -73,27 +73,19 @@ def _log_new_connection(dbapi_connection: object, connection_record: object) -> 
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dependency that yields a request-scoped `AsyncSession`.
-
-    Usage:
-        @router.get("/items")
-        async def list_items(db: AsyncSession = Depends(get_db)):
-            ...
-
-    Commit is the *caller's* responsibility (explicit `await db.commit()` in
-    the service/router) — this dependency does not auto-commit, so a route
-    that forgets to commit fails safely (nothing written) instead of
-    silently persisting a partial change. `async with` closes the session
-    automatically on exit; on a `SQLAlchemyError` the transaction is rolled
-    back first so the exception handler in `core/exceptions.py` sees a clean
-    session state.
-    """
+    """FastAPI dependency that yields a request-scoped `AsyncSession`."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
         except SQLAlchemyError:
             await session.rollback()
             logger.exception("Database error during request; transaction rolled back")
+            raise
+        except (GeneratorExit, Exception):
+            try:
+                await session.rollback()
+            except Exception:
+                pass
             raise
 
 

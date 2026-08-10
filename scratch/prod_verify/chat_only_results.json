@@ -1,0 +1,76 @@
+{
+  "chat1": {
+    "status": 200,
+    "ms": 23306.6,
+    "body": {
+      "answer": "Okay, the user has shared a document titled \"You_to_My_Data.docx\" with a chunk of content about a compliance summary and functional requirements. They've also included a specific question: \"What is the vacation accrual policy?\"\n\nFirst, I need to understand what this document is about. The chunk shows it",
+      "citations": [
+        {
+          "chunk_id": "e88a8871-a54b-4414-b871-78460e020014",
+          "chunk_text": "cloak — keeps one SME client's workspace inaccessible to another; Qdrant's collection-level isolation reinforces this at the vector-store layer.\nAuthentication / SSO via Keycloak (OAuth2/OIDC, SAML).\nAudit logging of who accessed which documents and asked which questions — required for compliance sign-off in regulated verticals.\nRead-only database role for the text-to-SQL path (Section 18.4) — the single most important guardrail in the entire structured-data pipeline.\nSandboxing of any arbitrary code execution (Section 18.4).\nSecure document deletion and backup/disaster recovery for both the vector index and the original-file store.\nMulti-tenant isolation must be verified with actual cross-tenant access tests before onboarding more than one SME client to shared infrastructure — this is a testing requirement, not just a configuration claim.\n24. Performance Considerations\nModel loading time — first request after a cold start pays the cost of loading model weights into memory/VRAM.",
+          "document_id": "d7f8e319-0d50-48f1-a188-d379c7c50aee",
+          "document_version_id": "a3f96359-b330-4423-9e85-dee6ae4ee0c4",
+          "similarity_score": 0.0164,
+          "rank": 1
+        },
+        {
+          "chunk_id": "db6feb6f-0513-4776-a21e-a6d430b28f8a",
+          "chunk_text": ") is chosen based on the client's expected concurrency and document volume, not fixed in advance. A single-client proof of concept can run entirely on a 16–32 GB machine; a multi-client shared deployment should be sized against the workstation or server tier.\n23. Security & Privacy\nLocal-only processing — no pipeline stage has a code path to an external API by default; this is an architectural property, not a configuration toggle that could be left on accidentally.\nEncryption at rest for stored documents (MinIO) and the metadata database (PostgreSQL).\nEncryption in transit between all internal services, even though they're on the same network boundary.\nRole-based access control (RBAC) via Keycloak — keeps one SME client's workspace inaccessible to another; Qdrant's collection-level isolation reinforces this at the vector-store layer.\nAuthentication / SSO via Keycloak (OAuth2/OIDC, SAML).",
+          "document_id": "d7f8e319-0d50-48f1-a188-d379c7c50aee",
+          "document_version_id": "a3f96359-b330-4423-9e85-dee6ae4ee0c4",
+          "similarity_score": 0.0161,
+          "rank": 2
+        },
+        {
+          "chunk_id": "b027ac9a-7bc3-4b92-b400-c5e031529756",
+          "chunk_text": "ama\nWhere data goes | Still transits to the inference provider's servers | Never leaves the organization's network\nCost | Lower than closed-model APIs, but still per-token | Fixed infrastructure cost\nHardware needs | None (provider hosts the GPU) | 16 GB RAM minimum, 32 GB+ recommended for the mid-size models this project targets\nDocument Type | Parser | Notes\nPDF | Docling (TableFormer for tables) | Falls back to OCR only if a page has no text layer\nWord (DOCX) | Docling | Preserves headings, structure\nExcel / CSV | DuckDB (direct read) | Routed to the structured-data pipeline, not RAG (Section 18)\nScanned images / photographed pages | PaddleOCR | Only invoked as a fallback, never as the primary path\nDatabases | Native SQL connectors + Vanna | Structured-data pipeline\nParser | Trade-off\nPyMuPDF / pdfplumber | Lighter, faster, but loses table structure — acceptable only for plain-prose documents\nUnstructured | Comparable structure preservation, larger community, Apache 2.0",
+          "document_id": "d7f8e319-0d50-48f1-a188-d379c7c50aee",
+          "document_version_id": "a3f96359-b330-4423-9e85-dee6ae4ee0c4",
+          "similarity_score": 0.0159,
+          "rank": 3
+        },
+        {
+          "chunk_id": "db70621a-acdd-4688-83dd-2c65c91acd32",
+          "chunk_text": "ant that enables natural-language interaction with enterprise data — documents and structured data alike — without any dependency on an external cloud service for processing.\n2.2 Secondary Objectives\nData Privacy — Every stage of the pipeline (parsing, OCR, embedding, vector search, generation) executes inside the organization's own network boundary. Nothing is architecturally capable of leaving, rather than merely policy-forbidden from leaving.\nCost Optimization — Replace per-token cloud billing with a fixed infrastructure cost. The economics flip from \"cost scales with usage\" to \"cost is provisioned once, usage is free at the margin.\"\nEnterprise Search — Replace keyword matching (which requires the user to guess the exact words in the source document) with semantic search, where a question like \"what did we spend on logistics last quarter\" can retrieve a passage titled \"Q3 Freight & Distribution Costs\" even though no words match literally. This is the direct product of embeddings (Se",
+          "document_id": "d7f8e319-0d50-48f1-a188-d379c7c50aee",
+          "document_version_id": "a3f96359-b330-4423-9e85-dee6ae4ee0c4",
+          "similarity_score": 0.0156,
+          "rank": 4
+        },
+        {
+          "chunk_id": "ddb07ec5-fe94-4a6c-887f-9de88e15b9b6",
+          "chunk_text": "sing & Compliance Summary\nFunctional Requirements\nNon-Functional Requirements\nRisks & Limitations\nImplementation Roadmap\nFuture Enhancements\nAppendix A: Glossary of Core Concepts\n1. Problem Statement\n1.1 Current Challenges\nSMEs generate large volumes of business data daily, spread across PDFs, Excel spreadsheets, Word documents, PowerPoint decks, scanned invoices, images, emails, and relational databases. As volume grows, locating a specific fact becomes disproportionately harder than the data itself growing — search is manual, employee time is spent re-finding rather than using information, and results are inconsistent across people.\nCloud AI assistants (ChatGPT, Copilot) solve the retrieval-and-synthesis problem but introduce a new one:\nSensitive company data must transit to a third-party service to be processed.",
+          "document_id": "d7f8e319-0d50-48f1-a188-d379c7c50aee",
+          "document_version_id": "a3f96359-b330-4423-9e85-dee6ae4ee0c4",
+          "similarity_score": 0.0154,
+          "rank": 5
+        }
+      ],
+      "token_usage": {
+        "prompt_tokens": 194,
+        "completion_tokens": 64,
+        "total_tokens": 258
+      },
+      "model": "qwen3:4b",
+      "processing_time_ms": 23202,
+      "user_message_id": "37fa0ffe-8769-464b-9839-ae3af856359b",
+      "assistant_message_id": "e8697e19-9094-4610-a9c7-dbe2ec3a3aa8"
+    }
+  },
+  "chat2": {
+    "status": 200,
+    "ms": 24297.7,
+    "answer": "Okay, let me try to figure out how many days that is. The user provided a document chunk that lists milestones for weeks 5 through 8. Each week is a milestone, so I need to count how many weeks that is.\n\nLooking at the table: Week 5, 6, 7,"
+  },
+  "stream": {
+    "status": "ok",
+    "ms": 22478.7,
+    "lines": 2,
+    "text": ""
+  },
+  "unknown": {
+    "status": 200,
+    "answer": "Okay, let me try to figure out what the user is asking here. They provided a bunch of technical details about SSL certificates and Nginx configurations, and then they're asking for a \"secret launch code for Mars Base Alpha\". Hmm, that seems a bit odd because Mars Base Alpha isn't a real thing—it",
+    "citations": 2
+  }
+}

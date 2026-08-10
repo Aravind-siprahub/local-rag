@@ -62,7 +62,7 @@ class OllamaEmbeddingClient:
         if not text or not text.strip():
             raise EmbeddingClientError("Cannot embed empty text.")
 
-        payload = {"model": self.model, "prompt": text, "keep_alive": 0}
+        payload = {"model": self.model, "prompt": text, "keep_alive": "10m"}
         response_data = await self._request_with_retry("/api/embeddings", payload)
         embedding = response_data.get("embedding")
         if not isinstance(embedding, list):
@@ -73,14 +73,18 @@ class OllamaEmbeddingClient:
                 f"Ollama returned {len(embedding)} dimensions, expected {self.dimensions}."
             )
 
+        float_vector = [float(value) for value in embedding]
         logger.info(
-            "Embedding OK: vector_length=%d configured_dimensions=%d model=%s",
-            len(embedding),
-            self.dimensions,
+            "[EMBEDDING GENERATED] model=%s dim=%d len=%d first_5=%s prompt=%r",
             self.model,
+            self.dimensions,
+            len(float_vector),
+            [round(v, 4) for v in float_vector[:5]],
+            text[:50],
         )
 
-        return [float(value) for value in embedding]
+        return float_vector
+
 
     async def close(self) -> None:
         if self._owns_client and self._client is not None:

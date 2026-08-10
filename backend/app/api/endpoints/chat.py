@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_rag_service
 from app.core.swagger_constants import OPENAPI_PLACEHOLDER_UUID
+from app.llm.client import LLMClientError, LLMTimeoutError, LLMUnavailableError
 from app.rag.response import RAGResponse
 from app.rag.service import RAGError, RAGService
 from app.repositories.chat_session_repository import ChatSessionRepository
@@ -44,6 +45,10 @@ async def ask_chat(
     rag: RAGService = Depends(get_rag_service),
     session_service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatResponse:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("[CHAT REQUEST PAYLOAD] %s", payload.model_dump())
+
     filters = SearchFilters(
         document_id=payload.document_id,
         document_version_id=payload.document_version_id,
@@ -66,9 +71,72 @@ async def ask_chat(
             similarity_threshold=payload.similarity_threshold,
         )
     except RAGError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        logger.error("[CHAT RAG ERROR] %s", exc)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except LLMTimeoutError as exc:
+        logger.error("[CHAT LLM TIMEOUT] %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="The AI model took too long to generate a response. Please try asking again.",
+        ) from exc
+    except LLMUnavailableError as exc:
+        logger.error("[CHAT LLM UNAVAILABLE] %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Ollama model service unavailable: {exc.reason}",
+        ) from exc
+    except LLMClientError as exc:
+        logger.error("[CHAT LLM ERROR] %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AI generation failed: {exc}",
+        ) from exc
 
     return _to_chat_response(result)
+
+
+@router.post(
+    "/stream",
+    summary="Ask a question using RAG (Server-Sent Events streaming)",
+    description="Streams RAG tokens and citations in real time via Server-Sent Events (SSE).",
+)
+async def ask_chat_stream(
+    payload: ChatRequest,
+    rag: RAGService = Depends(get_rag_service),
+    session_service: ChatSessionService = Depends(get_chat_session_service),
+):
+    from fastapi.responses import StreamingResponse
+
+    filters = SearchFilters(
+        document_id=payload.document_id,
+        document_version_id=payload.document_version_id,
+    )
+
+    session_id = payload.session_id
+    if session_id is None or session_id == OPENAPI_PLACEHOLDER_UUID:
+        session_id = await get_or_create_swagger_demo_session(
+            users=UserRepository(session_service.session),
+            sessions=ChatSessionRepository(session_service.session),
+            session_service=session_service,
+        )
+
+    generator = rag.ask_stream(
+        session_id,
+        payload.question,
+        filters=filters,
+        top_k=payload.top_k,
+        similarity_threshold=payload.similarity_threshold,
+    )
+
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get(
@@ -127,6 +195,9 @@ def _to_chat_response(result: RAGResponse) -> ChatResponse:
                 chunk_text=source.chunk_text,
                 document_id=source.document_id,
                 document_version_id=source.document_version_id,
+                document_title=source.document_title,
+                section_title=source.section_title,
+                page_number=source.page_number,
                 similarity_score=source.similarity_score,
                 rank=source.rank,
             )

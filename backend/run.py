@@ -24,5 +24,9 @@ if sys.platform == "win32":
 
 import uvicorn  # noqa: E402  (must follow the policy fix above)
 
+import pathlib
+
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    app_dir = str(pathlib.Path(__file__).resolve().parent / "app")
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, reload_dirs=[app_dir])
+

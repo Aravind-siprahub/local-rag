@@ -1,8 +1,9 @@
 """FastAPI application entry point / composition root.
 
 Run with:
-    uvicorn app.main:app --reload
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 import sys
@@ -124,7 +125,45 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.warning("Ollama background warmup error: %s", exc)
 
+        # Auto-ingest any un-processed or pending documents on boot
+        async def _ingest_pending_documents() -> None:
+            try:
+                async with AsyncSessionLocal() as session:
+                    from app.models.document import Document
+                    from app.models.enums import DocumentStatus
+                    from app.services.ingestion_service import IngestionService
+                    from sqlalchemy import select
+
+                    stmt = select(Document).where(
+                        Document.deleted_at.is_(None),
+                        Document.status.in_([DocumentStatus.UPLOADED, DocumentStatus.PROCESSING, DocumentStatus.FAILED]),
+                    )
+                    docs = list((await session.execute(stmt)).scalars().all())
+                    doc_ids = [d.id for d in docs]
+                    if doc_ids:
+                        logger.info("Startup: found %d pending/uploaded/failed document(s) to ingest", len(doc_ids))
+                        for doc_id in doc_ids:
+                            try:
+                                async with AsyncSessionLocal() as ing_session:
+                                    ingestion = IngestionService(ing_session)
+                                    logger.info("Startup auto-ingesting document %s...", doc_id)
+                                    await ingestion.run_pipeline(doc_id)
+                                    await ing_session.commit()
+                            except Exception as exc:
+                                logger.warning("Startup ingestion error for doc %s: %s", doc_id, exc)
+
+            except Exception as exc:
+                if "storage_provider" in str(exc) or "UndefinedColumn" in str(exc):
+                    logger.warning(
+                        "Supabase Storage metadata columns missing in PostgreSQL. "
+                        "Run the migration in Supabase SQL Editor: db/sql/007_supabase_storage_columns.sql"
+                    )
+                else:
+                    logger.warning("Startup pending document check error: %s", exc)
+
         asyncio.create_task(_warmup_ollama())
+        asyncio.create_task(_ingest_pending_documents())
+
 
         # Force OpenAPI rebuild after startup examples are known, so the first
         # /docs hit never serves a schema generated without those patches.
@@ -134,6 +173,8 @@ async def lifespan(app: FastAPI):
 
     logger.info("Application shutting down")
 
+
+from fastapi.middleware.cors import CORSMiddleware
 
 def create_app() -> FastAPI:
     """Application factory.
@@ -149,7 +190,22 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Register CORS middleware BEFORE all routes and exception handlers
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
     register_exception_handlers(app)
+    app.include_router(api_router, prefix="/api")
     app.include_router(api_router)
 
     def custom_openapi() -> dict:

@@ -12,12 +12,13 @@ interface ChatHistoryProps {
 }
 
 export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistoryProps) {
+  console.log("[D] messages passed to MessageList", messages);
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (scrollRef.current) {
-      const scrollElement = scrollRef.current
-      scrollElement.scrollTop = scrollElement.scrollHeight
+      const viewport = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]') || scrollRef.current
+      viewport.scrollTop = viewport.scrollHeight
     }
   }, [messages, isLoading])
 
@@ -25,8 +26,10 @@ export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistor
     return <ChatEmptyState />
   }
 
+  console.log("[E] messages rendered", messages.map(m => m.content));
+
   return (
-    <ScrollArea className="flex-1 px-4 py-4" ref={scrollRef}>
+    <ScrollArea className="flex-1 min-h-0 h-full px-4 py-4" ref={scrollRef}>
       <div className="max-w-3xl mx-auto flex flex-col gap-6 pb-6">
         {messages.map((msg, index) => (
           <div key={msg.id || index} className="group">

@@ -28,7 +28,7 @@ export function RecentChats({ sessions, isLoading, isError, error, onRetry }: Re
       <CardContent>
         {isLoading ? <LoadingState rows={5} /> : null}
         {isError ? <ErrorState title="Could not load chat sessions" error={error} onRetry={onRetry} /> : null}
-        {!isLoading && !isError && sessions?.length === 0 ? (
+        {!isLoading && !isError && (sessions ?? []).length === 0 ? (
           <EmptyState
             title="No conversations yet"
             description="Start a chat to query your documents with local LLM retrieval."

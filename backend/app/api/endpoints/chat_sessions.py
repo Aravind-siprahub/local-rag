@@ -22,7 +22,7 @@ async def create_chat_session(
 
 @router.get("", response_model=ChatSessionListResponse, summary="List a user's chat sessions")
 async def list_chat_sessions(
-    user_id: uuid.UUID | None = Query(
+    user_id: str | None = Query(
         default=None,
         description=(
             "Owner of the chat sessions. Omit to list sessions for the first "
@@ -34,17 +34,34 @@ async def list_chat_sessions(
     pagination: PaginationParams = Depends(),
     service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatSessionListResponse:
-    if user_id is None:
+    parsed_user_id: uuid.UUID | None = None
+    if user_id and user_id.strip() and user_id.strip().lower() not in ("undefined", "null", "none"):
+        try:
+            parsed_user_id = uuid.UUID(user_id.strip())
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid user_id UUID format: {user_id!r}",
+            )
+
+    if parsed_user_id is None:
         from app.repositories.user_repository import UserRepository
-        from app.services.exceptions import ValidationError
 
         users = await UserRepository(service.session).list_active(limit=1)
         if not users:
-            raise ValidationError("No users exist yet. Create one via POST /users first.")
-        user_id = users[0].id
+            # No users yet — return an empty list instead of an error so the
+            # frontend can render gracefully without a 422 / error state.
+            return ChatSessionListResponse(
+                items=[],
+                total=0,
+                limit=pagination.limit,
+                offset=pagination.offset,
+            )
+        parsed_user_id = users[0].id
 
     sessions = await service.list_by_user(
-        user_id, include_archived=include_archived, limit=pagination.limit, offset=pagination.offset
+        parsed_user_id, include_archived=include_archived, limit=pagination.limit, offset=pagination.offset
     )
     return ChatSessionListResponse(
         items=[ChatSessionResponse.model_validate(s) for s in sessions],

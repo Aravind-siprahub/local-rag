@@ -9,7 +9,7 @@ export function useDashboardChatSessions() {
   const { data: user, isLoading: isUserLoading } = useCurrentUser()
 
   return useQuery({
-    queryKey: ['chat-sessions', 'dashboard', user?.id ?? 'default', RECENT_CHATS_LIMIT],
+    queryKey: ['chat-sessions', 'dashboard', user?.id ?? 'none', RECENT_CHATS_LIMIT],
     queryFn: () =>
       listChatSessions({
         user_id: user?.id,
@@ -17,7 +17,10 @@ export function useDashboardChatSessions() {
         offset: 0,
         include_archived: false,
       }),
-    enabled: !isUserLoading,
+    // Don't fire until the user query has settled AND we have a real user ID.
+    // When user is null (no users exist yet) we skip the API call entirely
+    // and fall back to an empty array via the select default.
+    enabled: !isUserLoading && !!user?.id,
     select: (response) => response.items,
   })
 }

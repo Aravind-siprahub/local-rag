@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.models.enums import DocumentVersionStatus, ProcessingJobStatus, ProcessingJobType
 from app.models.processing_job import ProcessingJob
-from app.processing.cleaner import clean_text
-from app.processing.chunker import chunk_text
-from app.processing.parser import ParsingError, parse_file
+from app.services.chunker import chunk_document
+from app.services.embedding import normalize_text_for_embedding
+from app.services.parser import DocumentParser, ParsingError
 from app.services.document_chunk_service import ChunkInput, DocumentChunkService
 from app.services.document_version_service import DocumentVersionService
 from app.services.processing_job_service import ProcessingJobService
@@ -57,6 +57,7 @@ class DocumentProcessor:
         self.upload_dir = Path(upload_dir if upload_dir is not None else settings.UPLOAD_DIR)
         self.chunk_size = chunk_size if chunk_size is not None else settings.CHUNK_SIZE
         self.chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.CHUNK_OVERLAP
+        self.document_parser = DocumentParser()
         self.jobs = job_service or ProcessingJobService(session)
         self.chunks = chunk_service or DocumentChunkService(session)
         self.versions = version_service or DocumentVersionService(session)
@@ -91,18 +92,26 @@ class DocumentProcessor:
             )
 
             raw_bytes = await self._load_file(version.storage_key)
-            raw_text = parse_file(raw_bytes, version.original_filename, version.mime_type)
-            cleaned = clean_text(raw_text)
-            text_chunks = chunk_text(cleaned, self.chunk_size, self.chunk_overlap)
+            parsed_doc = await self.document_parser.parse(
+                raw_bytes,
+                version.original_filename,
+                getattr(version, "document_id", version.id),
+                version.mime_type,
+            )
+            semantic_chunks = chunk_document(parsed_doc)
 
             chunk_inputs: list[ChunkInput] = [
                 {
-                    "chunk_index": chunk.chunk_index,
-                    "content": chunk.content,
-                    "char_start": chunk.char_start,
-                    "char_end": chunk.char_end,
+                    "chunk_index": sc.chunk_index,
+                    "content": normalize_text_for_embedding(sc.text),
+                    "content_tokens": sc.token_count,
+                    "page_number": sc.page_number or None,
+                    "section_title": sc.breadcrumb or sc.section or None,
+                    "char_start": sc.char_start,
+                    "char_end": sc.char_end,
+                    "metadata_": sc.to_metadata_dict(),
                 }
-                for chunk in text_chunks
+                for sc in semantic_chunks
             ]
 
             await self.chunks.create_chunks_for_version(version.id, chunk_inputs)
@@ -122,14 +131,14 @@ class DocumentProcessor:
                 "Processing job %s completed in %d ms (%d chunks for version %s)",
                 job_id,
                 duration_ms,
-                len(text_chunks),
+                len(semantic_chunks),
                 version.id,
             )
 
             return ProcessingResult(
                 job_id=job_id,
                 document_version_id=version.id,
-                chunk_count=len(text_chunks),
+                chunk_count=len(semantic_chunks),
                 duration_ms=duration_ms,
             )
 

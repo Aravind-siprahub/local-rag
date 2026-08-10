@@ -28,10 +28,26 @@ def get_document_service(session: AsyncSession = Depends(get_db)) -> DocumentSer
     return DocumentService(session)
 
 
+from app.storage.s3_storage_service import S3StorageService
+from app.storage.supabase_storage_service import SupabaseStorageService
+
+def _get_storage_backend():
+    """Return the best available storage backend.
+
+    Priority: S3 (boto3) > Supabase REST > local disk
+    S3 is preferred because it is more reliable than the custom REST client.
+    """
+    from app.core.config import get_settings
+    settings = get_settings()
+    if settings.s3_is_configured:
+        return S3StorageService()
+    supabase = SupabaseStorageService()
+    if supabase.is_configured:
+        return supabase
+    return LocalFileStorage()
+
 def get_document_upload_service(session: AsyncSession = Depends(get_db)) -> DocumentUploadService:
-    # A fresh LocalFileStorage per request is cheap (it just holds a Path
-    # and ensures the directory exists) — no need to share a singleton.
-    return DocumentUploadService(session, LocalFileStorage())
+    return DocumentUploadService(session, _get_storage_backend())
 
 
 def get_document_version_service(session: AsyncSession = Depends(get_db)) -> DocumentVersionService:
