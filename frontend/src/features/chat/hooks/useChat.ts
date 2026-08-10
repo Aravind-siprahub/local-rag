@@ -36,7 +36,17 @@ export function useChat() {
   })
 
   const sendMessage = useMutation({
-    mutationFn: (payload: ChatRequest) => chatService.sendMessage(payload),
+    mutationFn: async (payload: ChatRequest) => {
+      console.log("[9] sendMessage mutation called", payload);
+      try {
+        const res = await chatService.sendMessage(payload)
+        console.log("[10] sendMessage mutation completed");
+        return res
+      } catch (error) {
+        console.error("[10A] Mutation failed", error);
+        throw error
+      }
+    },
     onSuccess: (_, variables) => {
       if (variables.session_id) {
         queryClient.invalidateQueries({ queryKey: chatKeys.messages(variables.session_id) })

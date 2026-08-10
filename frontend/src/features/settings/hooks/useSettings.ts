@@ -38,8 +38,19 @@ export function useSettings() {
   }, [usersQuery.data?.items])
 
   const updateSettingMutation = useMutation({
-    mutationFn: ({ key, value, description }: { key: string; value: unknown; description?: string }) =>
-      upsertSystemSetting(key, { value, description, updated_by: activeUser?.email }),
+    mutationFn: ({ key, value, description }: { key: string; value: unknown; description?: string }) => {
+      const formattedValue =
+        typeof value === 'object' && value !== null && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : { val: value }
+      const validUserId = activeUser?.id && /^[0-9a-fA-F-]{36}$/.test(activeUser.id) ? activeUser.id : undefined
+
+      return upsertSystemSetting(key, {
+        value: formattedValue,
+        description,
+        updated_by: validUserId,
+      })
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['system-settings'] })
     },

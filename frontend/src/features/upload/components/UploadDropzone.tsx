@@ -80,6 +80,8 @@ export function UploadDropzone({ onFilesSelected, disabled = false }: UploadDrop
       `}
     >
       <input
+        id="file-upload-input"
+        name="file_upload"
         ref={fileInputRef}
         type="file"
         multiple

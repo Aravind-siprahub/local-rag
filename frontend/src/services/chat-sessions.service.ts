@@ -10,7 +10,33 @@ export interface ListChatSessionsParams extends PaginationParams {
 export async function listChatSessions(
   params: ListChatSessionsParams = {},
 ): Promise<ChatSessionListResponse> {
-  const { data } = await apiClient.get<ChatSessionListResponse>('/chat-sessions', { params })
+  const cleanParams: Record<string, any> = {}
+
+  if (
+    params.user_id &&
+    typeof params.user_id === 'string' &&
+    params.user_id.trim() !== '' &&
+    params.user_id !== 'undefined' &&
+    params.user_id !== 'null'
+  ) {
+    cleanParams.user_id = params.user_id.trim()
+  }
+
+  if (typeof params.include_archived === 'boolean') {
+    cleanParams.include_archived = params.include_archived
+  }
+
+  if (typeof params.limit === 'number') {
+    cleanParams.limit = params.limit
+  }
+
+  if (typeof params.offset === 'number') {
+    cleanParams.offset = params.offset
+  }
+
+  const { data } = await apiClient.get<ChatSessionListResponse>('/chat-sessions', {
+    params: cleanParams,
+  })
   return data
 }
 

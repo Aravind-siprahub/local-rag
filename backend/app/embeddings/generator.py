@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.embeddings.client import EmbeddingClient, EmbeddingClientError
 from app.models.document_chunk import DocumentChunk
 from app.models.enums import VectorMetric
+from app.services.embedding import prepare_chunk_for_embedding
 from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,8 @@ class EmbeddingGenerator:
                 continue
 
             try:
-                vector = await self.client.embed(chunk.content)
+                embed_text = self._build_embed_text(chunk)
+                vector = await self.client.embed(embed_text)
             except EmbeddingClientError as exc:
                 raise EmbeddingClientError(
                     f"Failed to embed chunk {chunk.id!r} (index={chunk.chunk_index}): {exc}"
@@ -93,3 +95,27 @@ class EmbeddingGenerator:
                 chunks.append(chunk)
 
         return await self.embed_chunks(chunks)
+
+    def _build_embed_text(self, chunk: DocumentChunk) -> str:
+        """Build embedding input with breadcrumb context when metadata is present."""
+        meta = getattr(chunk, "metadata_", None) or {}
+        if not meta and not getattr(chunk, "section_title", None):
+            return chunk.content
+
+        from app.services.metadata import Chunk, ContentType
+
+        semantic = Chunk(
+            id=str(chunk.id),
+            document_id=chunk.document_version_id,
+            document_name=meta.get("document_name", ""),
+            page_number=meta.get("page_number", 0) or 0,
+            section=meta.get("section", ""),
+            subsection=meta.get("subsection", ""),
+            breadcrumb=meta.get("breadcrumb", "") or (chunk.section_title or ""),
+            chunk_index=chunk.chunk_index,
+            content_type=ContentType(meta.get("content_type", "paragraph")),
+            language=meta.get("language", "en"),
+            text=chunk.content,
+        )
+        prepared = prepare_chunk_for_embedding(semantic)
+        return prepared or chunk.content

@@ -52,6 +52,7 @@ class FakeDocumentService:
         self.created: list[dict] = []
         self.created_ids: list[uuid.UUID] = []
         self.deleted: list[uuid.UUID] = []
+        self.updated: list[dict] = []
         self.fail_create = False
 
     async def create_document(self, **kwargs):
@@ -62,6 +63,9 @@ class FakeDocumentService:
         self.created_ids.append(doc.id)
         return doc
 
+    async def update(self, id_: uuid.UUID, **kwargs) -> None:
+        self.updated.append({"id": id_, **kwargs})
+
     async def delete(self, id_: uuid.UUID) -> None:
         self.deleted.append(id_)
 
@@ -71,6 +75,7 @@ class FakeDocumentVersionService:
         self.created: list[dict] = []
         self.created_ids: list[uuid.UUID] = []
         self.deleted: list[uuid.UUID] = []
+        self.updated: list[dict] = []
         self.fail_create = False
 
     async def create_next_version(self, **kwargs):
@@ -80,6 +85,9 @@ class FakeDocumentVersionService:
         version = _FakeVersion(id=uuid.uuid4())
         self.created_ids.append(version.id)
         return version
+
+    async def update(self, id_: uuid.UUID, **kwargs) -> None:
+        self.updated.append({"id": id_, **kwargs})
 
     async def delete(self, id_: uuid.UUID) -> None:
         self.deleted.append(id_)

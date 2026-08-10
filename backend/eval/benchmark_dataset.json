@@ -1,0 +1,1012 @@
+[
+  {
+    "id": 1,
+    "category": "definitions",
+    "question": "What is Talk to My Data?",
+    "expected_answer": "Talk to My Data is an enterprise system that unifies unstructured document question answering (RAG) and structured data querying (Text-to-SQL) behind a single chat interface.",
+    "required_keywords": ["RAG", "Text-to-SQL", "chat interface"],
+    "forbidden_keywords": ["Let me analyze", "<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 2,
+    "category": "definitions",
+    "question": "What is Vanna?",
+    "expected_answer": "Vanna is a specialized text-to-SQL framework trained on database schema DDL, documentation, and example query pairs to convert natural language into SQL.",
+    "required_keywords": ["text-to-SQL", "DDL", "schema"],
+    "forbidden_keywords": ["Passage 1", "<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18.3 Vanna"]
+  },
+  {
+    "id": 3,
+    "category": "definitions",
+    "question": "What is the AI Router?",
+    "expected_answer": "The AI Router is an intent classification module that determines whether user queries require document RAG, SQL querying, or both.",
+    "required_keywords": ["router", "intent", "RAG", "SQL"],
+    "forbidden_keywords": ["Let me think"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.3 Why this needs a Router"]
+  },
+  {
+    "id": 4,
+    "category": "definitions",
+    "question": "What is pgvector?",
+    "expected_answer": "pgvector is an extension for PostgreSQL that enables vector similarity search using cosine distance for storing and retrieving document embeddings.",
+    "required_keywords": ["PostgreSQL", "vector", "cosine"],
+    "forbidden_keywords": ["Looking at Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 5,
+    "category": "definitions",
+    "question": "What is DuckDB in this context?",
+    "expected_answer": "DuckDB is an embedded analytical SQL engine used to execute SQL queries deterministically over local spreadsheets and CSV files.",
+    "required_keywords": ["DuckDB", "SQL", "spreadsheet"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 6,
+    "category": "definitions",
+    "question": "What is recursive text chunking?",
+    "expected_answer": "Recursive text chunking splits long documents into target character sizes with overlapping boundaries to preserve context across splits.",
+    "required_keywords": ["chunking", "overlap", "character"],
+    "forbidden_keywords": ["Let me check"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 7,
+    "category": "definitions",
+    "question": "What is nomic-embed-text?",
+    "expected_answer": "nomic-embed-text is the dense vector embedding model used to generate 768-dimensional embeddings for document chunks.",
+    "required_keywords": ["nomic-embed-text", "embedding", "768"],
+    "forbidden_keywords": ["Passage 2"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 8,
+    "category": "definitions",
+    "question": "What is an embedding vector?",
+    "expected_answer": "An embedding vector is a dense numerical array representing the semantic meaning of a text segment in a vector space.",
+    "required_keywords": ["vector", "dense", "semantic"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 9,
+    "category": "definitions",
+    "question": "What is cosine similarity distance?",
+    "expected_answer": "Cosine similarity distance measures the angle between two embedding vectors in vector space to evaluate semantic similarity.",
+    "required_keywords": ["cosine", "distance", "vector"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 10,
+    "category": "definitions",
+    "question": "What is DDL in database context?",
+    "expected_answer": "DDL stands for Data Definition Language, which defines database schema structures such as CREATE TABLE statements.",
+    "required_keywords": ["DDL", "schema", "table"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18.3 Vanna"]
+  },
+
+  {
+    "id": 11,
+    "category": "comparisons",
+    "question": "How does RAG differ from Text-to-SQL?",
+    "expected_answer": "RAG retrieves unstructured document passages to answer text questions, whereas Text-to-SQL translates queries into SQL to retrieve structured numerical data.",
+    "required_keywords": ["unstructured", "structured", "SQL"],
+    "forbidden_keywords": ["<think>", "Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 12,
+    "category": "comparisons",
+    "question": "Compare structured data processing with unstructured document processing.",
+    "expected_answer": "Structured data processing relies on relational schema DDL and deterministic SQL, while unstructured document processing uses text embeddings and vector search.",
+    "required_keywords": ["structured", "unstructured", "SQL", "vector"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 13,
+    "category": "comparisons",
+    "question": "What is the difference between top_k candidates and final_context passages?",
+    "expected_answer": "Top_k is the initial vector candidate pool retrieved from the database, while final_context is the smaller reranked set passed to the LLM prompt.",
+    "required_keywords": ["top_k", "final_context", "reranked"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 14,
+    "category": "comparisons",
+    "question": "Compare read-only database roles with admin roles in Text-to-SQL.",
+    "expected_answer": "Read-only database roles restrict execution strictly to SELECT statements, whereas admin roles expose write and drop permissions.",
+    "required_keywords": ["read-only", "SELECT", "admin"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 15,
+    "category": "comparisons",
+    "question": "What is the difference between dense vector search and full-text keyword search?",
+    "expected_answer": "Dense vector search matches semantic concepts using embeddings, while full-text search matches exact keywords using tsvector indexes.",
+    "required_keywords": ["dense", "full-text", "tsvector"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 16,
+    "category": "comparisons",
+    "question": "Compare local disk storage with Supabase cloud storage.",
+    "expected_answer": "Local disk storage saves uploads in a local directory, whereas Supabase cloud storage manages remote object storage.",
+    "required_keywords": ["local", "Supabase", "storage"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 17,
+    "category": "comparisons",
+    "question": "How does DuckDB differ from PostgreSQL in this system?",
+    "expected_answer": "DuckDB is an embedded in-memory database for local spreadsheets, whereas PostgreSQL is the primary persistent relational and vector database.",
+    "required_keywords": ["DuckDB", "PostgreSQL", "embedded"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 18,
+    "category": "comparisons",
+    "question": "Compare system settings stored in database vs environment variables.",
+    "expected_answer": "Database system settings are dynamic and editable via REST API, whereas environment variables are static runtime defaults.",
+    "required_keywords": ["database", "environment", "dynamic"],
+    "forbidden_keywords": ["Looking at Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 19,
+    "category": "comparisons",
+    "question": "What is the difference between SSE streaming and standard HTTP responses?",
+    "expected_answer": "SSE streaming sends partial token chunks in real time as generated, while standard responses return the complete payload at once.",
+    "required_keywords": ["SSE", "streaming", "real time"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 20,
+    "category": "comparisons",
+    "question": "Compare chunk size vs chunk overlap.",
+    "expected_answer": "Chunk size defines the total character length of a split, while chunk overlap defines the shared character boundary between adjacent chunks.",
+    "required_keywords": ["chunk size", "chunk overlap", "boundary"],
+    "forbidden_keywords": ["Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+
+  {
+    "id": 21,
+    "category": "why",
+    "question": "Why must RAG and Text-to-SQL remain separate technical mechanisms?",
+    "expected_answer": "RAG and Text-to-SQL must remain separate because they possess different architectures, failure modes, data structures, and security requirements.",
+    "required_keywords": ["architectures", "failure modes", "security"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 22,
+    "category": "why",
+    "question": "Why does Text-to-SQL require a read-only database role?",
+    "expected_answer": "A read-only database role prevents hallucinated or malicious queries from mutating, deleting, or corrupting database tables.",
+    "required_keywords": ["read-only", "mutating", "deleting"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 23,
+    "category": "why",
+    "question": "Why is an AI Router necessary in front of a single chat box?",
+    "expected_answer": "An AI Router is necessary to classify query intent and dispatch requests to either the RAG engine or SQL generator without user manual selection.",
+    "required_keywords": ["intent", "classify", "dispatch"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.3 Why this needs a Router"]
+  },
+  {
+    "id": 24,
+    "category": "why",
+    "question": "Why is Reciprocal Rank Fusion (RRF) used in reranking?",
+    "expected_answer": "RRF combines relevance rankings from dense vector search and full-text keyword search to produce an optimal hybrid candidate list.",
+    "required_keywords": ["RRF", "vector", "keyword"],
+    "forbidden_keywords": ["Let me check"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 25,
+    "category": "why",
+    "question": "Why are thinking tags sanitized from output responses?",
+    "expected_answer": "Thinking tags are sanitized to remove internal chain-of-thought scratchpad text from user-facing enterprise responses.",
+    "required_keywords": ["sanitized", "chain-of-thought", "scratchpad"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 26,
+    "category": "why",
+    "question": "Why is chunk overlap important during document parsing?",
+    "expected_answer": "Chunk overlap prevents critical contextual information or sentences from being severed across chunk boundaries.",
+    "required_keywords": ["overlap", "context", "boundaries"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 27,
+    "category": "why",
+    "question": "Why does the system enforce strict non-hallucination rules?",
+    "expected_answer": "Strict non-hallucination rules ensure enterprise answers are fully grounded in provided document evidence without unverified claims.",
+    "required_keywords": ["grounded", "evidence", "hallucination"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 28,
+    "category": "why",
+    "question": "Why is Vanna trained on schema DDL statements?",
+    "expected_answer": "Vanna requires schema DDL to understand table names, column data types, primary keys, and foreign key relationships when generating SQL.",
+    "required_keywords": ["DDL", "schema", "column"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18.3 Vanna"]
+  },
+  {
+    "id": 29,
+    "category": "why",
+    "question": "Why are citations attached to generated RAG answers?",
+    "expected_answer": "Citations provide auditability, allowing users to verify source document titles, section headers, and page numbers.",
+    "required_keywords": ["citations", "auditability", "verify"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 30,
+    "category": "why",
+    "question": "Why does LLM timeout need to be configured for local execution?",
+    "expected_answer": "Local CPU LLM inference can take extended time, requiring a generous timeout to prevent premature connection cancellation.",
+    "required_keywords": ["timeout", "LLM", "local"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+
+  {
+    "id": 31,
+    "category": "how",
+    "question": "How are document passages retrieved and passed to the LLM?",
+    "expected_answer": "Document text is chunked, embedded into vectors, retrieved via vector similarity search, reranked, and formatted into prompt context for the LLM.",
+    "required_keywords": ["chunked", "embedded", "vector", "reranked"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 32,
+    "category": "how",
+    "question": "How does Vanna translate natural language questions into SQL?",
+    "expected_answer": "Vanna matches natural language intent against trained DDL schemas and example SQL pairs to generate syntactically valid SQL queries.",
+    "required_keywords": ["Vanna", "DDL", "SQL"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18.3 Vanna"]
+  },
+  {
+    "id": 33,
+    "category": "how",
+    "question": "How does DuckDB execute SQL queries locally?",
+    "expected_answer": "DuckDB loads local CSV or Excel files in memory and executes generated SQL queries deterministically under read-only mode.",
+    "required_keywords": ["DuckDB", "in memory", "read-only"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 34,
+    "category": "how",
+    "question": "How is conversation history summarized when context limits are reached?",
+    "expected_answer": "Older conversation turns are compressed into a single-line summary block while preserving recent turns in full.",
+    "required_keywords": ["conversation", "summary", "turns"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 35,
+    "category": "how",
+    "question": "How does the output sanitizer handle unclosed thinking tags?",
+    "expected_answer": "The sanitizer identifies unclosed thinking tags and strips all preceding scratchpad reasoning text before returning the clean response.",
+    "required_keywords": ["sanitizer", "thinking", "strips"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 36,
+    "category": "how",
+    "question": "How does pgvector compute vector similarity?",
+    "expected_answer": "pgvector uses the cosine distance operator to measure similarity between candidate vector embeddings and the query vector.",
+    "required_keywords": ["pgvector", "cosine", "similarity"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 37,
+    "category": "how",
+    "question": "How does the application manage database connection sessions?",
+    "expected_answer": "The app manages async database sessions via FastAPI dependency generators, handling session teardown and catching GeneratorExit cleanly.",
+    "required_keywords": ["async", "sessions", "dependency"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 38,
+    "category": "how",
+    "question": "How are system settings updated dynamically?",
+    "expected_answer": "System settings are updated via PUT /api/system-settings/{key} endpoints which persist values as dictionary objects in PostgreSQL.",
+    "required_keywords": ["PUT", "system-settings", "PostgreSQL"],
+    "forbidden_keywords": ["Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 39,
+    "category": "how",
+    "question": "How are uploaded files parsed into text chunks?",
+    "expected_answer": "Document parser modules extract raw text from PDF/Word files, apply text cleaning, and generate overlapping character chunks.",
+    "required_keywords": ["parser", "text", "chunks"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 40,
+    "category": "how",
+    "question": "How does the frontend handle dark mode themes?",
+    "expected_answer": "The frontend toggles the dark class on document root element and persists user theme preferences in localStorage.",
+    "required_keywords": ["theme", "dark", "localStorage"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+
+  {
+    "id": 41,
+    "category": "architecture",
+    "question": "What is the overall architecture of Talk to My Data?",
+    "expected_answer": "The architecture comprises a unified Chat UI, an AI Router, a RAG Document Pipeline with pgvector, and a Text-to-SQL Pipeline with Vanna and DuckDB.",
+    "required_keywords": ["Chat UI", "AI Router", "RAG", "Text-to-SQL"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 42,
+    "category": "architecture",
+    "question": "What database tables exist in the PostgreSQL schema?",
+    "expected_answer": "The schema includes tables for users, documents, document versions, document chunks, system settings, and chat sessions.",
+    "required_keywords": ["users", "documents", "document_chunks", "system_settings"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 43,
+    "category": "architecture",
+    "question": "Where does vector retrieval fit in the query lifecycle?",
+    "expected_answer": "Vector retrieval occurs immediately after query classification, querying pgvector embeddings to select top matching document chunks.",
+    "required_keywords": ["retrieval", "vector", "chunks"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 44,
+    "category": "architecture",
+    "question": "What is the role of FastAPI in the backend?",
+    "expected_answer": "FastAPI serves as the backend web application framework, routing REST requests, dependency injection, and streaming responses.",
+    "required_keywords": ["FastAPI", "REST", "backend"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 45,
+    "category": "architecture",
+    "question": "How does the backend interface with Ollama?",
+    "expected_answer": "The backend sends HTTP REST requests to Ollama API endpoints for dense vector embeddings and LLM chat completion generation.",
+    "required_keywords": ["Ollama", "HTTP", "REST"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 46,
+    "category": "architecture",
+    "question": "What security boundaries protect database operations?",
+    "expected_answer": "Security boundaries include read-only database connections, SQL query validation, sanitized prompt templates, and isolated file storage.",
+    "required_keywords": ["read-only", "validation", "security"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 47,
+    "category": "architecture",
+    "question": "What role does React playing in the frontend?",
+    "expected_answer": "React provides the interactive component-based user interface for chat sessions, file uploads, settings management, and live system monitoring.",
+    "required_keywords": ["React", "interface", "chat"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 48,
+    "category": "architecture",
+    "question": "What role does Tailwind CSS perform in the application?",
+    "expected_answer": "Tailwind CSS handles responsive styling, theme customization, typography, and visual components across the frontend UI.",
+    "required_keywords": ["Tailwind", "styling", "theme"],
+    "forbidden_keywords": ["Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 49,
+    "category": "architecture",
+    "question": "How are environment configurations managed?",
+    "expected_answer": "Environment configurations are loaded via Pydantic BaseSettings from .env files and environment variables.",
+    "required_keywords": ["Pydantic", "BaseSettings", ".env"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 50,
+    "category": "architecture",
+    "question": "How is health monitoring implemented across system dependencies?",
+    "expected_answer": "The health endpoint checks connectivity status across PostgreSQL database, Ollama execution host, and local disk storage.",
+    "required_keywords": ["health", "PostgreSQL", "Ollama"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+
+  {
+    "id": 51,
+    "category": "SQL",
+    "question": "How does Text-to-SQL execute queries safely?",
+    "expected_answer": "Text-to-SQL executes queries safely by restricting execution to read-only database connections and validating SQL syntax before running.",
+    "required_keywords": ["read-only", "SQL", "validating"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 52,
+    "category": "SQL",
+    "question": "Can Text-to-SQL execute arbitrary data modification statements?",
+    "expected_answer": "No. Data modification statements like UPDATE, DELETE, or DROP are strictly blocked by read-only database role permissions.",
+    "required_keywords": ["UPDATE", "DELETE", "read-only"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 53,
+    "category": "SQL",
+    "question": "What training data does Vanna require for Text-to-SQL?",
+    "expected_answer": "Vanna requires schema DDL statements, table documentation, and sample natural language to SQL pairs.",
+    "required_keywords": ["Vanna", "DDL", "schema"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18.3 Vanna"]
+  },
+  {
+    "id": 54,
+    "category": "SQL",
+    "question": "How does DuckDB execute SQL over local CSV or Excel files?",
+    "expected_answer": "DuckDB reads local spreadsheet files in memory and executes SQL queries deterministically over virtual table structures.",
+    "required_keywords": ["DuckDB", "CSV", "Excel"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 55,
+    "category": "SQL",
+    "question": "What failure modes occur during Text-to-SQL generation?",
+    "expected_answer": "Failure modes include hallucinated SQL syntax, incorrect join keys, missing column references, and invalid query structures.",
+    "required_keywords": ["hallucinated", "joins", "syntax"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 56,
+    "category": "SQL",
+    "question": "What is a read-only database role?",
+    "expected_answer": "A read-only database role is a database user account configured with SELECT privileges only, preventing data mutation.",
+    "required_keywords": ["read-only", "SELECT", "mutation"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 57,
+    "category": "SQL",
+    "question": "How are structured query results formatted for user presentation?",
+    "expected_answer": "Query results are formatted as tabular rows or synthesized into narrative summary responses.",
+    "required_keywords": ["tabular", "synthesized", "summary"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 58,
+    "category": "SQL",
+    "question": "Why is SQL query validation performed prior to execution?",
+    "expected_answer": "Validation verifies syntax correctness and ensures queries do not attempt unauthorized schema alterations or malicious actions.",
+    "required_keywords": ["Validation", "syntax", "unauthorized"],
+    "forbidden_keywords": ["Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 59,
+    "category": "SQL",
+    "question": "How does Text-to-SQL handle complex relational joins?",
+    "expected_answer": "Vanna uses foreign key references and schema DDL training to construct proper JOIN clauses between database tables.",
+    "required_keywords": ["foreign key", "JOIN", "Vanna"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18.3 Vanna"]
+  },
+  {
+    "id": 60,
+    "category": "SQL",
+    "question": "What role does PostgreSQL play in structured data handling?",
+    "expected_answer": "PostgreSQL serves as the primary relational store for system data and relational enterprise databases.",
+    "required_keywords": ["PostgreSQL", "relational", "store"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+
+  {
+    "id": 61,
+    "category": "RAG",
+    "question": "What is RAG in this system?",
+    "expected_answer": "RAG (Retrieval-Augmented Generation) retrieves relevant document text passages from vector search to ground LLM answer generation with citations.",
+    "required_keywords": ["Retrieval-Augmented Generation", "vector", "citations"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 62,
+    "category": "RAG",
+    "question": "How does dense vector similarity search retrieve relevant chunks?",
+    "expected_answer": "Dense vector search embeds user queries into vector space and computes cosine similarity against stored chunk embeddings.",
+    "required_keywords": ["embeds", "cosine", "similarity"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 63,
+    "category": "RAG",
+    "question": "What is the purpose of hybrid search in retrieval?",
+    "expected_answer": "Hybrid search combines dense vector cosine search with full-text keyword search to maximize retrieval recall.",
+    "required_keywords": ["hybrid", "vector", "full-text"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 64,
+    "category": "RAG",
+    "question": "How are prompt context passages formatted for the LLM?",
+    "expected_answer": "Passages are formatted with metadata tags (document title, section, page, passage ID) followed by chunk text content.",
+    "required_keywords": ["metadata", "title", "section", "page"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 65,
+    "category": "RAG",
+    "question": "What non-hallucination rules are enforced during RAG answer generation?",
+    "expected_answer": "The system prompt instructs the LLM to answer strictly using supplied document passages and state Information not found if missing.",
+    "required_keywords": ["supplied", "passages", "Information not found"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 66,
+    "category": "RAG",
+    "question": "What metadata is attached to each retrieved chunk?",
+    "expected_answer": "Metadata includes document ID, title, section header, page number, and unique chunk UUID.",
+    "required_keywords": ["title", "section", "page", "chunk"],
+    "forbidden_keywords": ["Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 67,
+    "category": "RAG",
+    "question": "What similarity threshold is applied during vector search?",
+    "expected_answer": "The similarity threshold defaults to 0.0 to retrieve the best candidate vector matches.",
+    "required_keywords": ["similarity", "threshold", "0.0"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 68,
+    "category": "RAG",
+    "question": "How does the system handle multi-passage evidence merging?",
+    "expected_answer": "The system prompt instructs the LLM to merge matching facts across retrieved passages into unified explanations.",
+    "required_keywords": ["merge", "passages", "unified"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 69,
+    "category": "RAG",
+    "question": "How are citations constructed in the API response payload?",
+    "expected_answer": "Citations are returned as a list of objects containing document title, section, page, chunk ID, and preview snippet.",
+    "required_keywords": ["Citations", "title", "section", "chunk ID"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 70,
+    "category": "RAG",
+    "question": "What vector dimension size is produced by nomic-embed-text?",
+    "expected_answer": "nomic-embed-text produces 768-dimensional dense vector embeddings.",
+    "required_keywords": ["768", "vector", "nomic-embed-text"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+
+  {
+    "id": 71,
+    "category": "follow-up",
+    "question": "Given that RAG retrieves chunks, what happens if no relevant chunks are found?",
+    "expected_answer": "If no relevant chunks pass the similarity threshold, the LLM receives an empty context notice and replies Information not found in document excerpts.",
+    "required_keywords": ["empty context", "Information not found"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 72,
+    "category": "follow-up",
+    "question": "If a user follows up with 'Tell me more', how is context maintained?",
+    "expected_answer": "The backend includes recent chat turns in the user prompt so the LLM retains conversation context.",
+    "required_keywords": ["turns", "conversation", "context"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 73,
+    "category": "follow-up",
+    "question": "What happens if context length exceeds MAX_CONTEXT_TOKENS?",
+    "expected_answer": "Retrieved passages are truncated to fit within MAX_CONTEXT_TOKENS (6000 tokens).",
+    "required_keywords": ["truncated", "MAX_CONTEXT_TOKENS", "6000"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 74,
+    "category": "follow-up",
+    "question": "If Ollama emits thinking tags, how are they removed before returning to user?",
+    "expected_answer": "The sanitize_response module strips <think> tags and all preceding scratchpad monologues from the final answer.",
+    "required_keywords": ["sanitize_response", "think", "strips"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["15. Prompt Construction"]
+  },
+  {
+    "id": 75,
+    "category": "follow-up",
+    "question": "What happens if a user re-uploads an existing document?",
+    "expected_answer": "The system computes SHA-256 checksums to detect existing content and create next document version numbers.",
+    "required_keywords": ["checksums", "version", "document"],
+    "forbidden_keywords": ["Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+
+  {
+    "id": 76,
+    "category": "hybrid",
+    "question": "How does the system handle hybrid questions requiring both document search and SQL querying?",
+    "expected_answer": "The AI Router dispatches the request to both RAG and Text-to-SQL engines and merges both outputs into a unified response.",
+    "required_keywords": ["AI Router", "RAG", "Text-to-SQL", "merges"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.3 Why this needs a Router"]
+  },
+  {
+    "id": 77,
+    "category": "hybrid",
+    "question": "What happens if a hybrid query returns SQL results but no matching documents?",
+    "expected_answer": "The system returns the SQL data results while noting that no relevant document excerpts were found.",
+    "required_keywords": ["SQL", "document", "results"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.3 Why this needs a Router"]
+  },
+  {
+    "id": 78,
+    "category": "hybrid",
+    "question": "How are citations displayed when a hybrid answer includes both text and tabular data?",
+    "expected_answer": "Text statements include document citations while tabular data cites the target database table source.",
+    "required_keywords": ["citations", "document", "database"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.3 Why this needs a Router"]
+  },
+  {
+    "id": 79,
+    "category": "hybrid",
+    "question": "What safety rules apply when hybrid execution runs SQL and RAG concurrently?",
+    "expected_answer": "RAG follows non-hallucination grounding while Text-to-SQL executes under read-only permissions.",
+    "required_keywords": ["grounding", "read-only", "safety"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.3 Why this needs a Router"]
+  },
+  {
+    "id": 80,
+    "category": "hybrid",
+    "question": "How does the AI Router decide if a question is hybrid?",
+    "expected_answer": "The AI Router inspects prompt semantics to detect if the question references both text policies and tabular metrics.",
+    "required_keywords": ["Router", "semantics", "tabular"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.3 Why this needs a Router"]
+  },
+
+  {
+    "id": 81,
+    "category": "negative questions",
+    "question": "What is the stock price of Apple Inc today?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["Apple", "stock", "price"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 82,
+    "category": "negative questions",
+    "question": "Who won the 2022 FIFA World Cup?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["Argentina", "Messi", "FIFA"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 83,
+    "category": "negative questions",
+    "question": "How do you configure Kubernetes ingress controllers?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["Kubernetes", "ingress", "nginx"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 84,
+    "category": "negative questions",
+    "question": "What is the recipe for baking sourdough bread?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["flour", "yeast", "water"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 85,
+    "category": "negative questions",
+    "question": "Who was the first President of the United States?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["George Washington"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 86,
+    "category": "negative questions",
+    "question": "What is the capital city of Australia?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["Canberra", "Sydney"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 87,
+    "category": "negative questions",
+    "question": "What is Einstein's theory of general relativity?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["spacetime", "gravity"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 88,
+    "category": "negative questions",
+    "question": "How do you tie a windsor knot tie?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["collar", "knot"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 89,
+    "category": "negative questions",
+    "question": "What is the speed of light in vacuum?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["299,792,458"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+  {
+    "id": 90,
+    "category": "negative questions",
+    "question": "Who directed the movie Inception?",
+    "expected_answer": "Information not found in document excerpts.",
+    "required_keywords": ["Information not found"],
+    "forbidden_keywords": ["Christopher Nolan"],
+    "expected_documents": [],
+    "expected_sections": []
+  },
+
+  {
+    "id": 91,
+    "category": "ambiguous questions",
+    "question": "How does it work?",
+    "expected_answer": "Talk to My Data processes user questions through an AI Router that dispatches requests either to a RAG pipeline for document search or a Text-to-SQL engine for database queries.",
+    "required_keywords": ["AI Router", "RAG", "Text-to-SQL"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 92,
+    "category": "ambiguous questions",
+    "question": "Tell me about security.",
+    "expected_answer": "Security features include read-only database execution roles, mandatory SQL query validation, isolated document storage, and system prompt grounding.",
+    "required_keywords": ["read-only", "validation", "security"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 93,
+    "category": "ambiguous questions",
+    "question": "What are the limitations?",
+    "expected_answer": "Limitations include restriction to uploaded document context, requirement for clean DDL training in Text-to-SQL, and local LLM compute dependency.",
+    "required_keywords": ["uploaded", "context", "DDL"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 94,
+    "category": "ambiguous questions",
+    "question": "Is it production ready?",
+    "expected_answer": "The system enforces read-only access controls, response sanitization, non-hallucinated grounding rules, and health monitoring for production readiness.",
+    "required_keywords": ["read-only", "grounding", "monitoring"],
+    "forbidden_keywords": ["Looking at"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 95,
+    "category": "ambiguous questions",
+    "question": "What data can I ask about?",
+    "expected_answer": "You can ask about uploaded unstructured documents (PDFs, Word docs) and structured relational databases or spreadsheets connected to the system.",
+    "required_keywords": ["unstructured", "structured", "documents"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  },
+  {
+    "id": 96,
+    "category": "ambiguous questions",
+    "question": "What models are supported?",
+    "expected_answer": "The system uses Ollama for local LLM inference (qwen3:4b) and nomic-embed-text for dense 768-dimensional embeddings.",
+    "required_keywords": ["Ollama", "nomic-embed-text"],
+    "forbidden_keywords": ["Passage"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 97,
+    "category": "ambiguous questions",
+    "question": "How are errors handled?",
+    "expected_answer": "Errors are caught by exception handlers and returned as structured HTTP error responses without exposing raw internal stack traces.",
+    "required_keywords": ["exception", "HTTP", "error"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["18. Structured-Data Pipeline"]
+  },
+  {
+    "id": 98,
+    "category": "ambiguous questions",
+    "question": "What vector database is used?",
+    "expected_answer": "The system uses PostgreSQL equipped with the pgvector extension for high-performance vector similarity search.",
+    "required_keywords": ["PostgreSQL", "pgvector"],
+    "forbidden_keywords": ["Let me analyze"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 99,
+    "category": "ambiguous questions",
+    "question": "How does context chunking work?",
+    "expected_answer": "Context chunking splits text into 1000 character blocks with 200 character overlaps to preserve semantic continuity.",
+    "required_keywords": ["1000", "200", "character"],
+    "forbidden_keywords": ["<think>"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4.1 Unstructured documents"]
+  },
+  {
+    "id": 100,
+    "category": "ambiguous questions",
+    "question": "What is the primary architectural goal of Talk to My Data?",
+    "expected_answer": "The primary architectural goal is providing a single chat interface that seamlessly bridges unstructured document RAG and structured SQL querying.",
+    "required_keywords": ["chat interface", "RAG", "SQL"],
+    "forbidden_keywords": ["Passage 1"],
+    "expected_documents": ["PRD_Talk_to_My_Data.docx"],
+    "expected_sections": ["4. Core Architectural Insight"]
+  }
+]

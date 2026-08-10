@@ -49,6 +49,12 @@ class LLMUnavailableError(LLMClientError):
 class LLMClient(Protocol):
     """Minimal contract for an async text-generation provider."""
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse: ...
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+    ) -> LLMResponse: ...
 
     async def close(self) -> None: ...

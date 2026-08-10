@@ -19,6 +19,7 @@ from app.services.document_upload_service import DocumentUploadService, UploadRe
 from app.services.document_version_service import DocumentVersionService
 from app.services.embedding_service import EmbeddingService
 from app.services.exceptions import ConflictError, NotFoundError, ServiceError, ValidationError
+from app.services.ingestion_service import IngestionResult, IngestionService
 from app.services.processing_job_service import ProcessingJobService
 from app.services.system_setting_service import SystemSettingService
 from app.services.user_service import UserService
@@ -33,6 +34,8 @@ __all__ = [
     "DocumentService",
     "DocumentUploadService",
     "UploadResult",
+    "IngestionService",
+    "IngestionResult",
     "DocumentVersionService",
     "DocumentChunkService",
     "EmbeddingService",

@@ -40,13 +40,36 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 1800
     DB_ECHO: bool = False
 
-    # --- Local file storage (document uploads) ------------------------------
+    # --- Storage (Supabase Storage) ----------------------------------------
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 25
+    SUPABASE_URL: str | None = None
+    SUPABASE_SERVICE_ROLE_KEY: str | None = None
+    SUPABASE_BUCKET: str = "documents"
+    STORAGE_PROVIDER: str = "supabase"
+
+    # --- S3-compatible Storage (Supabase S3 endpoint) -------------------------
+    # When set, the S3 interface is used instead of the REST API — it is
+    # more reliable and handles authentication + path encoding automatically.
+    S3_ENDPOINT: str | None = None        # e.g. https://<ref>.storage.supabase.co/storage/v1/s3
+    S3_REGION: str = "ap-south-1"
+    S3_ACCESS_KEY: str | None = None
+    S3_SECRET_KEY: str | None = None
+
+    @property
+    def s3_is_configured(self) -> bool:
+        return bool(self.S3_ENDPOINT and self.S3_ACCESS_KEY and self.S3_SECRET_KEY)
 
     # --- Document text processing (parse / chunk) -----------------------------
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
+
+    # Semantic chunking (token-based; used by app.services.chunker)
+    SEMANTIC_CHUNK_MIN_TOKENS: int = 400
+    SEMANTIC_CHUNK_MAX_TOKENS: int = 700
+    SEMANTIC_CHUNK_OVERLAP_MIN: int = 50
+    SEMANTIC_CHUNK_OVERLAP_MAX: int = 100
+    SEMANTIC_CHUNK_MIN_CHARS: int = 50
 
     # --- Embeddings (Ollama) --------------------------------------------------
     # Prefer OLLAMA_HOST when set; OLLAMA_BASE_URL kept for backward compatibility.
@@ -59,31 +82,42 @@ class Settings(BaseSettings):
 
     # --- Chat LLM (Ollama) ----------------------------------------------------
     # Prefer OLLAMA_MODEL when set; CHAT_MODEL remains the documented default.
-    CHAT_MODEL: str = "qwen3:8b"
+    CHAT_MODEL: str = "qwen3:4b"
     OLLAMA_MODEL: str | None = None
     # When False, requests send options.num_gpu=0 (CPU). When True, Ollama may
     # use GPU; OLLAMA_NUM_GPU optionally limits offloaded layers (None = all).
     OLLAMA_USE_GPU: bool = True
     OLLAMA_NUM_GPU: int | None = None
     OLLAMA_NUM_THREAD: int | None = None
-    OLLAMA_NUM_CTX: int = 2048
+    OLLAMA_NUM_CTX: int = 8192
+    # Default completion tokens budget — configurable, stopping answer truncation.
+    OLLAMA_NUM_PREDICT: int = 1024
+
     # qwen3 with thinking enabled can exceed 120s on CPU; 300s is a safe default.
     LLM_TIMEOUT_SECONDS: float = 300.0
-    LLM_MAX_RETRIES: int = 3
-    LLM_TEMPERATURE: float = 0.7
+    LLM_MAX_RETRIES: int = 1
+    LLM_TEMPERATURE: float = 0.2
 
     # --- Vector retrieval -----------------------------------------------------
-    TOP_K: int = 10
+    TOP_K: int = 20
+    FINAL_CONTEXT: int = 4
     SIMILARITY_THRESHOLD: float = 0.0
 
     # --- Prompt building ------------------------------------------------------
-    MAX_CONTEXT_CHARS: int = 8000
+    MAX_CONTEXT_TOKENS: int = 6000
+    MAX_CONTEXT_CHARS: int = 24000
     SYSTEM_PROMPT: str = (
-        "You are a helpful assistant that answers questions using only the "
-        "provided document excerpts. Reference chunk numbers when citing "
-        "sources. If the excerpts do not contain enough information, say so "
-        "clearly instead of guessing."
+        "You are an enterprise document intelligence assistant.\n\n"
+        "Instructions:\n"
+        "1. Synthesize factual evidence from the supplied passages into a clear, cohesive, and natural response in your own words. Avoid copying verbatim sentences from the passages.\n"
+        "2. Begin immediately with a direct, high-level summary answer to the user's question before providing supporting details or structured breakdowns.\n"
+        "3. Merge related information across multiple passages into unified explanations rather than presenting isolated passage fragments.\n"
+        "4. Ground all statements strictly in the supplied passages. Never invent facts, assume unstated details, or use outside knowledge.\n"
+        "5. Do not include internal thinking steps, chain-of-thought, or meta-commentary (such as 'Let me analyze', 'Looking at Passage 1').\n"
+        "6. If the requested information is genuinely not present in the excerpts, reply: Information not found in document excerpts."
     )
+
+
 
     @property
     def max_upload_size_bytes(self) -> int:

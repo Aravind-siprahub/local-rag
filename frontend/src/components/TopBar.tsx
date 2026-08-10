@@ -1,6 +1,9 @@
-import { ActivityIcon } from 'lucide-react'
+import { ActivityIcon, LogOutIcon } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
+import { useAuth } from '@/features/auth/hooks/authHooks'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { useHealth } from '@/hooks/useHealth'
 
 import type { ReactNode } from 'react'
@@ -12,7 +15,14 @@ interface TopBarProps {
 }
 
 export function TopBar({ title, description, children }: TopBarProps) {
+  const navigate = useNavigate()
+  const { logout, isAuthenticated } = useAuth()
   const { data: health, isLoading, isError } = useHealth()
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
 
   const statusLabel = isLoading ? 'Checking…' : isError ? 'Offline' : 'Online'
   const statusClass = isError
@@ -36,6 +46,17 @@ export function TopBar({ title, description, children }: TopBarProps) {
           API {statusLabel}
           {health?.database === 'connected' ? ' · DB connected' : null}
         </Badge>
+        {isAuthenticated ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleLogout}
+            className="gap-1.5 border-border/60 text-muted-foreground hover:text-red-400 hover:border-red-500/30"
+          >
+            <LogOutIcon className="size-3.5" />
+            Sign Out
+          </Button>
+        ) : null}
       </div>
     </header>
   )

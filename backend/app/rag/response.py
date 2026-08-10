@@ -15,6 +15,9 @@ class SourceCitation:
     document_version_id: uuid.UUID
     similarity_score: float
     rank: int
+    document_title: str | None = None
+    section_title: str | None = None
+    page_number: int | None = None
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Menu, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { getApiErrorMessage } from '@/api/client'
 import { useChat, useConversationMessages } from '@/features/chat/hooks/useChat'
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
 import { ChatHistory } from '@/features/chat/components/ChatHistory'
@@ -22,20 +23,16 @@ export function ChatPage() {
 
   const { data: messagesData, isLoading: isLoadingMessages } = useConversationMessages(activeSessionId)
 
-  // Sync messages from backend
   useEffect(() => {
     if (messagesData?.items) {
-      // API returns them descending or ascending? Usually descending, but we want ascending for chat UI
-      // Let's assume the API returns them newest first (common pattern for offset pagination), so we reverse.
-      // Wait, let's just sort by created_at.
+      console.log("[F] useEffect overwriting messages", messagesData.items);
       const sorted = [...messagesData.items].sort(
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       )
       setLocalMessages(sorted)
-      // When we load a new conversation, clear latest citations since we don't store them in db yet
-      setLatestCitations(undefined)
-    } else {
+    } else if (!activeSessionId) {
       setLocalMessages([])
+      setLatestCitations(undefined)
     }
   }, [messagesData, activeSessionId])
 
@@ -55,6 +52,7 @@ export function ChatPage() {
   const [errorMessage, setErrorMessage] = useState<{ text: string; lastContent?: string } | null>(null)
 
   const handleSend = async (content: string) => {
+    console.log("[2] handleSend() entered");
     setErrorMessage(null)
     const tempUserMsg: Message = {
       id: `temp-${Date.now()}`,
@@ -71,15 +69,25 @@ export function ChatPage() {
       if (!currentSessionId) {
         const title =
           content.split(' ').slice(0, 5).join(' ') + (content.split(' ').length > 5 ? '...' : '')
+        console.log("[3] Creating session...");
         const newSession = await createConversation.mutateAsync(title)
+        console.log("[4] Session created", newSession);
         currentSessionId = newSession.id
+        console.log("[5] BEFORE setActiveSessionId");
         setActiveSessionId(newSession.id)
+        console.log("[6] AFTER setActiveSessionId");
       }
 
+      console.log("[7] BEFORE sendMessage");
       const response = await sendMessage.mutateAsync({
         session_id: currentSessionId,
         question: content,
       })
+      console.log("[A] response received", response);
+
+      if (!activeSessionId) {
+        setActiveSessionId(currentSessionId)
+      }
 
       const assistantMsg: Message = {
         id: response.assistant_message_id,
@@ -90,12 +98,19 @@ export function ChatPage() {
         total_tokens: response.token_usage?.total_tokens,
         created_at: new Date().toISOString(),
       }
-      setLocalMessages((prev) => [...prev, assistantMsg])
+      console.log("[B] before setLocalMessages");
+      setLocalMessages((prev) => {
+        const next = [...prev, assistantMsg];
+        console.log("[C] after setLocalMessages", next);
+        return next;
+      })
       setLatestCitations(response.citations)
     } catch (err: unknown) {
       setLocalMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id))
 
       const status = (err as { response?: { status?: number } })?.response?.status
+      const friendlyMessage = getApiErrorMessage(err)
+
       if (status === 503) {
         setErrorMessage({
           text: 'AI model unavailable. Please check that Ollama is running locally and model is loaded.',
@@ -103,7 +118,7 @@ export function ChatPage() {
         })
       } else {
         setErrorMessage({
-          text: 'Failed to generate answer. Please try again.',
+          text: friendlyMessage || 'Failed to generate answer. Please try again.',
           lastContent: content,
         })
       }
@@ -168,12 +183,14 @@ export function ChatPage() {
           </div>
         ) : null}
 
-        {/* Chat History */}
-        <ChatHistory
-          messages={localMessages}
-          isLoading={isLoadingMessages || sendMessage.isPending}
-          latestCitations={latestCitations}
-        />
+        {/* Chat History Container with min-h-0 to prevent pushing input offscreen */}
+        <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
+          <ChatHistory
+            messages={localMessages}
+            isLoading={isLoadingMessages || sendMessage.isPending}
+            latestCitations={latestCitations}
+          />
+        </div>
 
         {/* Input Area */}
         <div className="p-4 bg-background border-t shrink-0">

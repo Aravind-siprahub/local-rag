@@ -177,15 +177,26 @@ export function DocumentDetailDrawer({
                         Processing jobs
                       </p>
                       <ul className="space-y-2">
-                        {detail.processingJobs.map((job) => (
+                        {Object.values(
+                          detail.processingJobs.reduce<Record<string, (typeof detail.processingJobs)[number]>>(
+                            (acc, job) => {
+                              // Keep the latest/most active job for each job type
+                              if (!acc[job.job_type] || job.status === 'running' || new Date(job.created_at) > new Date(acc[job.job_type].created_at)) {
+                                acc[job.job_type] = job
+                              }
+                              return acc
+                            },
+                            {},
+                          ),
+                        ).map((job) => (
                           <li
                             key={job.id}
                             className="flex items-center justify-between rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-sm"
                           >
-                            <span className="capitalize">
+                            <span className="capitalize flex items-center">
                               {job.job_type}
                               {job.status === 'running' ? (
-                                <LoaderCircleIcon className="ml-2 inline size-3.5 animate-spin" />
+                                <LoaderCircleIcon className="ml-2 size-3.5 animate-spin text-primary" />
                               ) : null}
                             </span>
                             <Badge variant="outline" className="capitalize">

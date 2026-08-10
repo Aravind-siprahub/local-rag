@@ -12,6 +12,7 @@ interface UploadQueueProps {
   isUploading: boolean
   overallProgress: number
   hasBackendAvailable: boolean
+  isBackendReachable: boolean
   onUploadAll: () => void
   onRetry: (id: string) => void
   onCancel: (id: string) => void
@@ -24,6 +25,7 @@ export function UploadQueue({
   isUploading,
   overallProgress,
   hasBackendAvailable,
+  isBackendReachable,
   onUploadAll,
   onRetry,
   onCancel,
@@ -40,11 +42,18 @@ export function UploadQueue({
 
   return (
     <div className="space-y-4">
-      {!hasBackendAvailable ? (
+      {!isBackendReachable ? (
         <Alert variant="destructive" className="bg-destructive/10 text-destructive border-destructive/20">
           <AlertTitle className="font-semibold text-sm">Upload backend is not yet available.</AlertTitle>
           <AlertDescription className="text-xs mt-1">
-            The document ingestion API endpoint is unreachable or active user context is missing. Upload actions remain disabled.
+            The document ingestion API endpoint is unreachable. Make sure the backend server is running.
+          </AlertDescription>
+        </Alert>
+      ) : !hasBackendAvailable ? (
+        <Alert className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20">
+          <AlertTitle className="font-semibold text-sm">No active user found.</AlertTitle>
+          <AlertDescription className="text-xs mt-1">
+            Create a user first via <strong>Settings → User Management</strong> (or <code>POST /api/users</code>), then return here to upload documents.
           </AlertDescription>
         </Alert>
       ) : null}

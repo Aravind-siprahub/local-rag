@@ -110,7 +110,10 @@ def _make_processor(
   tmp_path,
   *,
   filename: str = "notes.txt",
-  content: bytes = b"Hello world.\n\nSecond paragraph here.",
+  content: bytes = (
+    b"Hello world from the semantic chunking pipeline test fixture.\n\n"
+    b"Second paragraph with enough meaningful content to pass validation rules."
+  ),
   job_status: ProcessingJobStatus = ProcessingJobStatus.PENDING,
 ) -> tuple[DocumentProcessor, _FakeJob, FakeProcessingJobService, FakeDocumentChunkService, FakeDocumentVersionService]:
   version_id = uuid.uuid4()
@@ -218,7 +221,10 @@ class TestDocumentProcessor:
   async def test_processes_docx_file(self, tmp_path) -> None:
     from tests.test_processing_parser import _make_docx
 
-    docx_bytes = _make_docx(["Processor DOCX line one", "Line two"])
+    docx_bytes = _make_docx([
+      "Processor DOCX line one with sufficient length for semantic chunk validation.",
+      "Line two also contains enough meaningful characters to produce a valid chunk.",
+    ])
     processor, job, jobs, chunks, _ = _make_processor(
       tmp_path,
       filename="report.docx",

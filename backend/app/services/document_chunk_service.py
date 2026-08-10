@@ -57,8 +57,6 @@ class DocumentChunkService(BaseService[DocumentChunk, uuid.UUID, DocumentChunkRe
             raise
 
         await self.session.commit()
-        for chunk in created:
-            await self.session.refresh(chunk)
         return created
 
     async def list_by_document_version(
