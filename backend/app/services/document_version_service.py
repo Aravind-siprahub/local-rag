@@ -65,3 +65,14 @@ class DocumentVersionService(BaseService[DocumentVersion, uuid.UUID, DocumentVer
         self, document_id: uuid.UUID, *, limit: int = 100, offset: int = 0
     ) -> list[DocumentVersion]:
         return await self.repository.list_by_document(document_id, limit=limit, offset=offset)
+
+    async def get_current_version(self, document_id: uuid.UUID) -> DocumentVersion | None:
+        """Get the current version for a document (or the latest version if current is unset)."""
+        document = await self._documents.get(document_id)
+        if document and document.current_version_id:
+            curr = await self.get(document.current_version_id)
+            if curr:
+                return curr
+        versions = await self.list_by_document(document_id, limit=100)
+        return versions[-1] if versions else None
+

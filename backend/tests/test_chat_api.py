@@ -170,7 +170,7 @@ class TestChatAPI:
             json={"session_id": str(session_id), "question": "valid?"},
         )
 
-        assert response.status_code == 422
+        assert response.status_code == 400
 
     def test_get_chat_session(self, client: TestClient) -> None:
         session_id = uuid.uuid4()

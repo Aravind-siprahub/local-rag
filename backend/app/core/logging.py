@@ -11,6 +11,9 @@ from app.core.config import get_settings
 def setup_logging() -> None:
     settings = get_settings()
 
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+
     logging.basicConfig(
         level=logging.DEBUG if settings.DEBUG else logging.INFO,
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",

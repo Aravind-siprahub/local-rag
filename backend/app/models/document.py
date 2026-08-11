@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ARRAY, CheckConstraint, ForeignKey, Index, Text, text
+from sqlalchemy import ARRAY, BigInteger, CheckConstraint, ForeignKey, Index, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,16 +30,17 @@ class Document(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     title: Mapped[str] = mapped_column(nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(nullable=True)
+    filename: Mapped[str | None] = mapped_column(nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(nullable=True)
+    size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     description: Mapped[str | None]
     status: Mapped[DocumentStatus] = mapped_column(
         pg_enum(DocumentStatus, name="document_status"),
         nullable=False,
         server_default=DocumentStatus.UPLOADED.value,
     )
-    # Circular reference with document_versions: this FK is added via
-    # ALTER TABLE (use_alter=True) after document_versions exists, exactly
-    # mirroring the deferred `ALTER TABLE ... ADD CONSTRAINT` in
-    # 003_tables.sql. The explicit name must match that constraint's name.
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey(
@@ -50,6 +51,10 @@ class Document(TimestampMixin, Base):
         ),
     )
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default=text("'{}'"))
+    storage_provider: Mapped[str | None] = mapped_column(nullable=True, server_default=text("'supabase'"))
+    bucket_name: Mapped[str | None] = mapped_column(nullable=True, server_default=text("'documents'"))
+    storage_path: Mapped[str | None] = mapped_column(nullable=True)
+    last_error: Mapped[str | None] = mapped_column(nullable=True)
     deleted_at: Mapped[datetime | None]
 
     owner: Mapped[User] = relationship(back_populates="documents")

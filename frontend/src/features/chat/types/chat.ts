@@ -5,6 +5,9 @@ export interface Citation {
   document_version_id: string
   similarity_score: number
   rank: number
+  document_title?: string
+  section_title?: string
+  page_number?: number
 }
 
 export interface ChatTokenUsageResponse {

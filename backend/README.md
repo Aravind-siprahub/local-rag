@@ -173,3 +173,45 @@ from app.db.session import check_database_connection
 asyncio.run(check_database_connection())
 print('OK')"
 ```
+
+## Supabase Storage Architecture & Setup
+
+All document uploads are persisted in cloud-native **Supabase Storage** (bucket `documents`) under deterministic paths: `documents/{user_id}/{document_id}/{original_filename}`.
+
+### 1. Manual Bucket Setup (Rule 13 Compliance)
+Create a private bucket named `documents` in your Supabase Dashboard or CLI:
+- **Bucket Name**: `documents`
+- **Public**: `False` (Private bucket)
+
+### 2. Manual SQL Migration (Rule 13 Compliance)
+Run this SQL in your Supabase SQL Editor:
+```sql
+ALTER TABLE documents
+ADD COLUMN IF NOT EXISTS storage_provider VARCHAR(50) DEFAULT 'supabase',
+ADD COLUMN IF NOT EXISTS bucket_name VARCHAR(100) DEFAULT 'documents',
+ADD COLUMN IF NOT EXISTS storage_path VARCHAR(500),
+ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+ALTER TABLE document_versions
+ADD COLUMN IF NOT EXISTS storage_provider VARCHAR(50) DEFAULT 'supabase',
+ADD COLUMN IF NOT EXISTS bucket_name VARCHAR(100) DEFAULT 'documents',
+ADD COLUMN IF NOT EXISTS storage_path VARCHAR(500);
+```
+
+### 3. Environment Variables
+Add to `backend/.env`:
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_BUCKET=documents
+```
+
+### 4. Upload, Ingestion & Deletion Flows
+- **Upload Flow**: Client `POST /documents/upload` -> File validation -> Upload to Supabase Storage -> Save DB metadata (status `Pending`) -> Return `{id, filename, bucket, storagePath, status}` -> Trigger background ingestion.
+- **Ingestion Flow**: Stream download from Supabase Storage -> Extract text (PDF, DOCX, DOC, TXT, MD, CSV, XLSX, PPTX, JSON) -> Chunk -> Generate embeddings -> Store in pgvector -> Update status to `READY`.
+- **Deletion Flow**: Client `DELETE /documents/{id}` -> Remove vector embeddings & chunks -> Delete DB records -> Delete remote object from Supabase Storage bucket.
+
+### 5. Troubleshooting
+- **`SupabaseStorageError: 403 Forbidden`**: Ensure `SUPABASE_SERVICE_ROLE_KEY` is set in `.env` (the anon key cannot write to private buckets).
+- **`Unsupported file extension`**: Supported formats are `.pdf`, `.docx`, `.doc`, `.txt`, `.md`, `.csv`, `.xlsx`, `.pptx`, `.json`.
+

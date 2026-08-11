@@ -1,0 +1,631 @@
+{
+  "results": [
+    {
+      "area": "Bootstrap",
+      "check": "GET /api/health",
+      "status": "pass",
+      "detail": "200 {'status': 'ok', 'database': 'connected'}"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "GET /openapi.json",
+      "status": "pass",
+      "detail": "69 path groups, schema ok"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/health",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/users",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/documents/upload",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/upload",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/chat",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/chat/stream",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/admin/stats",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/metrics",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/debug/rag",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /api/chat-sessions",
+      "status": "pass",
+      "detail": "listed"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /auth/login",
+      "status": "fail",
+      "detail": "NOT in OpenAPI (auth endpoints missing)"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /auth/logout",
+      "status": "fail",
+      "detail": "NOT in OpenAPI (auth endpoints missing)"
+    },
+    {
+      "area": "OpenAPI",
+      "check": "path /auth/me",
+      "status": "fail",
+      "detail": "NOT in OpenAPI (auth endpoints missing)"
+    },
+    {
+      "area": "Auth",
+      "check": "/auth/login",
+      "status": "fail",
+      "detail": "endpoint missing (404)"
+    },
+    {
+      "area": "Auth",
+      "check": "/api/auth/login",
+      "status": "fail",
+      "detail": "endpoint missing (404)"
+    },
+    {
+      "area": "Auth",
+      "check": "/auth/logout",
+      "status": "fail",
+      "detail": "endpoint missing (404)"
+    },
+    {
+      "area": "Auth",
+      "check": "/api/auth/logout",
+      "status": "fail",
+      "detail": "endpoint missing (404)"
+    },
+    {
+      "area": "Auth",
+      "check": "/auth/me",
+      "status": "fail",
+      "detail": "endpoint missing (404)"
+    },
+    {
+      "area": "Auth",
+      "check": "/api/auth/me",
+      "status": "fail",
+      "detail": "endpoint missing (404)"
+    },
+    {
+      "area": "Auth",
+      "check": "JWT validation",
+      "status": "fail",
+      "detail": "GET /api/users succeeds with no Bearer token (no JWT gate)"
+    },
+    {
+      "area": "Users",
+      "check": "POST /users",
+      "status": "pass",
+      "detail": "created f6460c7f-aecf-4f92-85ce-f0a58a560d7b"
+    },
+    {
+      "area": "Metrics",
+      "check": "GET /api/metrics baseline",
+      "status": "pass",
+      "detail": "{'app_name': 'Local RAG API', 'version': '1.0.0', 'environment': 'development', 'uptime_seconds': 64, 'requests_total': 0, 'errors_total': 0, 'latencies': {'avg_retrieval_ms': 0.0, 'avg_embedding_ms': 0.0, 'avg_llm_ms': 0.0}}"
+    },
+    {
+      "area": "Admin",
+      "check": "GET /api/admin/stats schema",
+      "status": "pass",
+      "detail": "{\"documents\": {\"total\": 9, \"ready\": 3, \"processing\": 6}, \"vectors\": {\"total_chunks\": 3236, \"total_embeddings\": 407, \"dimension\": 768, \"embedding_model\": \"nomic-embed-text\"}, \"jobs\": {\"total\": 10, \"pending\": 0, \"running\": 3, \"completed\": 6, \"failed\": 1}, \"ollama\": {\"status\": \"online\", \"host\": \"http://localhost:11434\", \"chat_model\": \"qwen3:4b\", \"available_models\": [\"qwen3:4b\", \"nomic-embed-text:latest\"]}, \"storage\": {\"provider\": \"supabase\", \"max_upload_size_mb\": 25}}"
+    },
+    {
+      "area": "Admin",
+      "check": "documents.total",
+      "status": "pass",
+      "detail": "9"
+    },
+    {
+      "area": "Admin",
+      "check": "documents.ready",
+      "status": "pass",
+      "detail": "3"
+    },
+    {
+      "area": "Admin",
+      "check": "documents.processing",
+      "status": "pass",
+      "detail": "6"
+    },
+    {
+      "area": "Admin",
+      "check": "vectors.total_chunks",
+      "status": "pass",
+      "detail": "3236"
+    },
+    {
+      "area": "Admin",
+      "check": "vectors.total_embeddings",
+      "status": "pass",
+      "detail": "407"
+    },
+    {
+      "area": "Admin",
+      "check": "vectors.dimension",
+      "status": "pass",
+      "detail": "768"
+    },
+    {
+      "area": "Admin",
+      "check": "vectors.embedding_model",
+      "status": "pass",
+      "detail": "nomic-embed-text"
+    },
+    {
+      "area": "Admin",
+      "check": "jobs.total",
+      "status": "pass",
+      "detail": "10"
+    },
+    {
+      "area": "Admin",
+      "check": "jobs.pending",
+      "status": "pass",
+      "detail": "0"
+    },
+    {
+      "area": "Admin",
+      "check": "jobs.running",
+      "status": "pass",
+      "detail": "3"
+    },
+    {
+      "area": "Admin",
+      "check": "jobs.completed",
+      "status": "pass",
+      "detail": "6"
+    },
+    {
+      "area": "Admin",
+      "check": "jobs.failed",
+      "status": "pass",
+      "detail": "1"
+    },
+    {
+      "area": "Admin",
+      "check": "ollama.status",
+      "status": "pass",
+      "detail": "online"
+    },
+    {
+      "area": "Admin",
+      "check": "ollama.host",
+      "status": "pass",
+      "detail": "http://localhost:11434"
+    },
+    {
+      "area": "Admin",
+      "check": "ollama.chat_model",
+      "status": "pass",
+      "detail": "qwen3:4b"
+    },
+    {
+      "area": "Admin",
+      "check": "ollama.available_models",
+      "status": "pass",
+      "detail": "['qwen3:4b', 'nomic-embed-text:latest']"
+    },
+    {
+      "area": "Admin",
+      "check": "storage.provider",
+      "status": "pass",
+      "detail": "supabase"
+    },
+    {
+      "area": "Admin",
+      "check": "storage.max_upload_size_mb",
+      "status": "pass",
+      "detail": "25"
+    },
+    {
+      "area": "Upload",
+      "check": "TXT",
+      "status": "pass",
+      "detail": "201 doc=c574670d-1988-4183-a02b-3cf2e8ee1056"
+    },
+    {
+      "area": "Upload",
+      "check": "PDF",
+      "status": "pass",
+      "detail": "201 doc=7391a86c-e852-4b41-a05b-c6cf77493bfc"
+    },
+    {
+      "area": "Upload",
+      "check": "DOCX",
+      "status": "pass",
+      "detail": "201 doc=26eb95d1-d742-43d4-a7c7-96ef0c3faca9"
+    },
+    {
+      "area": "Upload",
+      "check": "Large TXT (~2.4MB)",
+      "status": "pass",
+      "detail": "201 size_ok"
+    },
+    {
+      "area": "Upload",
+      "check": "Invalid .exe rejected",
+      "status": "pass",
+      "detail": "422 {\"detail\":\"Unsupported file extension '.exe'. Allowed: .csv, .doc, .docx, .json, .markdown, .md, .pdf, .pptx, .txt, .xlsx.\"}"
+    },
+    {
+      "area": "Security",
+      "check": "MIME/magic PDF validation",
+      "status": "fail",
+      "detail": "accepted file with PDF extension but invalid magic bytes"
+    },
+    {
+      "area": "Security",
+      "check": "File size limit",
+      "status": "pass",
+      "detail": "rejected: 422 {\"detail\":\"File exceeds the 26214400-byte upload limit.\"}"
+    },
+    {
+      "area": "Ingestion",
+      "check": "TXT status poll",
+      "status": "fail",
+      "detail": "GET document 500"
+    },
+    {
+      "area": "Ingestion",
+      "check": "PDF ready",
+      "status": "pass",
+      "detail": "transitions seen=['ready'] debug={\"id\": \"7391a86c-e852-4b41-a05b-c6cf77493bfc\", \"status\": \"error\", \"error\": \"(psycopg.OperationalError) connection failed: connection to server at \\\"3.111.225.200\\\", port 5432 failed: FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15\\n(Background"
+    },
+    {
+      "area": "Ingestion",
+      "check": "pdf parsing",
+      "status": "fail",
+      "detail": "no characters extracted: {'id': '7391a86c-e852-4b41-a05b-c6cf77493bfc', 'status': 'error', 'error': '(psycopg.OperationalError) connection failed: connection to server at \"3.111.225.200\", port 5432 failed: FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15\\n(Background on this error at: https://sqlalche.me/e/20/e3q8)', 'textExtracted': False, 'characters': 0, 'chunks': 0, 'embeddings': 0, 'vectors': 0, 'lastError': '(psycopg.OperationalError) connection failed: connection to server at \"3.111.225.200\", port 5432 failed: FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15\\n(Background on this error at: https://sqlalche.me/e/20/e3q8)', 'currentStage': 'Failed'}"
+    },
+    {
+      "area": "Ingestion",
+      "check": "pdf chunking",
+      "status": "fail",
+      "detail": "chunks=None debug={'id': '7391a86c-e852-4b41-a05b-c6cf77493bfc', 'status': 'error', 'error': '(psycopg.OperationalError) connection failed: connection to server at \"3.111.225.200\", port 5432 failed: FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15\\n(Background on this error at: https://sqlalche.me/e/20/e3q8)', 'textExtracted': False, 'characters': 0, 'chunks': 0, 'embeddings': 0, 'vectors': 0, 'lastError': '(psycopg.OperationalError) connection failed: connection to server at \"3.111.225.200\", port 5432 failed: FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15\\n(Background on this error at: https://sqlalche.me/e/20/e3q8)', 'currentStage': 'Failed'}"
+    },
+    {
+      "area": "Ingestion",
+      "check": "pdf embeddings",
+      "status": "fail",
+      "detail": "embeddings=None debug={'id': '7391a86c-e852-4b41-a05b-c6cf77493bfc', 'status': 'error', 'error': '(psycopg.OperationalError) connection failed: connection to server at \"3.111.225.200\", port 5432 failed: FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15\\n(Background on this error at: https://sqlalche.me/e/20/e3q8)', 'textExtracted': False, 'characters': 0, 'chunks': 0, 'embeddings': 0, 'vectors': 0, 'lastError': '(psycopg.OperationalError) connection failed: connection to server at \"3.111.225.200\", port 5432 failed: FATAL:  (EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15\\n(Background on this error at: https://sqlalche.me/e/20/e3q8)', 'currentStage': 'Failed'}"
+    },
+    {
+      "area": "Ingestion",
+      "check": "DOCX status poll",
+      "status": "fail",
+      "detail": "GET document 500"
+    },
+    {
+      "area": "Ingestion",
+      "check": "LARGE ready",
+      "status": "fail",
+      "detail": "status=failed last={'doc': {'created_at': '2026-08-06T14:24:58.968566Z', 'updated_at': '2026-08-06T14:26:49.040633Z', 'title': 'Large Quantum Widgets', 'description': None, 'tags': [], 'id': 'df3a80d0-4dfa-4f67-8610-1a37ddcdfdea', 'user_id': 'f6460c7f-aecf-4f92-85ce-f0a58a560d7b', 'status': 'failed', 'current_version_id': '067f5646-5346-4190-840b-52c377ce08ae'}, 'debug': {'id': 'df3a80d0-4dfa-4f67-8610-1a37ddcdfdea', 'status': 'processing', 'textExtracted': True, 'characters': 3099000, 'chunks': 3100, 'embeddings': 89, 'vectors': 89, 'lastError': None, 'currentStage': 'Processing'}}"
+    },
+    {
+      "area": "Ingestion",
+      "check": "large parsing",
+      "status": "pass",
+      "detail": "characters=3099000"
+    },
+    {
+      "area": "Ingestion",
+      "check": "large chunking",
+      "status": "pass",
+      "detail": "chunks=3100"
+    },
+    {
+      "area": "Ingestion",
+      "check": "large embeddings",
+      "status": "pass",
+      "detail": "embeddings=89"
+    },
+    {
+      "area": "Chat",
+      "check": "create session",
+      "status": "pass",
+      "detail": "f5999c91-81bf-48c2-abdd-22dec86cb3a7"
+    },
+    {
+      "area": "Retrieval",
+      "check": "default/hybrid via /debug/retrieval",
+      "status": "pass",
+      "detail": "{\"query_embedding_dimension\": 768, \"documents\": 14, \"chunks\": 6339, \"embeddings\": 851, \"retrieved_chunks\": 2, \"top_scores\": [0.0328, 0.0323], \"prompt_preview\": \"--- SYSTEM PROMPT ---\\nYou are a Retrieval-Augmented Generation (RAG) assistant. The provided document excerpts ARE the user's uploaded files. Treat them as the complete source of truth. Never claim you cannot access files or see uploaded "
+    },
+    {
+      "area": "Retrieval",
+      "check": "semantic scores present",
+      "status": "pass",
+      "detail": "[{\"rank\": 1, \"chunk_id\": \"48bf4da0-9be7-4138-9cbe-1ea4230060c3\", \"document_id\": \"26eb95d1-d742-43d4-a7c7-96ef0c3faca9\", \"document_version_id\": \"0e7a1a1b-f133-48ce-92c8-a2c368953b40\", \"similarity_score\": 0.0325, \"chunk_text_preview\": \"GammaCorp Safety Manual\\nFire extinguishers must be inspected every 90 days. Evacuation routes are posted on every floor.\"}, {\"rank\": 2, \"chunk_id\": \"a5ab9fbd-f940-4c"
+    },
+    {
+      "area": "Retrieval",
+      "check": "search_mode API exposure",
+      "status": "warn",
+      "detail": "ChatRequest has no search_mode; modes only internal \u2014 cannot live-switch semantic/fulltext/filename via public API"
+    },
+    {
+      "area": "Retrieval",
+      "check": "filename-oriented query",
+      "status": "pass",
+      "detail": "retrieved=2"
+    },
+    {
+      "area": "Retrieval",
+      "check": "multi-document search",
+      "status": "pass",
+      "detail": "docs={'7436d373-4216-402f-9665-94782bd77170', '7391a86c-e852-4b41-a05b-c6cf77493bfc'} scores=[0.0164, 0.0161]"
+    },
+    {
+      "area": "Chat",
+      "check": "normal chat",
+      "status": "pass",
+      "detail": "answer_len=265 model=qwen3:4b ms=27359"
+    },
+    {
+      "area": "Citations",
+      "check": "document title",
+      "status": "fail",
+      "detail": "field missing in citation schema/response: keys=['chunk_id', 'chunk_text', 'document_id', 'document_version_id', 'similarity_score', 'rank']"
+    },
+    {
+      "area": "Citations",
+      "check": "chunk number",
+      "status": "fail",
+      "detail": "no chunk_number/chunk_index; have rank=1 chunk_id=ad23ff5c-579c-4f4c-981e-b55c06b5358e"
+    },
+    {
+      "area": "Citations",
+      "check": "similarity score",
+      "status": "pass",
+      "detail": "0.0328"
+    },
+    {
+      "area": "Chat",
+      "check": "streaming /api/chat/stream",
+      "status": "pass",
+      "detail": "sse_lines=2 sample=data: {\"type\": \"meta\", \"sources\": [{\"chunk_id\": \"ad23ff5c-579c-4f4c-981e-b55c06b5358e\", \"chunk_text\": \"AlphaCorp employee handbook. Remote work policy allows hybrid schedule. Vacation accrual is 15 days per year. Security requires MFA for all VPN access.\", \"document_id\": \"c574670d-1988-4183-a02b-3cf2e8ee1056\", \"document_version_id\": \"c4927863-d260-4685-8385-c5fedc16f6c0\", \"similarity_score\": 0.016"
+    },
+    {
+      "area": "Chat",
+      "check": "multi-turn conversation",
+      "status": "pass",
+      "detail": "answer=We are given two document excerpts (chunks) and a question: \"How many days was that again?\"\n\nFirst, let's recall the context from the conversation history:\n\nUser initially asked: \"What is the vacation accrual policy?\"\nAssistant then provided two chun"
+    },
+    {
+      "area": "Chat",
+      "check": "unknown question grounding",
+      "status": "warn",
+      "detail": "answer=Okay, the user is asking about the capital of Atlantis based on \"our docs.\" Hmm, I need to check the context they provided. Let me look back at the messages.\n\nThe user shared a bunch of sections from what seems like a technical document\u2014sections 26 to 28, plus some notes about"
+    },
+    {
+      "area": "Security",
+      "check": "prompt injection protection",
+      "status": "fail",
+      "detail": "500 {\"error\":\"InternalError\",\"message\":\"Database error: (psycopg.errors.InFailedSqlTransaction) current transaction is aborted, commands ignored until end of transaction block\\n[SQL: INSERT INTO chat_mess"
+    },
+    {
+      "area": "Chat",
+      "check": "empty knowledge base (scoped)",
+      "status": "pass",
+      "detail": "cites=0 answer=Information not found in document excerpts."
+    },
+    {
+      "area": "Security",
+      "check": "rate limiting",
+      "status": "fail",
+      "detail": "no 429 after 150 rapid /health requests (rate_limiter not applied)"
+    },
+    {
+      "area": "Metrics",
+      "check": "requests_total increases",
+      "status": "fail",
+      "detail": "did not increase: 0 -> 0; latencies={'avg_retrieval_ms': 0.0, 'avg_embedding_ms': 0.0, 'avg_llm_ms': 0.0}"
+    },
+    {
+      "area": "Metrics",
+      "check": "avg_retrieval_ms",
+      "status": "fail",
+      "detail": "still 0 after chat/upload traffic (record_metric unused): 0.0"
+    },
+    {
+      "area": "Metrics",
+      "check": "avg_embedding_ms",
+      "status": "fail",
+      "detail": "still 0 after chat/upload traffic (record_metric unused): 0.0"
+    },
+    {
+      "area": "Metrics",
+      "check": "avg_llm_ms",
+      "status": "fail",
+      "detail": "still 0 after chat/upload traffic (record_metric unused): 0.0"
+    },
+    {
+      "area": "Admin",
+      "check": "document totals after upload",
+      "status": "pass",
+      "detail": "{'total': 9, 'ready': 3, 'processing': 6} -> {'total': 11, 'ready': 5, 'processing': 6}"
+    },
+    {
+      "area": "Performance",
+      "check": "upload latency",
+      "status": "pass",
+      "detail": "avg_ms=2160 samples=[{'file': 'sample.txt', 'ms': 2515.2, 'status': 201}, {'file': 'sample.pdf', 'ms': 2216.5, 'status': 201}, {'file': 'sample.docx', 'ms': 2585.9, 'status': 201}, {'file': 'large.txt', 'ms': 3389.5, 'status': 201}, {'file': 'malware.exe', 'ms': 4.1, 'status': 422}, {'file': 'fake.pdf', 'ms': 2247.5, 'status': 201}]"
+    },
+    {
+      "area": "Performance",
+      "check": "retrieval latency",
+      "status": "pass",
+      "detail": "2853.4 ms"
+    },
+    {
+      "area": "Performance",
+      "check": "llm latency",
+      "status": "pass",
+      "detail": "27456.7 ms"
+    },
+    {
+      "area": "Performance",
+      "check": "embedding/ingestion latency",
+      "status": "pass",
+      "detail": "{'txt': 100301.6, 'pdf': 1251.1, 'docx': 1058.5, 'large': 2088.0}"
+    }
+  ],
+  "timings": {
+    "upload_ms": [
+      {
+        "file": "sample.txt",
+        "ms": 2515.2,
+        "status": 201
+      },
+      {
+        "file": "sample.pdf",
+        "ms": 2216.5,
+        "status": 201
+      },
+      {
+        "file": "sample.docx",
+        "ms": 2585.9,
+        "status": 201
+      },
+      {
+        "file": "large.txt",
+        "ms": 3389.5,
+        "status": 201
+      },
+      {
+        "file": "malware.exe",
+        "ms": 4.1,
+        "status": 422
+      },
+      {
+        "file": "fake.pdf",
+        "ms": 2247.5,
+        "status": 201
+      }
+    ],
+    "oversized_upload_ms": 187.4,
+    "ingestion_ms": {
+      "txt": 100301.6,
+      "pdf": 1251.1,
+      "docx": 1058.5,
+      "large": 2088.0
+    },
+    "retrieval_debug_ms": 2853.4,
+    "llm_chat_ms": 27456.7,
+    "llm_stream_ms": 26099.5
+  },
+  "openapi_paths": [
+    "/",
+    "/admin/stats",
+    "/api/admin/stats",
+    "/api/chat",
+    "/api/chat-messages",
+    "/api/chat-messages/{message_id}",
+    "/api/chat-sessions",
+    "/api/chat-sessions/{session_id}",
+    "/api/chat-sessions/{session_id}/archive",
+    "/api/chat-sessions/{session_id}/unarchive",
+    "/api/chat/sessions/{session_id}",
+    "/api/chat/sessions/{session_id}/messages",
+    "/api/chat/stream",
+    "/api/debug/documents",
+    "/api/debug/rag",
+    "/api/debug/retrieval",
+    "/api/document-versions",
+    "/api/document-versions/{version_id}",
+    "/api/documents",
+    "/api/documents/upload",
+    "/api/documents/{document_id}",
+    "/api/documents/{document_id}/current-version",
+    "/api/documents/{document_id}/debug",
+    "/api/documents/{document_id}/process",
+    "/api/health",
+    "/api/metrics",
+    "/api/processing-jobs",
+    "/api/processing-jobs/{job_id}",
+    "/api/processing-jobs/{job_id}/complete",
+    "/api/processing-jobs/{job_id}/fail",
+    "/api/processing-jobs/{job_id}/start",
+    "/api/system-settings",
+    "/api/system-settings/{key}",
+    "/api/upload",
+    "/api/users",
+    "/api/users/{user_id}",
+    "/chat",
+    "/chat-messages",
+    "/chat-messages/{message_id}",
+    "/chat-sessions",
+    "/chat-sessions/{session_id}",
+    "/chat-sessions/{session_id}/archive",
+    "/chat-sessions/{session_id}/unarchive",
+    "/chat/sessions/{session_id}",
+    "/chat/sessions/{session_id}/messages",
+    "/chat/stream",
+    "/debug/documents",
+    "/debug/rag",
+    "/debug/retrieval",
+    "/document-versions",
+    "/document-versions/{version_id}",
+    "/documents",
+    "/documents/upload",
+    "/documents/{document_id}",
+    "/documents/{document_id}/current-version",
+    "/documents/{document_id}/debug",
+    "/documents/{document_id}/process",
+    "/health",
+    "/metrics",
+    "/processing-jobs",
+    "/processing-jobs/{job_id}",
+    "/processing-jobs/{job_id}/complete",
+    "/processing-jobs/{job_id}/fail",
+    "/processing-jobs/{job_id}/start",
+    "/system-settings",
+    "/system-settings/{key}",
+    "/upload",
+    "/users",
+    "/users/{user_id}"
+  ],
+  "pytest": null,
+  "elapsed_s": 267.8
+}

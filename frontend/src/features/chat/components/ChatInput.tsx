@@ -34,6 +34,8 @@ export function ChatInput({
   }, [input])
 
   const handleSend = () => {
+    console.log("[1] ChatInput.handleSend()");
+    console.log("Question:", input);
     const trimmed = input.trim()
     if (!trimmed || cannotSend) return
     onSend(trimmed)
@@ -53,6 +55,9 @@ export function ChatInput({
   return (
     <div className="relative flex items-end w-full rounded-xl border border-input bg-background p-2 shadow-sm focus-within:ring-1 focus-within:ring-ring">
       <textarea
+        id="chat-input"
+        name="message"
+        autoComplete="off"
         ref={textareaRef}
         value={input}
         onChange={(e) => setInput(e.target.value)}

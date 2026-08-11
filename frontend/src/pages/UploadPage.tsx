@@ -1,10 +1,16 @@
 import { FileTextIcon, RefreshCwIcon } from 'lucide-react'
+import { useState } from 'react'
 
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorState } from '@/components/ErrorState'
 import { LoadingState } from '@/components/LoadingState'
 import { Button } from '@/components/ui/button'
-import { DocumentsCardList, DocumentsTable } from '@/features/documents/components'
+import {
+  DeleteDocumentDialog,
+  DocumentDetailDrawer,
+  DocumentsCardList,
+  DocumentsTable,
+} from '@/features/documents/components'
 import { useDocumentsList } from '@/features/documents/hooks'
 import {
   UnsupportedFileDialog,
@@ -13,7 +19,7 @@ import {
   UploadQueue,
   useUploadQueue,
 } from '@/features/upload'
-import { useState } from 'react'
+import type { DocumentListItem } from '@/types'
 
 export function UploadPage() {
   const {
@@ -21,6 +27,7 @@ export function UploadPage() {
     rejectedFiles,
     primaryUser,
     isUserLoading,
+    isBackendReachable,
     isUploading,
     overallProgress,
     addFiles,
@@ -33,11 +40,30 @@ export function UploadPage() {
   } = useUploadQueue()
 
   const [isDialogOpen, setIsDialogOpen] = useState(true)
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<DocumentListItem | null>(null)
 
   // Recent Uploads query reusing documents feature list
   const documentsQuery = useDocumentsList()
 
-  const hasBackendAvailable = Boolean(primaryUser) && !isUserLoading
+  // Backend is reachable AND we have a user to associate uploads with
+  const hasBackendAvailable = isBackendReachable && Boolean(primaryUser) && !isUserLoading
+
+  const handleView = (documentId: string) => {
+    setSelectedDocumentId(documentId)
+  }
+
+  const handleDelete = (item: DocumentListItem) => {
+    setDeleteTarget(item)
+  }
+
+  const handleDeleted = (documentId: string) => {
+    setDeleteTarget(null)
+    if (selectedDocumentId === documentId) {
+      setSelectedDocumentId(null)
+    }
+    void documentsQuery.refetch()
+  }
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
@@ -53,6 +79,7 @@ export function UploadPage() {
             isUploading={isUploading}
             overallProgress={overallProgress}
             hasBackendAvailable={hasBackendAvailable}
+            isBackendReachable={isBackendReachable}
             onUploadAll={() => {
               void uploadAll()
             }}
@@ -134,17 +161,40 @@ export function UploadPage() {
           <>
             <DocumentsTable
               items={documentsQuery.items.slice(0, 5)}
-              onView={() => {}}
-              onDelete={() => {}}
+              onView={handleView}
+              onDelete={handleDelete}
             />
             <DocumentsCardList
               items={documentsQuery.items.slice(0, 5)}
-              onView={() => {}}
-              onDelete={() => {}}
+              onView={handleView}
+              onDelete={handleDelete}
             />
           </>
         ) : null}
       </div>
+
+      {/* Document Detail Drawer */}
+      <DocumentDetailDrawer
+        documentId={selectedDocumentId}
+        open={Boolean(selectedDocumentId)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedDocumentId(null)
+          }
+        }}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <DeleteDocumentDialog
+        target={deleteTarget}
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null)
+          }
+        }}
+        onDeleted={handleDeleted}
+      />
 
       {/* Unsupported File Warning Dialog */}
       <UnsupportedFileDialog

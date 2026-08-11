@@ -14,6 +14,7 @@ export function useDocumentsList() {
   const documentsQuery = useQuery({
     queryKey: [...DOCUMENTS_QUERY_KEY, DOCUMENTS_LIST_LIMIT],
     queryFn: () => listDocuments({ limit: DOCUMENTS_LIST_LIMIT, offset: 0 }),
+    refetchInterval: 3000,
   })
 
   const documentIds = useMemo(
@@ -66,7 +67,7 @@ export function useDeleteDocument() {
   return useMutation({
     mutationFn: deleteDocument,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: DOCUMENTS_QUERY_KEY })
+      await queryClient.invalidateQueries({ queryKey: ['documents'] })
       await queryClient.invalidateQueries({ queryKey: ['document-versions'] })
     },
   })

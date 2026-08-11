@@ -15,15 +15,18 @@ export function useUploadQueue() {
   const [rejectedFiles, setRejectedFiles] = useState<RejectedFile[]>([])
   const [isUploading, setIsUploading] = useState(false)
 
-  // Fetch active users to select an owner user_id for upload
-  const usersQuery = useQuery({
-    queryKey: ['users', 'active'],
-    queryFn: () => listUsers({ limit: 10, offset: 0 }),
-  })
+  // Use resolved active current user for upload ownership
+  const currentUserQuery = useCurrentUser()
+  const primaryUser = currentUserQuery.data ?? null
 
-  const primaryUser = useMemo(() => {
-    return usersQuery.data?.items.find((u) => u.is_active) ?? usersQuery.data?.items[0] ?? null
-  }, [usersQuery.data?.items])
+  // Independently probe backend reachability (does not depend on users existing)
+  const healthQuery = useQuery({
+    queryKey: ['health'],
+    queryFn: getHealth,
+    retry: 1,
+    staleTime: 30_000,
+  })
+  const isBackendReachable = !healthQuery.isError
 
   const validateFile = useCallback((file: File, existingQueue: UploadQueueItem[]): string | null => {
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
@@ -200,7 +203,8 @@ export function useUploadQueue() {
     queue,
     rejectedFiles,
     primaryUser,
-    isUserLoading: usersQuery.isLoading,
+    isUserLoading: currentUserQuery.isLoading,
+    isBackendReachable,
     isUploading,
     overallProgress,
     addFiles,

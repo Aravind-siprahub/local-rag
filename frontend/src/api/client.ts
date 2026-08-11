@@ -9,8 +9,35 @@ export const apiClient = axios.create({
   headers: {
     Accept: 'application/json',
   },
-  timeout: 120_000,
+  timeout: 600_000,
 })
+
+apiClient.interceptors.request.use(
+  (config) => {
+    if (!config.headers['X-Request-ID']) {
+      const requestId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+      config.headers['X-Request-ID'] = requestId
+    }
+    console.log(`[AXIOS REQUEST] ${config.method?.toUpperCase()} ${config.url} (Request-ID: ${config.headers['X-Request-ID']})`);
+    return config;
+  },
+  (error) => {
+    console.error("[AXIOS ERROR]", error);
+    return Promise.reject(error);
+  }
+);
+
+apiClient.interceptors.response.use(
+  (response) => {
+    console.log("[13] AXIOS RESPONSE");
+    console.log(response.status);
+    return response;
+  },
+  (error) => {
+    console.error("[14] AXIOS ERROR", error);
+    return Promise.reject(error);
+  }
+);
 
 export function getApiErrorMessage(error: unknown): string {
   if (!axios.isAxiosError(error)) {

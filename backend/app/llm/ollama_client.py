@@ -18,6 +18,7 @@ from app.llm.client import (
     LLMUnavailableError,
 )
 from app.llm.response import LLMResponse, TokenUsage
+from app.llm.sanitize import ThinkingStreamFilter, supports_think_parameter, sanitize_response
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +35,20 @@ _OOM_MARKERS = (
 )
 
 
+_OLLAMA_CONCURRENCY_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_concurrency_semaphore() -> asyncio.Semaphore:
+    global _OLLAMA_CONCURRENCY_SEMAPHORE
+    if _OLLAMA_CONCURRENCY_SEMAPHORE is None:
+        settings = get_settings()
+        limit = max(1, getattr(settings, "OLLAMA_MAX_CONCURRENCY", 4))
+        _OLLAMA_CONCURRENCY_SEMAPHORE = asyncio.Semaphore(limit)
+    return _OLLAMA_CONCURRENCY_SEMAPHORE
+
+
 class OllamaLLMClient:
-    """Async Ollama `/api/chat` client with retry, timeout, and error handling."""
+    """Async Ollama `/api/chat` client with retry, timeout, bounded concurrency, and keep-alive support."""
 
     def __init__(
         self,
@@ -59,10 +72,11 @@ class OllamaLLMClient:
         self.max_retries = max_retries if max_retries is not None else settings.LLM_MAX_RETRIES
         self.retry_backoff = retry_backoff
         self.use_gpu = settings.OLLAMA_USE_GPU if use_gpu is None else use_gpu
-        # Explicit constructor args win; otherwise fall back to settings.
         self.num_gpu = num_gpu if num_gpu is not None else settings.OLLAMA_NUM_GPU
         self.num_thread = num_thread if num_thread is not None else settings.OLLAMA_NUM_THREAD
         self.num_ctx = settings.OLLAMA_NUM_CTX
+        self.num_predict = settings.OLLAMA_NUM_PREDICT
+        self.keep_alive = getattr(settings, "OLLAMA_KEEP_ALIVE", "30m")
         self._client = client
         self._owns_client = client is None
 
@@ -106,8 +120,8 @@ class OllamaLLMClient:
                 {"role": "system", "content": system_prompt.strip()},
                 {"role": "user", "content": user_prompt.strip()},
             ],
-            "stream": False,
-            "keep_alive": "10m",
+            "stream": stream,
+            "keep_alive": ka,
             "options": options,
         }
         # qwen3 / thinking models often put the entire answer in `message.thinking`
@@ -120,19 +134,24 @@ class OllamaLLMClient:
 
         logger.info(
             "Ollama LLM request starting: model=%s execution=%s num_gpu=%s "
-            "num_thread=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=10m",
+            "num_thread=%s num_predict=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=%s think=%s",
             self.model,
             "GPU enabled" if self.use_gpu else "CPU fallback",
             options.get("num_gpu", "default"),
             options.get("num_thread", "default"),
+            options.get("num_predict"),
             self.timeout,
             self.max_retries,
             payload["stream"],
+            self.keep_alive,
+            payload.get("think", "omitted"),
         )
         started_at = datetime.now(timezone.utc)
         start_mono = time.monotonic()
 
-        response_data = await self._request_with_retry("/api/chat", payload)
+        sem = _get_concurrency_semaphore()
+        async with sem:
+            response_data = await self._request_with_retry("/api/chat", payload)
 
         latency_ms = int((time.monotonic() - start_mono) * 1000)
         logger.info(
@@ -142,6 +161,58 @@ class OllamaLLMClient:
             started_at.isoformat(),
         )
         return _parse_chat_response(response_data, fallback_model=self.model)
+
+
+    async def generate_stream(
+        self, system_prompt: str, user_prompt: str
+    ):
+        """Yield token deltas as they stream from Ollama `/api/chat`."""
+        if not user_prompt or not user_prompt.strip():
+            raise LLMClientError("user_prompt must not be empty.")
+        if not system_prompt or not system_prompt.strip():
+            raise LLMClientError("system_prompt must not be empty.")
+
+        payload = self._build_payload(system_prompt, user_prompt, stream=True)
+
+        url = f"{self.base_url}/api/chat"
+        client = await self._get_client()
+        import json
+
+        stream_filter = ThinkingStreamFilter()
+
+        async with client.stream("POST", url, json=payload) as response:
+            if response.status_code >= 400:
+                error_text = await response.aread()
+                raise LLMAPIError(f"Ollama stream returned HTTP {response.status_code}: {error_text.decode('utf-8')}")
+
+            async for line in response.aiter_lines():
+                if not line or not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    if not isinstance(data, dict):
+                        continue
+                    msg = data.get("message")
+                    if not isinstance(msg, dict):
+                        continue
+                    # Never stream the separate thinking field — answer tokens only.
+                    raw_token = msg.get("content")
+                    token = raw_token if isinstance(raw_token, str) else ""
+                    if not token:
+                        continue
+                    safe = stream_filter.feed(token)
+                    if safe:
+                        yield safe
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    logger.debug("Skipping malformed Ollama stream line")
+                    continue
+                except Exception:
+                    logger.warning("Unexpected error parsing Ollama stream chunk", exc_info=True)
+                    continue
+
+            tail = stream_filter.flush()
+            if tail:
+                yield tail
 
     async def warmup(self) -> bool:
         """Pre-load the model into Ollama memory to ensure sub-5s local response times."""
@@ -259,6 +330,9 @@ class OllamaLLMClient:
 
 
 def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMResponse:
+    if not isinstance(data, dict):
+        raise LLMAPIError("Ollama response is not a JSON object.")
+
     message = data.get("message")
     if not isinstance(message, dict):
         raise LLMAPIError("Ollama response missing 'message' object.")

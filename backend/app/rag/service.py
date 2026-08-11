@@ -999,6 +999,9 @@ def _sources_from_prompt(prompt: Prompt) -> list[SourceCitation]:
             document_version_id=chunk.document_version_id,
             similarity_score=chunk.similarity_score,
             rank=chunk.rank,
+            document_title=getattr(chunk, "document_title", None),
+            section_title=getattr(chunk, "section_title", None),
+            page_number=getattr(chunk, "page_number", None),
         )
         for chunk in prompt.retrieved_chunks
     ]

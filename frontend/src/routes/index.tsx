@@ -1,6 +1,9 @@
 import { createBrowserRouter } from 'react-router-dom'
 
 import { AppLayout } from '@/layouts/AppLayout'
+import { AuthLayout } from '@/layouts/AuthLayout'
+import { Login } from '@/features/auth/pages/Login'
+import { Signup } from '@/features/auth/pages/Signup'
 import {
   DashboardPage,
   DocumentsPage,
@@ -9,12 +12,26 @@ import {
   UploadPage,
   SettingsPage,
 } from '@/pages'
+import { ProtectedRoute } from '@/routes/ProtectedRoute'
 import { ROUTES } from '@/routes/paths'
 
 export const appRouter = createBrowserRouter([
+  // Auth pages — share the dark glassmorphism AuthLayout
+  {
+    element: <AuthLayout />,
+    children: [
+      { path: ROUTES.login,  element: <Login /> },
+      { path: ROUTES.signup, element: <Signup /> },
+    ],
+  },
+  // Application Dashboard Routes
   {
     path: ROUTES.dashboard,
-    element: <AppLayout />,
+    element: (
+      <ProtectedRoute>
+        <AppLayout />
+      </ProtectedRoute>
+    ),
     children: [
       {
         index: true,
@@ -43,4 +60,3 @@ export const appRouter = createBrowserRouter([
     ],
   },
 ])
-

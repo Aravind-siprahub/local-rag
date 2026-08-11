@@ -45,10 +45,11 @@ class FakeChatSessionService:
 class FakeChatMessageService:
     def __init__(self) -> None:
         self.created: list[dict] = []
+        self._messages: list[_FakeMessage] = []
 
     async def create_message(self, **kwargs) -> _FakeMessage:
         self.created.append(kwargs)
-        return _FakeMessage(
+        msg = _FakeMessage(
             id=uuid.uuid4(),
             session_id=kwargs["session_id"],
             role=kwargs["role"],
@@ -59,6 +60,11 @@ class FakeChatMessageService:
             latency_ms=kwargs.get("latency_ms"),
             generation_time_ms=kwargs.get("generation_time_ms"),
         )
+        self._messages.append(msg)
+        return msg
+
+    async def list_by_session(self, session_id: uuid.UUID, limit: int = 50) -> list[_FakeMessage]:
+        return [m for m in self._messages if m.session_id == session_id][-limit:]
 
 
 class FakeCitationService:
@@ -89,8 +95,15 @@ class FakeRetriever:
 class FakeLLMClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.model = "test-chat-model"
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+    ) -> LLMResponse:
         self.calls.append((system_prompt, user_prompt))
         return LLMResponse(
             answer="The revenue grew 12%.",
@@ -111,6 +124,7 @@ def _ranked(text: str, rank: int) -> RankedResult:
         document_version_id=uuid.uuid4(),
         similarity_score=0.92,
         rank=rank,
+        document_title="Revenue Report.docx",
     )
 
 
@@ -125,6 +139,8 @@ def _make_service(
     citations = FakeCitationService()
     fake_retriever = retriever or FakeRetriever(retrieval_results or [_ranked("Revenue up 12%.", 1)])
     llm = FakeLLMClient()
+    from app.tools.web_search import StubWebSearchProvider
+
     service = RAGService(
         session=None,
         retriever=fake_retriever,
@@ -133,6 +149,7 @@ def _make_service(
         message_service=messages,
         citation_service=citations,
         session_service=FakeChatSessionService(session),
+        web_search=StubWebSearchProvider(),
     )
     return service, session, messages, citations, fake_retriever, llm
 
@@ -142,9 +159,12 @@ class TestRAGService:
     async def test_end_to_end_flow(self) -> None:
         service, session, messages, citations, retriever, llm = _make_service()
 
-        response = await service.ask(session.id, "What happened to revenue?")
+        response = await service.ask(
+            session.id,
+            "According to my documents, what happened to revenue?",
+        )
 
-        assert response.answer == "The revenue grew 12%."
+        assert response.answer.startswith("The revenue grew 12%.")
         assert response.model == "test-chat-model"
         assert response.processing_time_ms >= 0
         assert response.token_usage is not None
@@ -153,7 +173,7 @@ class TestRAGService:
         assert len(response.sources) == 1
         assert len(messages.created) == 2
         assert messages.created[0]["role"] == MessageRole.USER
-        assert messages.created[0]["content"] == "What happened to revenue?"
+        assert messages.created[0]["content"] == "According to my documents, what happened to revenue?"
         assert messages.created[1]["role"] == MessageRole.ASSISTANT
         assert messages.created[1]["model_used"] == "test-chat-model"
         assert messages.created[1]["prompt_tokens"] == 50
@@ -168,13 +188,11 @@ class TestRAGService:
         retriever = FakeRetriever(fail=True)
         service, session, messages, citations, _, llm = _make_service(retriever=retriever)
 
-        response = await service.ask(session.id, "Any data?")
+        with pytest.raises(RetrievalError):
+            await service.ask(session.id, "According to my documents, any data?")
 
-        assert response.answer == "The revenue grew 12%."
-        assert response.sources == []
         assert citations.created == []
-        assert len(messages.created) == 2
-        assert len(llm.calls) == 1
+        assert len(llm.calls) == 0
 
     @pytest.mark.asyncio
     async def test_passes_document_filter_to_retriever(self) -> None:
@@ -182,7 +200,11 @@ class TestRAGService:
         document_id = uuid.uuid4()
         filters = SearchFilters(document_id=document_id)
 
-        await service.ask(session.id, "Scoped question?", filters=filters)
+        await service.ask(
+            session.id,
+            "According to my documents, scoped question?",
+            filters=filters,
+        )
 
         assert retriever.calls[0]["filters"].document_id == document_id
         assert retriever.calls[0]["filters"].user_id == session.user_id

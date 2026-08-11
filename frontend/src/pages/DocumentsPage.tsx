@@ -51,6 +51,7 @@ export function DocumentsPage() {
     if (selectedDocumentId === documentId) {
       setSelectedDocumentId(null)
     }
+    void documentsQuery.refetch()
   }
 
   return (

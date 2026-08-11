@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.llm.client import LLMUnavailableError
+from app.llm.client import LLMUnavailableError, LLMClientError, LLMAPIError, LLMModelError, LLMTimeoutError
 from app.services.exceptions import ConflictError, NotFoundError, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,38 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=exc.to_response_body(),
         )
 
+    @app.exception_handler(LLMModelError)
+    async def llm_model_error_handler(request: Request, exc: LLMModelError) -> JSONResponse:
+        logger.error("LLM model error on %s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "LLMModelError", "message": str(exc), "path": request.url.path},
+        )
+
+    @app.exception_handler(LLMTimeoutError)
+    async def llm_timeout_error_handler(request: Request, exc: LLMTimeoutError) -> JSONResponse:
+        logger.error("LLM timeout on %s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            content={"error": "LLMTimeoutError", "message": str(exc), "path": request.url.path},
+        )
+
+    @app.exception_handler(LLMAPIError)
+    async def llm_api_error_handler(request: Request, exc: LLMAPIError) -> JSONResponse:
+        logger.error("LLM API error on %s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"error": "LLMAPIError", "message": str(exc), "path": request.url.path},
+        )
+
+    @app.exception_handler(LLMClientError)
+    async def llm_client_error_handler(request: Request, exc: LLMClientError) -> JSONResponse:
+        logger.error("LLM client error on %s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "LLMClientError", "message": str(exc), "path": request.url.path},
+        )
+
     @app.exception_handler(NotFoundError)
     async def not_found_error_handler(request: Request, exc: NotFoundError) -> JSONResponse:
         logger.info("Not found on %s %s: %s", request.method, request.url.path, exc)
@@ -111,16 +143,26 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(SQLAlchemyError)
     async def sqlalchemy_error_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
-        logger.exception("Unhandled database error on %s %s", request.method, request.url.path)
+        logger.exception("Unhandled database error on %s %s: %s", request.method, request.url.path, exc)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"status": "error", "message": "A database error occurred."},
+            content={
+                "error": type(exc).__name__,
+                "message": f"Database error: {str(exc)}",
+                "path": request.url.path,
+                "status": 500,
+            },
         )
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        logger.exception("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"status": "error", "message": "An unexpected error occurred."},
+            content={
+                "error": type(exc).__name__,
+                "message": str(exc) or "An unexpected error occurred.",
+                "path": request.url.path,
+                "status": 500,
+            },
         )

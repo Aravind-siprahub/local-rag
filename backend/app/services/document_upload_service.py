@@ -35,6 +35,7 @@ from app.services.exceptions import ValidationError
 from app.services.owner_resolution import resolve_owner_user_id
 from app.services.processing_job_service import ProcessingJobService
 from app.storage.base import FileStorage
+from app.storage.local_file_storage import LocalFileStorage
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,17 @@ logger = logging.getLogger(__name__)
 # is unreliable in practice (many browsers/OSes send "application/
 # octet-stream" for .md, some send nothing) — extension is the primary
 # signal, Content-Type is a secondary sanity check with a generic fallback.
-ALLOWED_EXTENSIONS: dict[str, frozenset[str]] = {
-    ".pdf": frozenset({"application/pdf"}),
-    ".docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
-    ".txt": frozenset({"text/plain"}),
-    ".md": frozenset({"text/markdown", "text/x-markdown", "text/plain"}),
-    ".markdown": frozenset({"text/markdown", "text/x-markdown", "text/plain"}),
+ALLOWED_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    ".pdf": ("application/pdf",),
+    ".docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",),
+    ".doc": ("application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ".txt": ("text/plain",),
+    ".md": ("text/markdown", "text/x-markdown", "text/plain"),
+    ".markdown": ("text/markdown", "text/x-markdown", "text/plain"),
+    ".csv": ("text/csv", "application/csv", "text/plain"),
+    ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"),
+    ".pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation",),
+    ".json": ("application/json", "text/plain"),
 }
 _GENERIC_CONTENT_TYPES = frozenset({"application/octet-stream", "", None})
 
@@ -64,6 +70,9 @@ class UploadResult:
     file_size_bytes: int
     checksum_sha256: str
     storage_key: str
+    bucket_name: str
+    storage_path: str
+    storage_provider: str
 
 
 class DocumentUploadService:
@@ -134,19 +143,51 @@ class DocumentUploadService:
             filename=filename, content_type=content_type, size_bytes=len(content), max_size_bytes=max_size_bytes
         )
 
+        extension = Path(filename).suffix.lower()
+        allowed_types = ALLOWED_EXTENSIONS.get(extension, ["application/octet-stream"])
+        resolved_content_type = content_type if (content_type and content_type not in _GENERIC_CONTENT_TYPES) else allowed_types[0]
+
         # Resolve once up front so Document.user_id and DocumentVersion.uploaded_by
         # always share the same real user (Swagger placeholder UUIDs included).
         # Skipped when session is absent (unit tests inject fakes only).
         if self.session is not None:
             user_id = await resolve_owner_user_id(user_id, UserRepository(self.session))
 
-        saved = await self.storage.save(content=content, original_filename=filename)
-        resolved_content_type = content_type or "application/octet-stream"
-
         document: Document = await self.documents.create_document(user_id=user_id, title=title or filename)
-        # Capture plain UUIDs before any later rollback can expire ORM attrs —
-        # accessing expired attributes outside greenlet_spawn raises MissingGreenlet.
         document_id = document.id
+
+        # Construct storage path: user_id/document_id/original_filename
+        storage_path = f"{user_id}/{document_id}/{filename}".replace("//", "/").lstrip("/")
+        bucket_name = getattr(self.storage, "bucket_name", "documents")
+        storage_provider = getattr(self.storage, "storage_provider", "supabase")
+
+        logger.info(
+            "UPLOAD: bucket=%s path=%s filename=%s document_id=%s",
+            bucket_name,
+            storage_path,
+            filename,
+            document_id,
+        )
+
+        saved = None
+        try:
+            if hasattr(self.storage, "upload_file"):
+                saved = await self.storage.upload_file(
+                    content=content,
+                    storage_path=storage_path,
+                    mime_type=resolved_content_type,
+                )
+                try:
+                    local_storage = LocalFileStorage()
+                    await local_storage.save(content=content, original_filename=filename)
+                except Exception as exc:
+                    logger.debug("Failed to write local backup copy: %s", exc)
+            else:
+                saved = await self.storage.save(content=content, original_filename=filename)
+        except Exception as exc:
+            logger.error("Supabase Storage upload failed for file %s: %s", filename, exc)
+            await self._compensate_document(document_id)
+            raise
 
         version: DocumentVersion
         try:
@@ -159,11 +200,28 @@ class DocumentUploadService:
                 file_size_bytes=saved.size_bytes,
                 checksum_sha256=saved.checksum_sha256,
             )
-        except Exception:
-            logger.error(
-                "Version creation failed after document %s was created; compensating.",
+            await self.documents.update(
                 document_id,
+                current_version_id=version.id,
+                storage_provider=storage_provider,
+                bucket_name=bucket_name,
+                storage_path=storage_path,
+                original_filename=filename,
+                filename=filename,
+                mime_type=resolved_content_type,
+                size=saved.size_bytes,
+                file_size_bytes=saved.size_bytes,
             )
+            await self.versions.update(
+                version.id,
+                storage_provider=storage_provider,
+                bucket_name=bucket_name,
+                storage_path=storage_path,
+            )
+        except Exception as exc:
+            logger.error("Version creation failed after upload of %s; deleting remote file.", storage_path)
+            if hasattr(self.storage, "delete_file"):
+                await self.storage.delete_file(storage_path=storage_path)
             await self._compensate_document(document_id)
             raise
 
@@ -175,10 +233,9 @@ class DocumentUploadService:
                 document_version_id=version_id, job_type=ProcessingJobType.PARSE
             )
         except Exception:
-            logger.error(
-                "Job creation failed after version %s was created; compensating.",
-                version_id,
-            )
+            logger.error("Job creation failed for version %s; compensating.", version_id)
+            if hasattr(self.storage, "delete_file"):
+                await self.storage.delete_file(storage_path=storage_path)
             await self._compensate_version(version_id)
             await self._compensate_document(document_id)
             raise
@@ -192,6 +249,9 @@ class DocumentUploadService:
             file_size_bytes=saved.size_bytes,
             checksum_sha256=saved.checksum_sha256,
             storage_key=saved.storage_key,
+            bucket_name=bucket_name,
+            storage_path=storage_path,
+            storage_provider=storage_provider,
         )
 
     async def _compensate_document(self, document_id: uuid.UUID) -> None:

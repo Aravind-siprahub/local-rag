@@ -17,12 +17,33 @@ but using `python run.py` everywhere keeps local dev and prod startup
 symmetric.)
 """
 import asyncio
+import os
 import sys
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# Ensure immediate terminal output on Windows by forcing line-buffered stdout/stderr
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
+if sys.platform == "win32" and sys.version_info < (3, 14):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore  # noqa
 
 import uvicorn  # noqa: E402  (must follow the policy fix above)
 
+import pathlib
+
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    app_dir = str(pathlib.Path(__file__).resolve().parent / "app")
+    # On Windows, Uvicorn's reload subprocess spawns a child worker that initializes
+    # ProactorEventLoop before importing app.main, breaking psycopg3 async connection.
+    # Running directly with reload=False on Windows preserves WindowsSelectorEventLoopPolicy.
+    should_reload = os.getenv("RELOAD", "false" if sys.platform == "win32" else "true").lower() == "true"
+    
+    if should_reload and sys.platform != "win32":
+        uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, reload_dirs=[app_dir])
+    else:
+        from app.main import app
+        uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+
+

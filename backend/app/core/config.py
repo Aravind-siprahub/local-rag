@@ -40,13 +40,36 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 1800
     DB_ECHO: bool = False
 
-    # --- Local file storage (document uploads) ------------------------------
+    # --- Storage (Supabase Storage) ----------------------------------------
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 25
+    SUPABASE_URL: str | None = None
+    SUPABASE_SERVICE_ROLE_KEY: str | None = None
+    SUPABASE_BUCKET: str = "documents"
+    STORAGE_PROVIDER: str = "supabase"
+
+    # --- S3-compatible Storage (Supabase S3 endpoint) -------------------------
+    # When set, the S3 interface is used instead of the REST API — it is
+    # more reliable and handles authentication + path encoding automatically.
+    S3_ENDPOINT: str | None = None        # e.g. https://<ref>.storage.supabase.co/storage/v1/s3
+    S3_REGION: str = "ap-south-1"
+    S3_ACCESS_KEY: str | None = None
+    S3_SECRET_KEY: str | None = None
+
+    @property
+    def s3_is_configured(self) -> bool:
+        return bool(self.S3_ENDPOINT and self.S3_ACCESS_KEY and self.S3_SECRET_KEY)
 
     # --- Document text processing (parse / chunk) -----------------------------
     CHUNK_SIZE: int = 1500
     CHUNK_OVERLAP: int = 300
+
+    # Semantic chunking (token-based; used by app.services.chunker)
+    SEMANTIC_CHUNK_MIN_TOKENS: int = 400
+    SEMANTIC_CHUNK_MAX_TOKENS: int = 700
+    SEMANTIC_CHUNK_OVERLAP_MIN: int = 50
+    SEMANTIC_CHUNK_OVERLAP_MAX: int = 100
+    SEMANTIC_CHUNK_MIN_CHARS: int = 50
 
     # --- Embeddings (Ollama) --------------------------------------------------
     # Prefer OLLAMA_HOST when set; OLLAMA_BASE_URL kept for backward compatibility.
@@ -59,14 +82,18 @@ class Settings(BaseSettings):
 
     # --- Chat LLM (Ollama) ----------------------------------------------------
     # Prefer OLLAMA_MODEL when set; CHAT_MODEL remains the documented default.
-    CHAT_MODEL: str = "qwen3:8b"
+    CHAT_MODEL: str = "qwen3:4b"
     OLLAMA_MODEL: str | None = None
     # When False, requests send options.num_gpu=0 (CPU). When True, Ollama may
     # use GPU; OLLAMA_NUM_GPU optionally limits offloaded layers (None = all).
     OLLAMA_USE_GPU: bool = True
     OLLAMA_NUM_GPU: int | None = None
     OLLAMA_NUM_THREAD: int | None = None
-    OLLAMA_NUM_CTX: int = 2048
+    OLLAMA_NUM_CTX: int = 8192
+    OLLAMA_NUM_PREDICT: int = 512
+    OLLAMA_KEEP_ALIVE: str = "30m"
+    OLLAMA_MAX_CONCURRENCY: int = 4
+
     # qwen3 with thinking enabled can exceed 120s on CPU; 300s is a safe default.
     LLM_TIMEOUT_SECONDS: float = 300.0
     LLM_MAX_RETRIES: int = 3
@@ -83,7 +110,8 @@ class Settings(BaseSettings):
     SIMILARITY_THRESHOLD: float = 0.5
 
     # --- Prompt building ------------------------------------------------------
-    MAX_CONTEXT_CHARS: int = 8000
+    MAX_CONTEXT_TOKENS: int = 6000
+    MAX_CONTEXT_CHARS: int = 24000
     SYSTEM_PROMPT: str = (
         "You are a direct, concise assistant that answers questions using only the "
         "provided document excerpts. Provide the final answer immediately without explaining your "
@@ -96,6 +124,8 @@ class Settings(BaseSettings):
     CORS_ALLOW_ORIGINS: str = (
         "http://localhost:5173,http://127.0.0.1:5173"
     )
+
+
 
     @property
     def cors_allow_origins(self) -> list[str]:

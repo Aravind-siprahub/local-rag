@@ -25,15 +25,15 @@ class ChatSessionBase(BaseModel):
 
 class ChatSessionCreate(ChatSessionBase):
     user_id: Annotated[
-        uuid.UUID,
+        uuid.UUID | None,
         Field(
+            default=None,
             description=(
-                "Owner user id. Call GET /users to list existing users, "
-                "or POST /users to create one first. The returned session "
-                "`id` is what POST /chat expects as `session_id`."
+                "Owner user id. Omit or pass null to automatically use the "
+                "first active user in the database."
             ),
         ),
-    ]
+    ] = None
 
     model_config = ConfigDict(json_schema_extra={"example": CHAT_SESSION_CREATE_OPENAPI_EXAMPLE})
 
