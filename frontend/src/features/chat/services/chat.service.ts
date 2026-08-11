@@ -32,8 +32,20 @@ export const chatService = {
     return data
   },
 
-  async sendMessage(payload: ChatRequest): Promise<ChatResponse> {
-    const { data } = await apiClient.post<ChatResponse>('/chat', payload)
+  /**
+   * Chat generation can exceed the default API client timeout.
+   * Use a dedicated timeout + optional AbortSignal so the UI can recover
+   * without locking the rest of the app.
+   */
+  async sendMessage(
+    payload: ChatRequest,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<ChatResponse> {
+    const { data } = await apiClient.post<ChatResponse>('/chat', payload, {
+      signal: options?.signal,
+      // LLM + RAG answers often take longer than other API calls.
+      timeout: options?.timeoutMs ?? 600_000,
+    })
     return data
   },
 }

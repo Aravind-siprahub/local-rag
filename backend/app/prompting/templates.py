@@ -8,7 +8,8 @@ CHUNK_TEMPLATE = "[Chunk {index}]\n{chunk_text}"
 
 USER_PROMPT_WITH_CONTEXT = (
     "Use the following document excerpts to answer the question. "
-    "If the excerpts do not contain enough information, say so.\n\n"
+    "If the excerpts do not contain enough information, say so.\n"
+    "Respond directly with the final answer. Do NOT explain your reasoning, do NOT summarize the chunks, and do NOT use conversational filler.\n\n"
     "{context_header}\n\n"
     "{context}\n\n"
     "{question_header}\n"

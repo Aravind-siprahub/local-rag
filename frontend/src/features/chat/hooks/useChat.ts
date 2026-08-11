@@ -50,6 +50,7 @@ export function useChat() {
     isLoadingConversations,
     createConversation,
     deleteConversation,
+    /** @deprecated Prefer chatRequestStore + chatService.sendMessage for per-conversation UI state. */
     sendMessage,
   }
 }

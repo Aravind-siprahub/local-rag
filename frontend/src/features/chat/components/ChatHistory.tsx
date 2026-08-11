@@ -9,9 +9,10 @@ interface ChatHistoryProps {
   messages: Message[]
   isLoading?: boolean
   latestCitations?: Citation[]
+  loadingLabel?: string
 }
 
-export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistoryProps) {
+export function ChatHistory({ messages, isLoading, latestCitations, loadingLabel }: ChatHistoryProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -22,11 +23,15 @@ export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistor
   }, [messages, isLoading])
 
   if (messages.length === 0 && !isLoading) {
-    return <ChatEmptyState />
+    return (
+      <div className="flex-1 min-h-0">
+        <ChatEmptyState />
+      </div>
+    )
   }
 
   return (
-    <ScrollArea className="flex-1 px-4 py-4" ref={scrollRef}>
+    <ScrollArea className="flex-1 min-h-0 h-full px-4 py-4" ref={scrollRef}>
       <div className="max-w-3xl mx-auto flex flex-col gap-6 pb-6">
         {messages.map((msg, index) => (
           <div key={msg.id || index} className="group">
@@ -41,7 +46,7 @@ export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistor
         ))}
         {isLoading && (
           <div className="max-w-3xl mx-auto w-full group">
-            <TypingIndicator />
+            <TypingIndicator label={loadingLabel} />
           </div>
         )}
       </div>

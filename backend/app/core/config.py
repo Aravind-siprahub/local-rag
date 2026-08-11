@@ -45,8 +45,8 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 25
 
     # --- Document text processing (parse / chunk) -----------------------------
-    CHUNK_SIZE: int = 1000
-    CHUNK_OVERLAP: int = 200
+    CHUNK_SIZE: int = 1500
+    CHUNK_OVERLAP: int = 300
 
     # --- Embeddings (Ollama) --------------------------------------------------
     # Prefer OLLAMA_HOST when set; OLLAMA_BASE_URL kept for backward compatibility.
@@ -71,19 +71,39 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: float = 300.0
     LLM_MAX_RETRIES: int = 3
     LLM_TEMPERATURE: float = 0.7
+    OLLAMA_NUM_PREDICT: int = 1024
+
+    # --- Agent router / web search --------------------------------------------
+    WEB_SEARCH_PROVIDER: str = "duckduckgo"
+    WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
 
     # --- Vector retrieval -----------------------------------------------------
     TOP_K: int = 10
-    SIMILARITY_THRESHOLD: float = 0.0
+    FINAL_CONTEXT: int = 5
+    SIMILARITY_THRESHOLD: float = 0.5
 
     # --- Prompt building ------------------------------------------------------
     MAX_CONTEXT_CHARS: int = 8000
     SYSTEM_PROMPT: str = (
-        "You are a helpful assistant that answers questions using only the "
-        "provided document excerpts. Reference chunk numbers when citing "
-        "sources. If the excerpts do not contain enough information, say so "
-        "clearly instead of guessing."
+        "You are a direct, concise assistant that answers questions using only the "
+        "provided document excerpts. Provide the final answer immediately without explaining your "
+        "thought process, without narrating what the chunks contain, and without conversational filler. "
+        "Reference chunk numbers when citing sources (e.g. [Chunk 1]). "
+        "If the excerpts do not contain enough information, say so clearly instead of guessing."
     )
+
+    # --- CORS (comma-separated origins; defaults cover local Vite SPA) --------
+    CORS_ALLOW_ORIGINS: str = (
+        "http://localhost:5173,http://127.0.0.1:5173"
+    )
+
+    @property
+    def cors_allow_origins(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.CORS_ALLOW_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     @property
     def max_upload_size_bytes(self) -> int:

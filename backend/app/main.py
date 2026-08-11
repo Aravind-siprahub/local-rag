@@ -142,6 +142,8 @@ def create_app() -> FastAPI:
     importable for tests without side effects beyond constructing the app,
     and keeps configuration/wiring in one place.
     """
+    from fastapi.middleware.cors import CORSMiddleware
+
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
@@ -149,7 +151,20 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS must be registered before routers/handlers so preflight and error
+    # responses (404/500) still include Access-Control-* headers for the SPA.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     register_exception_handlers(app)
+    # Primary mount: frontend VITE_API_BASE_URL=http://localhost:8000/api
+    app.include_router(api_router, prefix="/api")
+    # Root mount: Vite proxy rewrite strips /api → /health, /users, etc.
     app.include_router(api_router)
 
     def custom_openapi() -> dict:

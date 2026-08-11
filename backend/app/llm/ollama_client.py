@@ -66,11 +66,17 @@ class OllamaLLMClient:
         self._client = client
         self._owns_client = client is None
 
-    def _build_options(self) -> dict[str, Any]:
+    def _build_options(self, *, num_predict: int | None = None) -> dict[str, Any]:
+        settings = get_settings()
+        predict = (
+            num_predict
+            if num_predict is not None
+            else getattr(settings, "OLLAMA_NUM_PREDICT", 512)
+        )
         options: dict[str, Any] = {
             "temperature": self.temperature,
             "num_ctx": self.num_ctx,
-            "num_predict": 512,
+            "num_predict": predict,
         }
         if not self.use_gpu:
             options["num_gpu"] = 0
@@ -80,15 +86,21 @@ class OllamaLLMClient:
             options["num_thread"] = self.num_thread
         return options
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+    ) -> LLMResponse:
         """Generate a completion from system and user prompts."""
         if not user_prompt or not user_prompt.strip():
             raise LLMClientError("user_prompt must not be empty.")
         if not system_prompt or not system_prompt.strip():
             raise LLMClientError("system_prompt must not be empty.")
 
-        options = self._build_options()
-        payload = {
+        options = self._build_options(num_predict=num_predict)
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt.strip()},
@@ -98,6 +110,13 @@ class OllamaLLMClient:
             "keep_alive": "10m",
             "options": options,
         }
+        # qwen3 / thinking models often put the entire answer in `message.thinking`
+        # and leave `content` empty on long RAG prompts. Force non-thinking output.
+        from app.llm.sanitize import supports_think_parameter
+
+        if supports_think_parameter(self.model):
+            payload["think"] = False
+
 
         logger.info(
             "Ollama LLM request starting: model=%s execution=%s num_gpu=%s "
@@ -245,6 +264,13 @@ def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMRespon
         raise LLMAPIError("Ollama response missing 'message' object.")
 
     content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        # Some thinking models still return the answer under alternate keys.
+        for alt_key in ("thinking", "reasoning"):
+            alt = message.get(alt_key)
+            if isinstance(alt, str) and alt.strip():
+                content = alt
+                break
     if not isinstance(content, str) or not content.strip():
         raise LLMAPIError("Ollama response missing assistant 'content'.")
 

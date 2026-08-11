@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from 'react'
 
 import { getApiErrorMessage } from '@/api/client'
 import { listUsers, uploadDocument } from '@/services'
-import type { RejectedFile, UploadQueueItem, UploadQueueStatus } from '@/types'
+import type { RejectedFile, UploadQueueItem } from '@/types'
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024 // 25 MB
 const ACCEPTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.markdown']
