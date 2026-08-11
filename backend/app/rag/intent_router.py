@@ -13,12 +13,33 @@ logger = logging.getLogger(__name__)
 
 
 class Route(str, Enum):
-    RAG = "RAG"
-    WEB = "WEB"
-    CALCULATOR = "CALCULATOR"
-    DIRECT = "DIRECT"
+    DOCUMENT_QA = "DOCUMENT_QA"
+    RAG = "DOCUMENT_QA"  # Alias for backward compatibility
     DOCUMENT_LIST = "DOCUMENT_LIST"
+    DOCUMENT_METADATA = "DOCUMENT_METADATA"
+    GENERAL_KNOWLEDGE = "GENERAL_KNOWLEDGE"
+    GENERIC_CHAT = "GENERIC_CHAT"
+    CALCULATOR = "CALCULATOR"
+    WEB = "WEB"
+    DIRECT = "DIRECT"
 
+
+# Greetings / Conversational patterns
+_GREETING_PATTERNS = re.compile(
+    r"^(hi+|hello+|hey+|good\s+(morning|afternoon|evening|day|night)|greetings|howdy|what'?s\s+up|sup)\b",
+    re.IGNORECASE,
+)
+_CHAT_PHRASES = (
+    "who are you",
+    "what are you",
+    "how are you",
+    "how do you do",
+    "nice to meet you",
+    "thank you",
+    "thanks",
+    "bye",
+    "goodbye",
+)
 
 # Arithmetic / percent-of patterns
 _CALC_PERCENT_OF = re.compile(
@@ -33,19 +54,22 @@ _CALC_KEYWORDS = re.compile(
     r"(?i)\b(calculate|compute|evaluate)\b.*[\d]"
 )
 
-# Document / knowledge-base cues (checked before WEB)
+# Document extension cue
 _DOC_EXTENSION = re.compile(
     r"(?i)\b[\w\-]+\.(docx?|pdf|txt|md|xlsx?|pptx?|csv)\b"
 )
-_DOC_PHRASES = (
-    "according to my documents",
+
+# Document QA cues
+_DOC_QA_PHRASES = (
     "according to my document",
+    "according to my documents",
     "according to the document",
     "according to the documents",
     "according to my uploaded",
     "what does the document say",
     "what do the documents say",
     "what does my document say",
+    "what does my uploaded document say",
     "summarise my uploaded",
     "summarize my uploaded",
     "summarise my document",
@@ -55,26 +79,38 @@ _DOC_PHRASES = (
     "uploaded document",
     "uploaded documents",
     "knowledge base",
+    "in my document",
     "in my documents",
+    "in the document",
     "in the documents",
+    "from my document",
     "from my documents",
+    "from the document",
     "from the documents",
     "my documents",
     "my uploaded",
-    "list documents",
-    "list all documents",
-    "show documents",
-    "show all documents",
-    "documents are available",
-    "what documents",
-    "which documents",
+    "leave policy",
+    "leave policy what say",
+    "policy in my document",
+    "policy in document",
+    "in my file",
+    "in the file",
+    "my doc say",
+    "my document say",
+    "what does my document",
+    "what does the document",
 )
 
+# Document list cues
 _DOC_LIST_KEYWORDS = (
     "list of document",
     "list of documents",
     "list my document",
     "list my documents",
+    "list document",
+    "list documents",
+    "list out document",
+    "list out documents",
     "what document",
     "what documents",
     "which document",
@@ -95,62 +131,81 @@ _DOC_LIST_KEYWORDS = (
     "files are available",
     "list files",
     "show files",
+    "what doc u have",
+    "what docs u have",
+    "what file u have",
+    "what doc i have",
+    "what docs i have",
+)
+
+_DOC_LIST_REGEX = re.compile(
+    r"\b(?:list|show|get|display|count)\s+(?:out\s+)?(?:all\s+)?(?:my\s+)?(?:uploaded\s+)?(?:documents?|files?|docs?)\b|"
+    r"\bwhat\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)\s+have\b|"
+    r"\bwhich\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)\s+have\b|"
+    r"\bwhat\s+(?:documents?|files?|docs?)\s+(?:are\s+)?(?:available|uploaded)\b",
+    re.IGNORECASE,
+)
+
+# Document metadata cues
+_DOC_METADATA_KEYWORDS = (
+    "when was",
+    "when this file",
+    "when document",
+    "upload date",
+    "date of upload",
+    "when uploaded",
+    "file size",
+    "size of document",
+    "who uploaded",
+    "version of",
+    "when was file",
+    "when was document",
 )
 
 # Current / external information cues
 _WEB_KEYWORDS = (
-    "today",
-    "current",
-    "latest",
-    "recent",
-    "weather",
+    "weather today",
     "exchange rate",
     "exchange rates",
     "stock price",
     "stock prices",
     "current price",
     "current prices",
-    "news",
-    "headline",
-    "headlines",
+    "latest news",
+    "news today",
     "what time is it",
-    "current time",
-    "current date",
     "today's date",
-    "good friday",
     "public holiday",
     "public holidays",
-    "when is ",
 )
 
 
+def _is_generic_chat(lower: str) -> bool:
+    if _GREETING_PATTERNS.match(lower):
+        return True
+    return any(lower == phrase or lower.startswith(phrase + " ") for phrase in _CHAT_PHRASES)
+
+
 def _is_document_list(lower: str) -> bool:
-    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy", "say"]):
+    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy"]):
         return False
+    if _DOC_LIST_REGEX.search(lower):
+        return True
     return any(kw in lower for kw in _DOC_LIST_KEYWORDS)
 
 
-def classify(question: str) -> Route:
-    """Return the route for ``question`` using lightweight deterministic rules and normalization."""
-    text = (question or "").strip()
-    if not text:
-        return Route.DIRECT
+def _is_document_metadata(lower: str) -> bool:
+    return any(kw in lower for kw in _DOC_METADATA_KEYWORDS)
 
-    from app.rag.query_normalizer import normalize_query
-    _, norm, _ = normalize_query(text)
-    lower = norm.lower() if norm else text.lower()
 
-    if _is_document_list(lower):
-        route = Route.DOCUMENT_LIST
-    elif _is_calculator(text, lower):
-        route = Route.CALCULATOR
-    elif _is_web(lower):
-        route = Route.WEB
-    else:
-        route = Route.RAG
-
-    logger.info('[AI ROUTER] question="%s" norm="%s" route=%s', text[:200], lower[:200], route.value)
-    return route
+def _is_document_qa(text: str, lower: str) -> bool:
+    if _DOC_EXTENSION.search(text) and not _is_document_metadata(lower):
+        return True
+    if any(phrase in lower for phrase in _DOC_QA_PHRASES):
+        return True
+    if ("document" in lower or "file" in lower or "policy" in lower or "doc" in lower) and any(kw in lower for kw in ["say", "state", "mention", "contain", "in", "according", "what", "how", "tell", "explain"]):
+        return True
+    return False
 
 
 def _is_calculator(text: str, lower: str) -> bool:
@@ -158,39 +213,46 @@ def _is_calculator(text: str, lower: str) -> bool:
         return True
     if re.search(r"\b\d+(?:\.\d+)?\s*percent\s+of\s+-?\d+", lower):
         return True
-    # Binary arithmetic expression somewhere in the question (e.g. "10 + 5")
-    if re.search(
-        r"\b\d+(?:\.\d+)?\s*[\+\-\*\/]\s*-?\d+(?:\.\d+)?\b",
-        text,
-    ):
+    if re.search(r"\b\d+(?:\.\d+)?\s*[\+\-\*\/]\s*-?\d+(?:\.\d+)?\b", text):
         return True
-    if _CALC_EXPRESSION.match(text) and re.search(r"[\d]", text) and re.search(
-        r"[\+\-\*\/\%]", text
-    ):
+    if _CALC_EXPRESSION.match(text) and re.search(r"[\d]", text) and re.search(r"[\+\-\*\/\%]", text):
         return True
     if _CALC_KEYWORDS.search(text):
         return True
     return False
 
 
-def _is_rag(text: str, lower: str) -> bool:
-    if _DOC_EXTENSION.search(text):
-        return True
-    if any(phrase in lower for phrase in _DOC_PHRASES):
-        return True
-    if "document say" in lower or "documents say" in lower:
-        return True
-    return False
-
-
 def _is_web(lower: str) -> bool:
-    # If the user explicitly asks about their documents, uploaded files, or specific document names, it is RAG not WEB
-    if _is_rag(lower, lower):
-        return False
     if any(kw in lower for kw in _WEB_KEYWORDS):
         return True
-    if re.search(r"\b(price|prices)\b", lower) and re.search(
-        r"\b(current|today|latest|now)\b", lower
-    ):
-        return True
     return False
+
+
+def classify(question: str) -> Route:
+    """Return the route for ``question`` using lightweight deterministic rules and normalization."""
+    text = (question or "").strip()
+    if not text:
+        return Route.GENERIC_CHAT
+
+    from app.rag.query_normalizer import normalize_query
+    _, norm, _ = normalize_query(text)
+    lower = norm.lower() if norm else text.lower()
+
+    if _is_generic_chat(lower):
+        route = Route.GENERIC_CHAT
+    elif _is_document_list(lower):
+        route = Route.DOCUMENT_LIST
+    elif _is_document_metadata(lower):
+        route = Route.DOCUMENT_METADATA
+    elif _is_document_qa(text, lower):
+        route = Route.DOCUMENT_QA
+    elif _is_calculator(text, lower):
+        route = Route.CALCULATOR
+    elif _is_web(lower):
+        route = Route.WEB
+    else:
+        route = Route.GENERAL_KNOWLEDGE
+
+    logger.info('[AI ROUTER] question="%s" norm="%s" route=%s', text[:200], lower[:200], route.value)
+    return route
+

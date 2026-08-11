@@ -35,7 +35,7 @@ export function SettingsPage() {
     llmTimeout: '300.0',
     topK: '20',
     finalContext: '4',
-    similarityThreshold: '0.0',
+    similarityThreshold: '0.35',
     chunkSize: '1000',
     chunkOverlap: '200',
     embeddingModel: 'nomic-embed-text',

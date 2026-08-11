@@ -95,9 +95,8 @@ def rank_hybrid_rrf(
     for chunk_id in sorted_chunk_ids:
         hit = hit_map[chunk_id]
         sim = cosine_distance_to_similarity(hit.distance)
-        if sim < similarity_threshold and len(semantic_hits) > 0:
+        if sim < similarity_threshold:
             continue
-        rrf_score = scores[chunk_id]
         ranked.append(
             RankedResult(
                 chunk_id=hit.chunk_id,
@@ -105,7 +104,7 @@ def rank_hybrid_rrf(
                 document_id=hit.document_id,
                 document_version_id=hit.document_version_id,
                 document_title=hit.document_title,
-                similarity_score=round(rrf_score, 4),
+                similarity_score=round(sim, 4),
                 rank=rank,
                 section_title=hit.section_title,
                 page_number=hit.page_number,

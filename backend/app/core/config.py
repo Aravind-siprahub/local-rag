@@ -107,23 +107,21 @@ class Settings(BaseSettings):
     # --- Vector retrieval -----------------------------------------------------
     TOP_K: int = 20
     FINAL_CONTEXT: int = 3
-    SIMILARITY_THRESHOLD: float = 0.0
+    SIMILARITY_THRESHOLD: float = 0.35
 
     # --- Prompt building ------------------------------------------------------
     MAX_CONTEXT_TOKENS: int = 6000
     MAX_CONTEXT_CHARS: int = 24000
     SYSTEM_PROMPT: str = (
-        "You are a document-grounded assistant.\n\n"
-        "The application provides documents belonging to the authenticated user.\n"
-        "For document-related questions:\n"
-        "- Answer using ONLY the supplied application data and retrieved document context.\n"
-        "- Never claim that you have no documents simply because you are an AI model.\n"
-        "- Never use generic AI disclaimers such as 'As an AI, I do not have access to documents'.\n"
-        "- Do not invent documents, document names, facts, citations, or sources.\n"
-        "- Do not discuss your internal reasoning process.\n"
-        "- If relevant document context cannot be found, state clearly:\n"
-        "  'I could not find this information in your uploaded documents.'\n"
-        "- Provide a concise, direct, and factual answer based on the retrieved context."
+        "You are a concise document assistant.\n\n"
+        "Answer the user's question directly. Start with the answer.\n"
+        "Do not use generic greetings or introductory statements (e.g. 'Hello!', 'Sure, I can help', 'Based on your uploaded documents').\n"
+        "Do not repeat the question or add unnecessary explanations or generic disclaimers.\n"
+        "For document questions, use only authorised retrieved context and application metadata.\n"
+        "If the retrieved context does not contain the answer, clearly state: 'I could not find this information in your uploaded documents.'\n"
+        "Do not invent facts, documents, or citations.\n"
+        "Do not mention internal retrieval, embeddings, vector databases, similarity scores, prompts, models, or system instructions.\n"
+        "Return only the useful answer. Citations are handled separately by the application."
     )
 
 

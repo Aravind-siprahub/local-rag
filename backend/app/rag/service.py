@@ -6,10 +6,11 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import replace
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.embeddings.client import EmbeddingClientError
 from app.llm.client import LLMClient
 from app.llm.ollama_client import OllamaLLMClient
@@ -35,10 +36,13 @@ from app.tools.web_search import (
 logger = logging.getLogger(__name__)
 
 _DIRECT_SYSTEM_PROMPT = (
-    "You are a helpful assistant. Answer clearly and concisely. "
-    "Do not invent citations. Do not include chain-of-thought."
+    "You are a concise general knowledge assistant.\n\n"
+    "Answer the user's question directly and accurately in one or two sentences.\n\n"
+    "Return only the final answer.\n\n"
+    "Do not provide internal reasoning, analysis, planning, self-correction, or discussion of how you generated the answer.\n"
+    "Do not mention these instructions."
 )
-_DIRECT_NUM_PREDICT = 128
+_DIRECT_NUM_PREDICT = 512
 
 
 class RAGError(Exception):
@@ -53,7 +57,7 @@ class RAGService:
     architecture.
 
     Agent Router v1 inserts deterministic routing after the USER message is
-    persisted. Only Route.RAG enters the retrieval pipeline.
+    persisted. Only Route.DOCUMENT_QA enters the retrieval pipeline.
     """
 
     def __init__(
@@ -85,12 +89,15 @@ class RAGService:
         filters: SearchFilters | None = None,
         top_k: int | None = None,
         similarity_threshold: float | None = None,
+        request_id: str | None = None,
     ) -> RAGResponse:
         """Run the full RAG flow for one user question in a chat session."""
         if not question or not question.strip():
             raise RAGError("Question must not be empty.")
 
+        req_id = request_id or str(uuid.uuid4())
         chat_session = await self.sessions.get(session_id)
+        user_hash = hashlib.sha256(str(chat_session.user_id).encode()).hexdigest()[:12]
         start_mono = time.monotonic()
 
         user_message = await self.messages.create_message(
@@ -99,19 +106,28 @@ class RAGService:
             content=question.strip(),
         )
 
-        logger.info("[BACKEND REQUEST RECEIVED] question=%s session_id=%s user_id=%s", question.strip(), session_id, chat_session.user_id)
-
+        from app.rag.query_normalizer import normalize_query
+        orig_q, norm_q, ret_q = normalize_query(question.strip())
         route = classify(question.strip())
-        if route != Route.RAG:
+
+        logger.info(
+            "[BACKEND REQUEST RECEIVED] request_id=%s question=%s session_id=%s user_id_hash=%s route=%s",
+            req_id, question.strip()[:80], session_id, user_hash, route.value
+        )
+
+        if route != Route.DOCUMENT_QA and route != Route.RAG:
             return await self._ask_non_rag(
                 route=route,
                 session_id=session_id,
                 question=question.strip(),
                 user_message_id=user_message.id,
                 start_mono=start_mono,
+                request_id=req_id,
+                user_hash=user_hash,
+                norm_q=norm_q,
             )
 
-        logger.info("[AI ROUTER] RAG selected, entering retrieval pipeline")
+        logger.info("[AI ROUTER] DOCUMENT_QA selected, entering retrieval pipeline")
 
         retrieval_filters = filters or SearchFilters()
         if retrieval_filters.user_id is None:
@@ -152,9 +168,7 @@ class RAGService:
             except Exception as d_exc:
                 logger.warning("[DOCUMENT TITLE MATCH FAILED] %s", d_exc)
 
-        from app.rag.query_normalizer import normalize_query
-        orig_q, norm_q, ret_q = normalize_query(question.strip())
-
+        retrieval_start = time.monotonic()
         logger.info("[RAG STAGE 2: RETRIEVAL START] orig=%s norm=%s ret=%s filters=%s top_k=%s", orig_q[:60], norm_q[:60], ret_q[:60], retrieval_filters, top_k)
         retrieved_chunks = await self._retrieve_safely(
             ret_q or question.strip(),
@@ -173,14 +187,31 @@ class RAGService:
                 similarity_threshold=similarity_threshold,
             )
 
-        retrieval_ms = int((time.monotonic() - start_mono) * 1000)
+        retrieval_ms = int((time.monotonic() - retrieval_start) * 1000)
         logger.info("[RETRIEVAL FINISHED] retrieval_ms=%d hits=%d", retrieval_ms, len(retrieved_chunks))
 
-        # If no chunks exist after primary and fallback retrieval
+        # Relevance Gate: If zero chunks pass similarity threshold
         if not retrieved_chunks:
             total_ms = int((time.monotonic() - start_mono) * 1000)
-            fallback_answer = "I could not find this information in the uploaded documents."
-            logger.warning("[NO DOCUMENTS FOUND] 0 chunks retrieved. Returning fallback response.")
+            fallback_answer = "I could not find this information in your uploaded documents."
+            logger.warning("[NO RELEVANT DOCUMENTS FOUND] 0 chunks passed relevance gate. Returning fallback response.")
+
+            self._log_structured_trace(
+                request_id=req_id,
+                user_hash=user_hash,
+                session_id=session_id,
+                orig_q=orig_q,
+                norm_q=norm_q,
+                route=route,
+                retrieval_ms=retrieval_ms,
+                context_ms=0,
+                llm_ms=0,
+                total_ms=total_ms,
+                chunks_retrieved=0,
+                top_similarity=0.0,
+                status="SUCCESS",
+                error_type=None,
+            )
 
             assistant_message = await self.messages.create_message(
                 session_id=session_id,
@@ -214,32 +245,11 @@ class RAGService:
             retrieved_chunks,
             chat_history=formatted_history,
         )
-        prompt_ms = int((time.monotonic() - prompt_start) * 1000)
+        context_ms = int((time.monotonic() - prompt_start) * 1000)
 
         top_sim = retrieved_chunks[0].similarity_score if retrieved_chunks else 0.0
-        logger.info(
-            "[RAG DEBUG TRACE]\n"
-            "  question=%s\n"
-            "  user_id=%s\n"
-            "  session_id=%s\n"
-            "  intent=%s\n"
-            "  chunks_retrieved=%d\n"
-            "  top_similarity=%.4f\n"
-            "  context_length=%d\n"
-            "  llm_model=%s",
-            question.strip(),
-            chat_session.user_id,
-            session_id,
-            route.value,
-            len(retrieved_chunks),
-            top_sim,
-            len(prompt.user_prompt),
-            getattr(self.llm_client, "model", "ollama"),
-        )
 
-        from app.llm.sanitize import detect_reasoning_leakage
         from app.core.config import get_settings
-
         settings = get_settings()
         num_predict = settings.OLLAMA_NUM_PREDICT
 
@@ -257,47 +267,43 @@ class RAGService:
 
         # Sanitize answer from thinking tags or monologue prefixes
         from app.llm.sanitize import sanitize_response
-        validation_start = time.monotonic()
         clean_ans = sanitize_response(llm_response.answer)
         clean_ans_lower = clean_ans.lower().strip()
-        if not clean_ans or clean_ans_lower == "i could not find this information in the uploaded documents." or clean_ans_lower == "information not found in document excerpts." or clean_ans_lower == "information not found":
-            answer_text = "I could not find this information in the uploaded documents."
+        if not clean_ans or clean_ans_lower == "i could not find this information in the uploaded documents." or clean_ans_lower == "i could not find this information in your uploaded documents." or clean_ans_lower == "information not found in document excerpts." or clean_ans_lower == "information not found":
+            answer_text = "I could not find this information in your uploaded documents."
         else:
             answer_text = clean_ans
-        validation_ms = int((time.monotonic() - validation_start) * 1000)
 
-        sources = _sources_from_prompt(prompt)
-
-        # Append human-readable source footnotes when answer is factual
-        if answer_text and answer_text != "I could not find this information in the uploaded documents." and sources:
-            sources_lines = ["\n\n---\n**Sources:**"]
-            for idx, src in enumerate(sources, 1):
-                doc_name = src.document_title or "Document"
-                sec = src.section_title or "General"
-                pg = src.page_number or 1
-                sources_lines.append(f"{idx}. *{doc_name}* — Page {pg}, {sec}")
-            answer_text += "\n".join(sources_lines)
+        # Citation Validation: Strict threshold enforcement & deduplication
+        effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
+        if answer_text == "I could not find this information in your uploaded documents.":
+            sources = []
+        else:
+            raw_sources = _sources_from_prompt(prompt)
+            sources = _validate_and_deduplicate_sources(
+                raw_sources,
+                effective_threshold,
+                max_sources=getattr(settings, "FINAL_CONTEXT", 3),
+            )
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
-        user_hash = hashlib.sha256(str(chat_session.user_id).encode()).hexdigest()[:12]
-        trace_payload = {
-            "trace_id": str(uuid.uuid4()),
-            "session_id": str(session_id),
-            "user_id_hash": user_hash,
-            "intent": route.value,
-            "question": question.strip()[:80],
-            "chunks_retrieved": len(retrieved_chunks),
-            "top_similarity": round(top_sim, 4),
-            "total_ms": total_ms,
-            "retrieval_ms": retrieval_ms,
-            "prompt_ms": prompt_ms,
-            "llm_ms": llm_ms,
-            "prompt_tokens": llm_response.token_usage.prompt_tokens if llm_response.token_usage else 0,
-            "completion_tokens": llm_response.token_usage.completion_tokens if llm_response.token_usage else 0,
-            "model": llm_response.model_name,
-            "status": "SUCCESS",
-        }
-        logger.info("[ENTERPRISE RAG TRACE] %s", json.dumps(trace_payload))
+
+        self._log_structured_trace(
+            request_id=req_id,
+            user_hash=user_hash,
+            session_id=session_id,
+            orig_q=orig_q,
+            norm_q=norm_q,
+            route=route,
+            retrieval_ms=retrieval_ms,
+            context_ms=context_ms,
+            llm_ms=llm_ms,
+            total_ms=total_ms,
+            chunks_retrieved=len(retrieved_chunks),
+            top_similarity=top_sim,
+            status="SUCCESS",
+            error_type=None,
+        )
 
         token_usage = llm_response.token_usage
         assistant_message = await self.messages.create_message(
@@ -360,6 +366,25 @@ class RAGService:
             content=question.strip(),
         )
 
+        from app.rag.intent_router import Route, classify
+        from app.rag.query_normalizer import normalize_query
+        orig_q, norm_q, ret_q = normalize_query(question.strip())
+        route = classify(question.strip())
+
+        if route != Route.DOCUMENT_QA and route != Route.RAG:
+            res = await self._ask_non_rag(
+                route=route,
+                session_id=session_id,
+                question=question.strip(),
+                user_message_id=user_message.id,
+                start_mono=start_mono,
+                norm_q=norm_q,
+            )
+            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'content': res.answer})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(res.assistant_message_id), 'processing_time_ms': res.processing_time_ms})}\n\n"
+            return
+
         retrieval_filters = filters or SearchFilters()
         if retrieval_filters.user_id is None:
             retrieval_filters = SearchFilters(
@@ -388,6 +413,22 @@ class RAGService:
             if fallback_chunks:
                 retrieved_chunks = fallback_chunks
 
+        settings = get_settings()
+        effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
+        valid_stream_chunks = [
+            c for c in retrieved_chunks
+            if c.similarity_score >= effective_threshold
+        ]
+        seen_keys: set[tuple[uuid.UUID, Any, Any]] = set()
+        deduped_chunks = []
+        for c in valid_stream_chunks:
+            key = (c.document_id, getattr(c, "page_number", None), getattr(c, "section_title", None))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped_chunks.append(c)
+                if len(deduped_chunks) >= getattr(settings, "FINAL_CONTEXT", 3):
+                    break
+
         sources_data = [
             {
                 "chunk_id": str(c.chunk_id),
@@ -398,7 +439,7 @@ class RAGService:
                 "rank": c.rank,
                 "document_title": getattr(c, "document_title", "Unknown"),
             }
-            for c in retrieved_chunks
+            for c in deduped_chunks
         ]
 
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
@@ -479,36 +520,167 @@ class RAGService:
         question: str,
         user_message_id: uuid.UUID,
         start_mono: float,
+        request_id: str | None = None,
+        user_hash: str | None = None,
+        norm_q: str | None = None,
     ) -> RAGResponse:
-        """Handle DOCUMENT_LIST / WEB / CALCULATOR / DIRECT without vector retrieval."""
+        """Handle DOCUMENT_LIST / DOCUMENT_METADATA / WEB / CALCULATOR / DIRECT without vector retrieval."""
+        res: RAGResponse
         if route == Route.DOCUMENT_LIST:
             chat_session = await self.sessions.get(session_id)
-            return await self._ask_document_list(
+            res = await self._ask_document_list(
                 session_id=session_id,
                 user_id=chat_session.user_id,
                 user_message_id=user_message_id,
                 start_mono=start_mono,
             )
-        if route == Route.WEB:
-            return await self._ask_web(
+        elif route == Route.DOCUMENT_METADATA:
+            chat_session = await self.sessions.get(session_id)
+            res = await self._ask_document_metadata(
+                session_id=session_id,
+                user_id=chat_session.user_id,
+                user_message_id=user_message_id,
+                start_mono=start_mono,
+                question=question,
+            )
+        elif route == Route.WEB:
+            res = await self._ask_web(
                 session_id=session_id,
                 question=question,
                 user_message_id=user_message_id,
                 start_mono=start_mono,
             )
-        if route == Route.CALCULATOR:
-            return await self._ask_calculator(
+        elif route == Route.CALCULATOR:
+            res = await self._ask_calculator(
                 session_id=session_id,
                 question=question,
                 user_message_id=user_message_id,
                 start_mono=start_mono,
             )
-        return await self._ask_direct(
+        else:
+            res = await self._ask_direct(
+                session_id=session_id,
+                question=question,
+                user_message_id=user_message_id,
+                start_mono=start_mono,
+                norm_q=norm_q,
+            )
+
+        total_ms = int((time.monotonic() - start_mono) * 1000)
+        self._log_structured_trace(
+            request_id=request_id or str(uuid.uuid4()),
+            user_hash=user_hash or "anonymous",
             session_id=session_id,
-            question=question,
-            user_message_id=user_message_id,
-            start_mono=start_mono,
+            orig_q=question,
+            norm_q=norm_q or question,
+            route=route,
+            retrieval_ms=0,
+            context_ms=0,
+            llm_ms=res.processing_time_ms,
+            total_ms=total_ms,
+            chunks_retrieved=0,
+            top_similarity=0.0,
+            status="SUCCESS",
+            error_type=None,
         )
+        return res
+
+    async def _ask_document_metadata(
+        self,
+        *,
+        session_id: uuid.UUID,
+        user_id: uuid.UUID,
+        user_message_id: uuid.UUID,
+        start_mono: float,
+        question: str,
+    ) -> RAGResponse:
+        from app.models.document import Document
+        from sqlalchemy import select
+
+        stmt = (
+            select(Document)
+            .where(Document.deleted_at.is_(None))
+            .where(Document.user_id == user_id)
+            .order_by(Document.created_at.desc())
+        )
+        docs = list((await self.session.execute(stmt)).scalars().all())
+
+        q_lower = question.lower()
+        matched_docs = [
+            d for d in docs
+            if d.title.lower() in q_lower
+            or (d.title.rsplit(".", 1)[0].lower() in q_lower if "." in d.title else False)
+        ]
+        target_docs = matched_docs if matched_docs else docs
+
+        if target_docs:
+            lines = []
+            for d in target_docs:
+                created_str = d.created_at.strftime("%Y-%m-%d %H:%M UTC") if d.created_at else "Unknown date"
+                size_kb = round(d.file_size_bytes / 1024.0, 1) if d.file_size_bytes else 0.0
+                status_str = d.status.value if hasattr(d.status, "value") else str(d.status)
+                lines.append(f"• **{d.title}** — Uploaded on {created_str} | Size: {size_kb} KB | Status: {status_str}")
+            answer_text = "Here is the document metadata:\n\n" + "\n".join(lines)
+        else:
+            answer_text = "You currently have no uploaded documents to inspect metadata for."
+
+        total_ms = int((time.monotonic() - start_mono) * 1000)
+        logger.info("[DOCUMENT METADATA DIRECT] Found %d documents for user_id=%s", len(target_docs), user_id)
+        assistant_msg = await self.messages.create_message(
+            session_id=session_id,
+            role=MessageRole.ASSISTANT,
+            content=answer_text,
+            model_used="database-metadata",
+            latency_ms=total_ms,
+            generation_time_ms=total_ms,
+        )
+        return RAGResponse(
+            answer=answer_text,
+            sources=[],
+            token_usage=None,
+            model="database-metadata",
+            processing_time_ms=total_ms,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_msg.id,
+        )
+
+    def _log_structured_trace(
+        self,
+        *,
+        request_id: str,
+        user_hash: str,
+        session_id: uuid.UUID,
+        orig_q: str,
+        norm_q: str,
+        route: Route,
+        retrieval_ms: int,
+        context_ms: int,
+        llm_ms: int,
+        total_ms: int,
+        chunks_retrieved: int,
+        top_similarity: float,
+        status: str,
+        error_type: str | None = None,
+    ) -> None:
+        trace_payload = {
+            "request_id": request_id,
+            "user_id_hash": user_hash,
+            "conversation_id": str(session_id),
+            "original_query": orig_q[:100],
+            "normalized_query": norm_q[:100],
+            "intent": route.value,
+            "route": route.value,
+            "embedding_ms": 0,
+            "retrieval_ms": retrieval_ms,
+            "context_ms": context_ms,
+            "llm_ms": llm_ms,
+            "total_ms": total_ms,
+            "retrieved_chunks": chunks_retrieved,
+            "top_similarity": round(top_similarity, 4),
+            "response_status": status,
+            "error_type": error_type,
+        }
+        logger.info("[ENTERPRISE RAG TRACE] %s", json.dumps(trace_payload))
 
     async def _ask_document_list(
         self,
@@ -525,11 +697,16 @@ class RAGService:
         stmt = (
             select(Document.title)
             .where(Document.deleted_at.is_(None))
-            .where(Document.user_id == user_id)
             .where(Document.status.in_([DocumentStatus.READY, DocumentStatus.PROCESSING, DocumentStatus.UPLOADED, "ready", "processing", "uploaded"]))
-            .order_by(Document.title)
         )
-        titles = list((await self.session.execute(stmt)).scalars().all())
+        if user_id is not None:
+            stmt_user = stmt.where(Document.user_id == user_id).order_by(Document.title)
+            titles = list((await self.session.execute(stmt_user)).scalars().all())
+        else:
+            titles = []
+
+        if not titles:
+            titles = list((await self.session.execute(stmt.order_by(Document.title))).scalars().all())
 
         if titles:
             formatted_list = (
@@ -653,20 +830,36 @@ class RAGService:
         question: str,
         user_message_id: uuid.UUID,
         start_mono: float,
+        norm_q: str | None = None,
     ) -> RAGResponse:
         llm_start = time.monotonic()
+        query_text = norm_q.strip() if (norm_q and norm_q.strip()) else question.strip()
+
         llm_response = await self.llm_client.generate(
             _DIRECT_SYSTEM_PROMPT,
-            question,
+            query_text,
             num_predict=_DIRECT_NUM_PREDICT,
         )
         llm_ms = int((time.monotonic() - llm_start) * 1000)
-        answer_text = (
-            sanitize_response(llm_response.answer).strip()
-            if llm_response.answer
-            else "I could not generate an answer right now."
-        )
-        if not answer_text:
+        answer_text = sanitize_response(llm_response.answer).strip()
+
+        # Validate answer — retry once if response is empty, truncated, or contains CoT monologue
+        if not _is_valid_direct_answer(answer_text):
+            logger.warning("[DIRECT ANSWER REJECTED] invalid/truncated answer=%r. Retrying once.", answer_text)
+            retry_start = time.monotonic()
+            retry_prompt = (
+                "You are a concise general knowledge assistant. Answer the user's question directly and accurately in 1 or 2 sentences.\n\n"
+                "Return ONLY the final answer. Do not include internal thoughts, commentary, or greetings."
+            )
+            llm_response = await self.llm_client.generate(
+                retry_prompt,
+                query_text,
+                num_predict=_DIRECT_NUM_PREDICT,
+            )
+            llm_ms += int((time.monotonic() - retry_start) * 1000)
+            answer_text = sanitize_response(llm_response.answer).strip()
+
+        if not answer_text or not _is_valid_direct_answer(answer_text):
             answer_text = "I could not generate an answer right now."
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
@@ -734,6 +927,54 @@ def _sources_from_prompt(prompt: Prompt) -> list[SourceCitation]:
         )
         for chunk in prompt.retrieved_chunks
     ]
+
+
+def _validate_and_deduplicate_sources(
+    sources: list[SourceCitation],
+    similarity_threshold: float,
+    max_sources: int = 3,
+) -> list[SourceCitation]:
+    """Filter, deduplicate, and limit valid source citations."""
+    valid = [s for s in sources if s.similarity_score >= similarity_threshold]
+    if not valid:
+        return []
+
+    seen: set[tuple[uuid.UUID, int | None, str | None]] = set()
+    deduped: list[SourceCitation] = []
+    for s in valid:
+        key = (s.document_id, s.page_number, s.section_title)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(s)
+            if len(deduped) >= max_sources:
+                break
+    return deduped
+
+
+def _is_valid_direct_answer(ans: str) -> bool:
+    """Check if the generated direct answer is non-empty, complete, and free of reasoning leakage."""
+    if not ans or not isinstance(ans, str) or not ans.strip():
+        return False
+    clean = ans.strip()
+    if len(clean) < 2:
+        return False
+    low = clean.lower()
+    reasoning_keywords = (
+        "okay, the core question",
+        "that phrasing is",
+        "the user seems",
+        "i recall that",
+        "checks reliable knowledge",
+        "wait, the instruction",
+        "so the cleanest response",
+        "let me unpack",
+        "mixing up concepts",
+    )
+    if any(kw in low for kw in reasoning_keywords):
+        return False
+    if low in ("earth is one", "or just", "the user", "wait", "okay"):
+        return False
+    return True
 
 
 def _map_token_usage(token_usage: TokenUsage | None) -> RAGTokenUsage | None:

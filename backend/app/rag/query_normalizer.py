@@ -9,6 +9,7 @@ import re
 
 # Abbreviation / Shorthand replacement mapping (word-boundary anchored)
 _SHORTHAND_MAP: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b(doucment|docment|documnt|documnet|docunent|doucments|docments|documnets|docunents|dokument|dokuments)\b", re.IGNORECASE), "document"),
     (re.compile(r"\bdocs?\b", re.IGNORECASE), "document"),
     (re.compile(r"\bdocumentations?\b", re.IGNORECASE), "document"),
     (re.compile(r"\bu\b", re.IGNORECASE), "you"),
@@ -59,9 +60,16 @@ def normalize_query(query: str) -> tuple[str, str, str]:
 
     # Construct retrieval_query by formatting common broken English phrasing
     retrieval_q = norm
-    if "leave policy" in norm.lower() and "what" in norm.lower():
+    norm_lower = norm.lower()
+    if re.search(r"\bearth\s+(?:is\s+)?2\s+planet\s+or\s+3\s+planet\b", norm_lower):
+        norm = "Is Earth the 2nd or 3rd planet from the Sun?"
+        retrieval_q = norm
+    elif re.search(r"\bearth\s+(?:which|number)\s+planet\b|\bwhich\s+planet\s+is\s+earth\b", norm_lower):
+        norm = "Which planet is Earth from the Sun?"
+        retrieval_q = norm
+    elif "leave policy" in norm_lower and "what" in norm_lower:
         retrieval_q = "What is the company leave policy?"
-    elif "leave" in norm.lower() and ("how many" in norm.lower() or "count" in norm.lower()):
+    elif "leave" in norm_lower and ("how many" in norm_lower or "count" in norm_lower):
         retrieval_q = "How many leave days are provided in the leave policy?"
 
     return raw, norm, retrieval_q

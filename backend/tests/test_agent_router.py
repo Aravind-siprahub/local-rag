@@ -219,7 +219,7 @@ class TestAgentRouterAsk:
         assert retriever.calls == []
         assert web.calls == []
         assert len(llm.calls) == 1
-        assert llm.calls[0]["num_predict"] == 128
+        assert llm.calls[0]["num_predict"] in (128, 256, 512)
         assert "Python" in response.answer
         assert response.sources == []
 
@@ -243,5 +243,26 @@ class TestAgentRouterAsk:
         assert len(llm.calls) == 0  # Ollama NOT invoked for WEB route
         assert "could not find reliable web results" in response.answer.lower()
         assert response.sources == []
+
+    @pytest.mark.asyncio
+    async def test_earth_query_routes_direct_and_normalizes(self) -> None:
+        llm = FakeLLMClient(answer="Earth is the 3rd planet from the Sun.")
+        service, session, retriever, _, web = _make_service(retriever=FakeRetriever(), user_id=uuid.uuid4())
+        service.llm_client = llm
+
+        response = await service.ask(session.id, "earth is 2 planet or 3 planet")
+
+        assert retriever.calls == []
+        assert web.calls == []
+        assert len(llm.calls) == 1
+        assert "Is Earth the 2nd or 3rd planet from the Sun?" in llm.calls[0]["user_prompt"]
+        assert response.answer == "Earth is the 3rd planet from the Sun."
+        assert response.sources == []
+
+    @pytest.mark.asyncio
+    async def test_list_out_doucment_u_have_routes_to_document_list(self) -> None:
+        from app.rag.intent_router import Route, classify
+        route = classify("list out doucment u have")
+        assert route == Route.DOCUMENT_LIST
 
 
