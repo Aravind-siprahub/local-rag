@@ -25,7 +25,7 @@ from app.retrieval.search import SearchFilters
 from app.services.chat_message_service import ChatMessageService
 from app.services.chat_session_service import ChatSessionService
 from app.services.citation_service import CitationService
-from app.llm.sanitize import sanitize_response
+from app.llm.sanitize import detect_reasoning_leakage, sanitize_response
 from app.tools.calculator import CalculatorError, calculate
 from app.tools.web_search import (
     WebSearchError,
@@ -108,7 +108,16 @@ class RAGService:
 
         from app.rag.query_normalizer import normalize_query
         orig_q, norm_q, ret_q = normalize_query(question.strip())
-        route = classify(question.strip())
+        document_titles, context_texts = await self._load_routing_hints(
+            user_id=chat_session.user_id,
+            session_id=session_id,
+            exclude_message_id=user_message.id,
+        )
+        route = classify(
+            question.strip(),
+            document_titles=document_titles,
+            context_texts=context_texts,
+        )
 
         logger.info(
             "[BACKEND REQUEST RECEIVED] request_id=%s question=%s session_id=%s user_id_hash=%s route=%s",
@@ -148,12 +157,19 @@ class RAGService:
                     .where(Document.user_id == chat_session.user_id)
                 )
                 all_docs = list((await self.session.execute(stmt_docs)).scalars().all())
+                if not all_docs:
+                    stmt_all_docs = (
+                        select(Document)
+                        .where(Document.deleted_at.is_(None))
+                    )
+                    all_docs = list((await self.session.execute(stmt_all_docs)).scalars().all())
+
                 q_lower = question.strip().lower()
                 for d in all_docs:
                     d_title_lower = d.title.lower()
                     d_stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
                     stem_clean = d_stem.replace("_", " ").replace("-", " ").strip()
-                    if len(stem_clean) >= 4 and (
+                    if len(stem_clean) >= 3 and (
                         d_title_lower in q_lower
                         or d_stem in q_lower
                         or stem_clean in q_lower
@@ -183,6 +199,20 @@ class RAGService:
             retrieved_chunks = await self._retrieve_safely(
                 norm_q,
                 filters=retrieval_filters,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+            )
+
+        # Fallback retrieval pass 3 without user_id filter if initial passes yielded 0 chunks
+        if not retrieved_chunks and retrieval_filters.user_id is not None:
+            logger.info("[RAG FALLBACK RETRIEVAL] Retrying without user_id filter")
+            fallback_filters = SearchFilters(
+                document_id=retrieval_filters.document_id,
+                document_version_id=retrieval_filters.document_version_id,
+            )
+            retrieved_chunks = await self._retrieve_safely(
+                ret_q or question.strip(),
+                filters=fallback_filters,
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
             )
@@ -231,25 +261,17 @@ class RAGService:
                 assistant_message_id=assistant_message.id,
             )
 
-        # Fetch recent chat history before adding current message
-        raw_history = await self.messages.list_by_session(session_id, limit=6)
-        formatted_history = [
-            {"role": m.role.value if hasattr(m.role, "value") else str(m.role), "content": m.content}
-            for m in raw_history
-            if m.id != user_message.id
-        ]
-
+        # Fetch recent chat history only to enrich the retrieval question when needed.
+        # PromptBuilder currently accepts question + chunks (no chat_history kwarg).
         prompt_start = time.monotonic()
         prompt = self.prompt_builder.build(
             question.strip(),
             retrieved_chunks,
-            chat_history=formatted_history,
         )
         context_ms = int((time.monotonic() - prompt_start) * 1000)
 
         top_sim = retrieved_chunks[0].similarity_score if retrieved_chunks else 0.0
 
-        from app.core.config import get_settings
         settings = get_settings()
         num_predict = settings.OLLAMA_NUM_PREDICT
 
@@ -259,14 +281,27 @@ class RAGService:
         llm_ms = int((time.monotonic() - llm_start) * 1000)
         logger.info("[LLM GENERATION FINISHED] llm_ms=%d", llm_ms)
 
-        # Truncation check (done_reason == "length") -> Retry once with num_predict *= 2
+        # Truncation check: only retry when the first pass produced no usable answer.
         if getattr(llm_response, "finish_reason", None) == "length":
-            logger.warning("[LLM TRUNCATION DETECTED] finish_reason=length. Retrying once with num_predict *= 2 (%d)", num_predict * 2)
-            num_predict *= 2
-            llm_response = await self.llm_client.generate(prompt.system_prompt, prompt.user_prompt, num_predict=num_predict)
+            first_pass = sanitize_response(llm_response.answer)
+            if not first_pass or len(first_pass.strip()) < 20:
+                logger.warning(
+                    "[LLM TRUNCATION DETECTED] finish_reason=length and answer unusable. "
+                    "Retrying once with num_predict *= 2 (%d)",
+                    num_predict * 2,
+                )
+                num_predict *= 2
+                llm_response = await self.llm_client.generate(
+                    prompt.system_prompt,
+                    prompt.user_prompt,
+                    num_predict=num_predict,
+                )
+            else:
+                logger.info(
+                    "[LLM TRUNCATION DETECTED] finish_reason=length but usable answer present; skipping retry"
+                )
 
         # Sanitize answer from thinking tags or monologue prefixes
-        from app.llm.sanitize import sanitize_response
         clean_ans = sanitize_response(llm_response.answer)
         clean_ans_lower = clean_ans.lower().strip()
         if not clean_ans or clean_ans_lower == "i could not find this information in the uploaded documents." or clean_ans_lower == "i could not find this information in your uploaded documents." or clean_ans_lower == "information not found in document excerpts." or clean_ans_lower == "information not found":
@@ -369,7 +404,16 @@ class RAGService:
         from app.rag.intent_router import Route, classify
         from app.rag.query_normalizer import normalize_query
         orig_q, norm_q, ret_q = normalize_query(question.strip())
-        route = classify(question.strip())
+        document_titles, context_texts = await self._load_routing_hints(
+            user_id=chat_session.user_id,
+            session_id=session_id,
+            exclude_message_id=user_message.id,
+        )
+        route = classify(
+            question.strip(),
+            document_titles=document_titles,
+            context_texts=context_texts,
+        )
 
         if route != Route.DOCUMENT_QA and route != Route.RAG:
             res = await self._ask_non_rag(
@@ -458,17 +502,9 @@ class RAGService:
             yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
             return
 
-        raw_history = await self.messages.list_by_session(session_id, limit=6)
-        formatted_history = [
-            {"role": m.role.value if hasattr(m.role, "value") else str(m.role), "content": m.content}
-            for m in raw_history
-            if m.id != user_message.id
-        ]
-
         prompt = self.prompt_builder.build(
             question.strip(),
             retrieved_chunks,
-            chat_history=formatted_history,
         )
 
         full_answer_chunks: list[str] = []
@@ -885,6 +921,48 @@ class RAGService:
             assistant_message_id=assistant_message.id,
         )
 
+    async def _load_routing_hints(
+        self,
+        *,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        exclude_message_id: uuid.UUID | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Load user document titles + recent chat turns for corpus-aware routing."""
+        from app.models.document import Document
+        from sqlalchemy import select
+
+        titles: list[str] = []
+        try:
+            stmt = (
+                select(Document.title)
+                .where(Document.deleted_at.is_(None))
+                .where(Document.user_id == user_id)
+            )
+            titles = [str(t) for t in (await self.session.execute(stmt)).scalars().all() if t]
+        except Exception as exc:
+            logger.warning("[ROUTING HINTS] failed to load document titles: %s", exc)
+
+        context_texts: list[str] = []
+        try:
+            # Recent messages only — enough to resolve anaphora, not full history.
+            recent = await self.messages.list_by_session(session_id, limit=8, offset=0)
+            for msg in recent:
+                if exclude_message_id is not None and msg.id == exclude_message_id:
+                    continue
+                content = (msg.content or "").strip()
+                if content:
+                    context_texts.append(content)
+            # Keep chronological order if repository returns newest-first.
+            if len(context_texts) >= 2 and recent and recent[0].created_at and recent[-1].created_at:
+                if recent[0].created_at > recent[-1].created_at:
+                    context_texts = list(reversed(context_texts))
+            context_texts = context_texts[-6:]
+        except Exception as exc:
+            logger.warning("[ROUTING HINTS] failed to load conversation context: %s", exc)
+
+        return titles, context_texts
+
     async def _retrieve_safely(
         self,
         question: str,
@@ -939,15 +1017,15 @@ def _validate_and_deduplicate_sources(
     if not valid:
         return []
 
-    seen: set[tuple[uuid.UUID, int | None, str | None]] = set()
+    seen: set[uuid.UUID] = set()
     deduped: list[SourceCitation] = []
     for s in valid:
-        key = (s.document_id, s.page_number, s.section_title)
-        if key not in seen:
-            seen.add(key)
-            deduped.append(s)
-            if len(deduped) >= max_sources:
-                break
+        if s.chunk_id in seen:
+            continue
+        seen.add(s.chunk_id)
+        deduped.append(s)
+        if len(deduped) >= max_sources:
+            break
     return deduped
 
 
@@ -957,6 +1035,8 @@ def _is_valid_direct_answer(ans: str) -> bool:
         return False
     clean = ans.strip()
     if len(clean) < 2:
+        return False
+    if detect_reasoning_leakage(clean):
         return False
     low = clean.lower()
     reasoning_keywords = (
@@ -969,6 +1049,11 @@ def _is_valid_direct_answer(ans: str) -> bool:
         "so the cleanest response",
         "let me unpack",
         "mixing up concepts",
+        "first, i'll",
+        "first, i will",
+        "hmm, the user",
+        "checks requirements",
+        "i need to respond",
     )
     if any(kw in low for kw in reasoning_keywords):
         return False

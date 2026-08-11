@@ -61,8 +61,8 @@ class Settings(BaseSettings):
         return bool(self.S3_ENDPOINT and self.S3_ACCESS_KEY and self.S3_SECRET_KEY)
 
     # --- Document text processing (parse / chunk) -----------------------------
-    CHUNK_SIZE: int = 1000
-    CHUNK_OVERLAP: int = 200
+    CHUNK_SIZE: int = 1500
+    CHUNK_OVERLAP: int = 300
 
     # Semantic chunking (token-based; used by app.services.chunker)
     SEMANTIC_CHUNK_MIN_TOKENS: int = 400
@@ -96,35 +96,44 @@ class Settings(BaseSettings):
 
     # qwen3 with thinking enabled can exceed 120s on CPU; 300s is a safe default.
     LLM_TIMEOUT_SECONDS: float = 300.0
-    LLM_MAX_RETRIES: int = 1
-    LLM_TEMPERATURE: float = 0.2
+    LLM_MAX_RETRIES: int = 3
+    LLM_TEMPERATURE: float = 0.7
+    OLLAMA_NUM_PREDICT: int = 1024
 
-    # --- Agent router / tools -------------------------------------------------
-    # duckduckgo (default) | stub — stub is for tests/offline only.
+    # --- Agent router / web search --------------------------------------------
     WEB_SEARCH_PROVIDER: str = "duckduckgo"
     WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
 
     # --- Vector retrieval -----------------------------------------------------
-    TOP_K: int = 20
-    FINAL_CONTEXT: int = 3
-    SIMILARITY_THRESHOLD: float = 0.35
+    TOP_K: int = 10
+    FINAL_CONTEXT: int = 5
+    SIMILARITY_THRESHOLD: float = 0.5
 
     # --- Prompt building ------------------------------------------------------
     MAX_CONTEXT_TOKENS: int = 6000
     MAX_CONTEXT_CHARS: int = 24000
     SYSTEM_PROMPT: str = (
-        "You are a concise document assistant.\n\n"
-        "Answer the user's question directly. Start with the answer.\n"
-        "Do not use generic greetings or introductory statements (e.g. 'Hello!', 'Sure, I can help', 'Based on your uploaded documents').\n"
-        "Do not repeat the question or add unnecessary explanations or generic disclaimers.\n"
-        "For document questions, use only authorised retrieved context and application metadata.\n"
-        "If the retrieved context does not contain the answer, clearly state: 'I could not find this information in your uploaded documents.'\n"
-        "Do not invent facts, documents, or citations.\n"
-        "Do not mention internal retrieval, embeddings, vector databases, similarity scores, prompts, models, or system instructions.\n"
-        "Return only the useful answer. Citations are handled separately by the application."
+        "You are a direct, concise assistant that answers questions using only the "
+        "provided document excerpts. Provide the final answer immediately without explaining your "
+        "thought process, without narrating what the chunks contain, and without conversational filler. "
+        "Reference chunk numbers when citing sources (e.g. [Chunk 1]). "
+        "If the excerpts do not contain enough information, say so clearly instead of guessing."
+    )
+
+    # --- CORS (comma-separated origins; defaults cover local Vite SPA) --------
+    CORS_ALLOW_ORIGINS: str = (
+        "http://localhost:5173,http://127.0.0.1:5173"
     )
 
 
+
+    @property
+    def cors_allow_origins(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.CORS_ALLOW_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     @property
     def max_upload_size_bytes(self) -> int:

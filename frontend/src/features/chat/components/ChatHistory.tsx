@@ -9,10 +9,10 @@ interface ChatHistoryProps {
   messages: Message[]
   isLoading?: boolean
   latestCitations?: Citation[]
+  loadingLabel?: string
 }
 
-export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistoryProps) {
-  console.log("[D] messages passed to MessageList", messages);
+export function ChatHistory({ messages, isLoading, latestCitations, loadingLabel }: ChatHistoryProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -23,7 +23,11 @@ export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistor
   }, [messages, isLoading])
 
   if (messages.length === 0 && !isLoading) {
-    return <ChatEmptyState />
+    return (
+      <div className="flex-1 min-h-0">
+        <ChatEmptyState />
+      </div>
+    )
   }
 
   console.log("[E] messages rendered", messages.map(m => m.content));
@@ -44,7 +48,7 @@ export function ChatHistory({ messages, isLoading, latestCitations }: ChatHistor
         ))}
         {isLoading && (
           <div className="max-w-3xl mx-auto w-full group">
-            <TypingIndicator />
+            <TypingIndicator label={loadingLabel} />
           </div>
         )}
       </div>

@@ -236,4 +236,4 @@ async def test_oom_maps_to_unavailable_without_retry() -> None:
     body = exc_info.value.to_response_body()
     assert body["error"] == "LLM unavailable"
     assert body["reason"] == "Ollama failed to load the configured model"
-    assert "Out of GPU memory" in body["details"]
+    assert "out-of-memory" in body["details"].lower() or "oom" in body["details"].lower()

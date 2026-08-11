@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:chat-lifecycle": "tsx --test src/features/chat/store/chatRequest.store.test.ts",
+    "test:chat-long": "tsx src/features/chat/store/simulate-long-request.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

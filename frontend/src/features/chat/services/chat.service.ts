@@ -49,20 +49,20 @@ export const chatService = {
     return data
   },
 
-  async sendMessage(payload: ChatRequest): Promise<ChatResponse> {
-    console.log("[11] chatService.sendMessage()");
-    console.log(payload);
-    const startMono = performance.now()
-    console.log('[FRONTEND REQUEST STARTED]', { question: payload.question, session_id: payload.session_id, timestamp: new Date().toISOString() })
-    try {
-      const { data } = await apiClient.post<ChatResponse>('/chat', payload)
-      const elapsedMs = Math.round(performance.now() - startMono)
-      console.log('[FRONTEND REQUEST ENDED]', { elapsed_ms: elapsedMs, assistant_message_id: data.assistant_message_id })
-      return data
-    } catch (error) {
-      const elapsedMs = Math.round(performance.now() - startMono)
-      console.error('[FRONTEND REQUEST FAILED]', { elapsed_ms: elapsedMs, error })
-      throw error
-    }
+  /**
+   * Chat generation can exceed the default API client timeout.
+   * Use a dedicated timeout + optional AbortSignal so the UI can recover
+   * without locking the rest of the app.
+   */
+  async sendMessage(
+    payload: ChatRequest,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
+  ): Promise<ChatResponse> {
+    const { data } = await apiClient.post<ChatResponse>('/chat', payload, {
+      signal: options?.signal,
+      // LLM + RAG answers often take longer than other API calls.
+      timeout: options?.timeoutMs ?? 600_000,
+    })
+    return data
   },
 }

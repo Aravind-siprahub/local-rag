@@ -5,13 +5,22 @@ import { cn } from '@/lib/utils'
 
 interface ChatInputProps {
   onSend: (message: string) => void
+  /** Disables the entire input (rare). Prefer sendDisabled while generating. */
   disabled?: boolean
+  /** Prevents duplicate Send for the active conversation only. Input stays visible/usable. */
+  sendDisabled?: boolean
   placeholder?: string
 }
 
-export function ChatInput({ onSend, disabled, placeholder = 'Ask a question about your documents...' }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  disabled,
+  sendDisabled,
+  placeholder = 'Ask a question about your documents...',
+}: ChatInputProps) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const cannotSend = Boolean(disabled || sendDisabled)
 
   const handleInput = () => {
     if (textareaRef.current) {
@@ -28,7 +37,7 @@ export function ChatInput({ onSend, disabled, placeholder = 'Ask a question abou
     console.log("[1] ChatInput.handleSend()");
     console.log("Question:", input);
     const trimmed = input.trim()
-    if (!trimmed || disabled) return
+    if (!trimmed || cannotSend) return
     onSend(trimmed)
     setInput('')
     if (textareaRef.current) {
@@ -53,19 +62,24 @@ export function ChatInput({ onSend, disabled, placeholder = 'Ask a question abou
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={placeholder}
+        placeholder={
+          sendDisabled && !disabled
+            ? 'Generating response… you can still browse other chats'
+            : placeholder
+        }
         disabled={disabled}
         className={cn(
-          "flex-1 min-h-10 max-h-50 w-full resize-none bg-transparent px-3 py-2 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
-          "scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent"
+          'flex-1 min-h-10 max-h-50 w-full resize-none bg-transparent px-3 py-2 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50',
+          'scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent',
         )}
         rows={1}
       />
       <Button
         size="icon"
         onClick={handleSend}
-        disabled={!input.trim() || disabled}
+        disabled={!input.trim() || cannotSend}
         className="ml-2 mb-1 h-8 w-8 shrink-0 rounded-lg"
+        title={sendDisabled ? 'Wait for the current response in this chat' : 'Send message'}
       >
         <SendHorizontal className="h-4 w-4" />
         <span className="sr-only">Send message</span>

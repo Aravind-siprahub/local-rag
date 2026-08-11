@@ -59,7 +59,6 @@ def calculate(question: str) -> CalculatorResult:
 
     match = _EXPRESSION_CHUNK.search(text.replace("×", "*").replace("÷", "/"))
     if not match:
-        # Fall back to stripping non-math wording
         cleaned = re.sub(
             r"(?i)^\s*(what\s+is|calculate|compute|evaluate)\s+",
             "",

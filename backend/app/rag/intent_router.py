@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,67 @@ _DOC_QA_PHRASES = (
     "my document say",
     "what does my document",
     "what does the document",
+    "deployment guide",
+    "in deployment guide",
 )
+
+_DOC_QA_CUE_WORDS = (
+    "document", "documents", "file", "files", "policy", "policies",
+    "doc", "docs", "guide", "guides", "manual", "manuals",
+    "handbook", "handbooks", "sheet", "sheets", "prd", "specification",
+)
+
+_DOC_QA_ACTION_WORDS = (
+    "say", "state", "mention", "contain", "in", "according",
+    "what", "how", "tell", "explain", "summarize", "summarise", "describe",
+    "show", "find", "search", "details", "about", "abt", "ssl", "nginx", "setup",
+)
+
+# Project / corpus-aware document questions (tech stack, architecture, etc.)
+_PROJECT_INFO_CUES = (
+    "tech stack",
+    "technology stack",
+    "techstack",
+    "frontend",
+    "backend",
+    "front end",
+    "back end",
+    "architecture",
+    "were using",
+    "we're using",
+    "we using",
+    "what using",
+    "what we use",
+    "technologies",
+    "technology",
+    "database",
+    "framework",
+    "built with",
+    "built on",
+    "stack",
+)
+
+_GENERIC_DEFINITION = re.compile(
+    r"^\s*what\s+is\s+[\w\-]+[?]?\s*$",
+    re.IGNORECASE,
+)
+
+_TITLE_NOISE = {
+    "prd",
+    "guide",
+    "summary",
+    "staging",
+    "deployment",
+    "document",
+    "doc",
+    "docs",
+    "final",
+    "draft",
+    "v1",
+    "v2",
+    "v3",
+    "v4",
+}
 
 # Document list cues
 _DOC_LIST_KEYWORDS = (
@@ -187,7 +248,7 @@ def _is_generic_chat(lower: str) -> bool:
 
 
 def _is_document_list(lower: str) -> bool:
-    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy"]):
+    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy", "tell"]):
         return False
     if _DOC_LIST_REGEX.search(lower):
         return True
@@ -203,8 +264,77 @@ def _is_document_qa(text: str, lower: str) -> bool:
         return True
     if any(phrase in lower for phrase in _DOC_QA_PHRASES):
         return True
-    if ("document" in lower or "file" in lower or "policy" in lower or "doc" in lower) and any(kw in lower for kw in ["say", "state", "mention", "contain", "in", "according", "what", "how", "tell", "explain"]):
+    if any(noun in lower for noun in _DOC_QA_CUE_WORDS) and any(action in lower for action in _DOC_QA_ACTION_WORDS):
         return True
+    return False
+
+
+def _has_project_info_cues(lower: str) -> bool:
+    return any(cue in lower for cue in _PROJECT_INFO_CUES)
+
+
+def _aliases_from_title(title: str) -> set[str]:
+    """Build searchable aliases from an uploaded document title."""
+    stem = title.rsplit(".", 1)[0] if "." in title else title
+    clean = re.sub(r"[_\-]+", " ", stem).strip().lower()
+    clean = re.sub(r"\s+", " ", clean)
+    aliases: set[str] = set()
+    if clean:
+        aliases.add(clean)
+
+    tokens = [t for t in clean.split() if t]
+    core_tokens = [t for t in tokens if t not in _TITLE_NOISE and not t.isdigit()]
+    core = " ".join(core_tokens).strip()
+    if len(core) >= 3:
+        aliases.add(core)
+
+    # Significant single tokens (e.g. "airis") — avoid short/noisy tokens.
+    for token in core_tokens:
+        if len(token) >= 5:
+            aliases.add(token)
+
+    return {a for a in aliases if a}
+
+
+def _matches_document_entity(haystack: str, document_titles: Sequence[str]) -> bool:
+    lower = haystack.lower()
+    for title in document_titles:
+        for alias in _aliases_from_title(title):
+            if len(alias) >= 5 and alias in lower:
+                return True
+            # Multi-word aliases (e.g. "talk to my data")
+            if " " in alias and alias in lower:
+                return True
+    return False
+
+
+def _is_corpus_document_qa(
+    lower: str,
+    *,
+    document_titles: Sequence[str] | None,
+    context_texts: Sequence[str] | None,
+) -> bool:
+    """Route project questions to DOCUMENT_QA when they reference the user's corpus.
+
+    Does NOT force every entity mention into RAG:
+    - "what is AIRIS?" stays GENERAL_KNOWLEDGE
+    - "AIRIS what tech stack were using" becomes DOCUMENT_QA when AIRIS docs exist
+    """
+    if not document_titles:
+        return False
+    if not _has_project_info_cues(lower):
+        return False
+    if _GENERIC_DEFINITION.match(lower):
+        return False
+
+    if _matches_document_entity(lower, document_titles):
+        return True
+
+    # Anaphoric follow-up: entity lives in recent conversation, cues in current turn.
+    if context_texts:
+        context_blob = " ".join(t.lower() for t in context_texts if t)
+        if context_blob and _matches_document_entity(context_blob, document_titles):
+            return True
     return False
 
 
@@ -228,8 +358,17 @@ def _is_web(lower: str) -> bool:
     return False
 
 
-def classify(question: str) -> Route:
-    """Return the route for ``question`` using lightweight deterministic rules and normalization."""
+def classify(
+    question: str,
+    *,
+    document_titles: Sequence[str] | None = None,
+    context_texts: Sequence[str] | None = None,
+) -> Route:
+    """Return the route for ``question`` using lightweight deterministic rules.
+
+    Optional ``document_titles`` / ``context_texts`` enable corpus-aware routing
+    for project questions without hard-coding brand names into GENERAL→RAG.
+    """
     text = (question or "").strip()
     if not text:
         return Route.GENERIC_CHAT
@@ -246,6 +385,12 @@ def classify(question: str) -> Route:
         route = Route.DOCUMENT_METADATA
     elif _is_document_qa(text, lower):
         route = Route.DOCUMENT_QA
+    elif _is_corpus_document_qa(
+        lower,
+        document_titles=document_titles,
+        context_texts=context_texts,
+    ):
+        route = Route.DOCUMENT_QA
     elif _is_calculator(text, lower):
         route = Route.CALCULATOR
     elif _is_web(lower):
@@ -255,4 +400,3 @@ def classify(question: str) -> Route:
 
     logger.info('[AI ROUTER] question="%s" norm="%s" route=%s', text[:200], lower[:200], route.value)
     return route
-
