@@ -16,7 +16,7 @@ class ChatSessionService(BaseService[ChatSession, uuid.UUID, ChatSessionReposito
         super().__init__(session, ChatSessionRepository(session))
         self._users = UserRepository(session)
 
-    async def create_session(self, *, user_id: uuid.UUID, title: str = "New chat") -> ChatSession:
+    async def create_session(self, *, user_id: uuid.UUID | None = None, title: str = "New chat") -> ChatSession:
         """Business rule: a chat session must belong to an existing user."""
         from app.services.owner_resolution import resolve_owner_user_id
 

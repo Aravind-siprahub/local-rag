@@ -27,6 +27,7 @@ from app.rag.response import RAGResponse
 from app.rag.service import RAGError, RAGService
 from app.retrieval.ranking import RankedResult, rank_hybrid_rrf, rerank_cross_encoder
 from app.retrieval.search import SearchFilters, SearchHit
+from app.tools.web_search import StubWebSearchProvider
 
 
 @pytest.mark.asyncio
@@ -43,6 +44,7 @@ async def test_no_documents_found_early_exit():
     user_msg = MagicMock(id=uuid.uuid4())
     assistant_msg = MagicMock(id=uuid.uuid4())
     messages.create_message.side_effect = [user_msg, assistant_msg]
+    messages.list_by_session.return_value = []
 
     sessions = AsyncMock()
     chat_session = MagicMock(user_id=uuid.uuid4())
@@ -54,12 +56,16 @@ async def test_no_documents_found_early_exit():
         llm_client=llm_client,
         message_service=messages,
         session_service=sessions,
+        web_search=StubWebSearchProvider(),
     )
 
     session_id = uuid.uuid4()
-    response = await rag.ask(session_id, "What is the policy for remote work?")
+    response = await rag.ask(
+        session_id,
+        "According to my documents, what is the policy for remote work?",
+    )
 
-    assert response.answer == "Information not found in document excerpts."
+    assert response.answer == "I could not find this information in the uploaded documents."
     assert len(response.sources) == 0
     # Crucial enterprise requirement: LLM client must NOT be called when no documents match!
     llm_client.generate.assert_not_called()
@@ -126,9 +132,9 @@ async def test_duplicate_chunks_handling():
 
 @pytest.mark.asyncio
 async def test_reasoning_leakage_detection():
-    """Verify reasoning leakage detection triggers for monologue / CoT phrases."""
+    """Verify reasoning leakage detection triggers for unhandled thinking tags."""
     leakage_1 = "<think>Let me analyze the prompt carefully...</think>The answer is 42."
-    leakage_2 = "Let me think\nThe user is asking about leave policy.\nI should answer directly."
+    leakage_2 = "<thinking>The user is asking about leave policy.</thinking>20 days."
     clean_text = "The annual leave allowance is 25 days per calendar year."
 
     assert detect_reasoning_leakage(leakage_1) is True
@@ -138,7 +144,7 @@ async def test_reasoning_leakage_detection():
 
 @pytest.mark.asyncio
 async def test_reasoning_leakage_discard_and_retry():
-    """Verify that if LLM emits reasoning monologue, response is discarded and retried ONCE."""
+    """Verify that if LLM emits reasoning tags, response is discarded and retried ONCE."""
     session = AsyncMock()
     retriever = AsyncMock()
     chunk_id = uuid.uuid4()
@@ -159,9 +165,9 @@ async def test_reasoning_leakage_discard_and_retry():
     llm_client = AsyncMock()
     llm_client.model = "qwen3:4b"
 
-    # First call returns reasoning monologue; second call returns clean factual answer
+    # First call returns tagged reasoning; second call returns clean factual answer
     bad_response = LLMResponse(
-        answer="Let me think. The user asks about annual leave. I will check the excerpt...",
+        answer="<think>The user asks about annual leave.</think>I will check the excerpt...",
         model_name="qwen3:4b",
     )
     good_response = LLMResponse(
@@ -174,6 +180,7 @@ async def test_reasoning_leakage_discard_and_retry():
     user_msg = MagicMock(id=uuid.uuid4())
     assistant_msg = MagicMock(id=uuid.uuid4())
     messages.create_message.side_effect = [user_msg, assistant_msg]
+    messages.list_by_session.return_value = []
 
     sessions = AsyncMock()
     sessions.get.return_value = MagicMock(user_id=uuid.uuid4())
@@ -184,14 +191,18 @@ async def test_reasoning_leakage_discard_and_retry():
         llm_client=llm_client,
         message_service=messages,
         session_service=sessions,
+        web_search=StubWebSearchProvider(),
     )
 
-    response = await rag.ask(uuid.uuid4(), "What is the annual leave allowance?")
+    response = await rag.ask(
+        uuid.uuid4(),
+        "According to my documents, what is the annual leave allowance?",
+    )
 
     # LLM should have been called twice (1st discarded, 2nd accepted)
     assert llm_client.generate.call_count == 2
     assert "20 days per year" in response.answer
-    assert "Let me think" not in response.answer
+    assert "<think>" not in response.answer
 
 
 @pytest.mark.asyncio
@@ -228,6 +239,7 @@ async def test_truncation_done_reason_length_retry():
 
     messages = AsyncMock()
     messages.create_message.side_effect = [MagicMock(id=uuid.uuid4()), MagicMock(id=uuid.uuid4())]
+    messages.list_by_session.return_value = []
 
     sessions = AsyncMock()
     sessions.get.return_value = MagicMock(user_id=uuid.uuid4())
@@ -238,9 +250,13 @@ async def test_truncation_done_reason_length_retry():
         llm_client=llm_client,
         message_service=messages,
         session_service=sessions,
+        web_search=StubWebSearchProvider(),
     )
 
-    response = await rag.ask(uuid.uuid4(), "What is the WFH policy?")
+    response = await rag.ask(
+        uuid.uuid4(),
+        "According to my documents, what is the WFH policy?",
+    )
 
     assert llm_client.generate.call_count == 2
     # Verify num_predict was doubled on 2nd call
@@ -280,7 +296,7 @@ async def test_citations_formatting():
     assert "Document:\nSafety Manual.pdf" in formatted
     assert "Section:\nGeneral Safety" in formatted
     assert "Page:\n12" in formatted
-    assert f"Chunk ID:\n{chunk_id}" in formatted
+    assert f"Passage ID:\n{chunk_id}" in formatted
 
 
 @pytest.mark.asyncio
@@ -306,3 +322,108 @@ async def test_multilingual_document_qa():
 
     assert "Le congé annuel est de 25 jours par an." in prompt.user_prompt
     assert "Politique RH.pdf" in prompt.user_prompt
+
+
+@pytest.mark.asyncio
+async def test_regression_query_problem_statement_in_talk_to_my_data():
+    """Test A: 'what is problem statement in my talk to my data' routes to RAG, retrieves PRD document, and produces grounded answer."""
+    from app.rag.intent_router import classify, Route
+    query = "what is problem statement in my talk to my data"
+    assert classify(query) == Route.RAG
+
+    session = AsyncMock()
+    retriever = AsyncMock()
+    doc_id = uuid.uuid4()
+    retriever.retrieve.return_value = [
+        RankedResult(
+            chunk_id=uuid.uuid4(),
+            chunk_text="Problem Statement: Business users struggle to query tabular data efficiently.",
+            document_id=doc_id,
+            document_version_id=uuid.uuid4(),
+            document_title="PRD_Talk_to_My_Data.docx",
+            similarity_score=0.91,
+            rank=1,
+        )
+    ]
+
+    llm_client = AsyncMock()
+    llm_client.model = "qwen3:4b"
+    llm_client.generate.return_value = LLMResponse(
+        answer="The problem statement is that business users struggle to query tabular data efficiently.",
+        model_name="qwen3:4b",
+    )
+
+    messages = AsyncMock()
+    messages.create_message.side_effect = [MagicMock(id=uuid.uuid4()), MagicMock(id=uuid.uuid4())]
+    messages.list_by_session.return_value = []
+    sessions = AsyncMock()
+    sessions.get.return_value = MagicMock(user_id=uuid.uuid4())
+
+    rag = RAGService(
+        session,
+        retriever=retriever,
+        llm_client=llm_client,
+        message_service=messages,
+        session_service=sessions,
+        web_search=StubWebSearchProvider(),
+    )
+
+    response = await rag.ask(uuid.uuid4(), query)
+
+    assert "Problem Statement" in response.answer or "tabular data" in response.answer
+    assert retriever.retrieve.called is True
+
+
+@pytest.mark.asyncio
+async def test_regression_query_inside_document_name():
+    """Test B: 'What is inside PRD_Talk_to_My_Data.docx?' routes to RAG and retrieves chunks."""
+    from app.rag.intent_router import classify, Route
+    query = "What is inside PRD_Talk_to_My_Data.docx?"
+    assert classify(query) == Route.RAG
+
+
+@pytest.mark.asyncio
+async def test_regression_query_good_friday_routes_web():
+    """Test C: 'When is Good Friday in 2026?' routes to WEB."""
+    from app.rag.intent_router import classify, Route
+    assert classify("When is Good Friday in 2026?") == Route.WEB
+
+
+@pytest.mark.asyncio
+async def test_regression_query_percent_routes_calculator():
+    """Test D: 'What is 18% of 45000?' routes to CALCULATOR."""
+    from app.rag.intent_router import classify, Route
+    assert classify("What is 18% of 45000?") == Route.CALCULATOR
+
+
+@pytest.mark.asyncio
+async def test_regression_unknown_document_question_fallback_message():
+    """Test E: Unknown document question returns exact required fallback message when 0 chunks retrieved."""
+    session = AsyncMock()
+    retriever = AsyncMock()
+    retriever.retrieve.return_value = []
+
+    llm_client = AsyncMock()
+    llm_client.model = "qwen3:4b"
+
+    messages = AsyncMock()
+    messages.create_message.side_effect = [MagicMock(id=uuid.uuid4()), MagicMock(id=uuid.uuid4())]
+    messages.list_by_session.return_value = []
+
+    sessions = AsyncMock()
+    sessions.get.return_value = MagicMock(user_id=uuid.uuid4())
+
+    rag = RAGService(
+        session,
+        retriever=retriever,
+        llm_client=llm_client,
+        message_service=messages,
+        session_service=sessions,
+        web_search=StubWebSearchProvider(),
+    )
+
+    response = await rag.ask(uuid.uuid4(), "what is the policy for quantum teleportation?")
+
+    assert response.answer == "I could not find this information in the uploaded documents."
+    llm_client.generate.assert_not_called()
+

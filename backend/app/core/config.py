@@ -90,31 +90,40 @@ class Settings(BaseSettings):
     OLLAMA_NUM_GPU: int | None = None
     OLLAMA_NUM_THREAD: int | None = None
     OLLAMA_NUM_CTX: int = 8192
-    # Default completion tokens budget — configurable, stopping answer truncation.
-    OLLAMA_NUM_PREDICT: int = 1024
+    OLLAMA_NUM_PREDICT: int = 512
+    OLLAMA_KEEP_ALIVE: str = "30m"
+    OLLAMA_MAX_CONCURRENCY: int = 4
 
     # qwen3 with thinking enabled can exceed 120s on CPU; 300s is a safe default.
     LLM_TIMEOUT_SECONDS: float = 300.0
     LLM_MAX_RETRIES: int = 1
     LLM_TEMPERATURE: float = 0.2
 
+    # --- Agent router / tools -------------------------------------------------
+    # duckduckgo (default) | stub — stub is for tests/offline only.
+    WEB_SEARCH_PROVIDER: str = "duckduckgo"
+    WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
+
     # --- Vector retrieval -----------------------------------------------------
     TOP_K: int = 20
-    FINAL_CONTEXT: int = 4
+    FINAL_CONTEXT: int = 3
     SIMILARITY_THRESHOLD: float = 0.0
 
     # --- Prompt building ------------------------------------------------------
     MAX_CONTEXT_TOKENS: int = 6000
     MAX_CONTEXT_CHARS: int = 24000
     SYSTEM_PROMPT: str = (
-        "You are an enterprise document intelligence assistant.\n\n"
-        "Instructions:\n"
-        "1. Synthesize factual evidence from the supplied passages into a clear, cohesive, and natural response in your own words. Avoid copying verbatim sentences from the passages.\n"
-        "2. Begin immediately with a direct, high-level summary answer to the user's question before providing supporting details or structured breakdowns.\n"
-        "3. Merge related information across multiple passages into unified explanations rather than presenting isolated passage fragments.\n"
-        "4. Ground all statements strictly in the supplied passages. Never invent facts, assume unstated details, or use outside knowledge.\n"
-        "5. Do not include internal thinking steps, chain-of-thought, or meta-commentary (such as 'Let me analyze', 'Looking at Passage 1').\n"
-        "6. If the requested information is genuinely not present in the excerpts, reply: Information not found in document excerpts."
+        "You are a document-grounded assistant.\n\n"
+        "The application provides documents belonging to the authenticated user.\n"
+        "For document-related questions:\n"
+        "- Answer using ONLY the supplied application data and retrieved document context.\n"
+        "- Never claim that you have no documents simply because you are an AI model.\n"
+        "- Never use generic AI disclaimers such as 'As an AI, I do not have access to documents'.\n"
+        "- Do not invent documents, document names, facts, citations, or sources.\n"
+        "- Do not discuss your internal reasoning process.\n"
+        "- If relevant document context cannot be found, state clearly:\n"
+        "  'I could not find this information in your uploaded documents.'\n"
+        "- Provide a concise, direct, and factual answer based on the retrieved context."
     )
 
 

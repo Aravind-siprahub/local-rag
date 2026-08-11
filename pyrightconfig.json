@@ -1,0 +1,22 @@
+{
+  "include": [
+    "backend",
+    "scratch"
+  ],
+  "extraPaths": [
+    "backend",
+    "./backend"
+  ],
+  "executionEnvironments": [
+    {
+      "root": "backend"
+    },
+    {
+      "root": "scratch",
+      "extraPaths": [
+        "../backend",
+        "backend"
+      ]
+    }
+  ]
+}

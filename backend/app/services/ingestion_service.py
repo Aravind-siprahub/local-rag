@@ -97,6 +97,9 @@ class IngestionService:
         if not job:
             job = await self.jobs.create_job(document_version_id=version.id, job_type=ProcessingJobType.PARSE)
 
+        version_id = version.id
+        job_id = job.id if job else None
+
         current_stage = "[UPLOAD]"
         try:
             # ------------------------------------------------------------------
@@ -435,26 +438,29 @@ class IngestionService:
 
         except Exception as exc:
             logger.exception("%s FAILED for document_id=%s: %s", current_stage, document_id, exc)
-            await self._record_pipeline_failure(document_id, version.id, job.id, str(exc))
+            await self._record_pipeline_failure(document_id, version_id, job_id, str(exc))
             raise
 
     async def _record_pipeline_failure(
         self,
         document_id: uuid.UUID,
-        version_id: uuid.UUID,
-        job_id: uuid.UUID,
+        version_id: uuid.UUID | None,
+        job_id: uuid.UUID | None,
         error_message: str,
     ) -> None:
         """Mark Document, DocumentVersion, and ProcessingJob as FAILED."""
         try:
+            await self.session.rollback()
             await self.documents.update(document_id, status=DocumentStatus.FAILED)
-            await self.versions.update(
-                version_id,
-                status=DocumentVersionStatus.FAILED,
-                error_message=error_message[:1000],
-            )
-            job = await self.jobs.get(job_id)
-            if job and job.status in (ProcessingJobStatus.PENDING, ProcessingJobStatus.RUNNING):
-                await self.jobs.fail(job_id, error_message[:1000])
+            if version_id is not None:
+                await self.versions.update(
+                    version_id,
+                    status=DocumentVersionStatus.FAILED,
+                    error_message=error_message[:1000],
+                )
+            if job_id is not None:
+                job = await self.jobs.get(job_id)
+                if job and job.status in (ProcessingJobStatus.PENDING, ProcessingJobStatus.RUNNING):
+                    await self.jobs.fail(job_id, error_message[:1000])
         except Exception:
             logger.exception("Failed to record failure state for document_id=%s", document_id)

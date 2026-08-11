@@ -1,0 +1,247 @@
+"""Agent Router v1 integration tests for RAGService.ask routing."""
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+
+import pytest
+
+from app.llm.response import LLMResponse, TokenUsage
+from app.models.enums import MessageRole
+from app.prompting.builder import PromptBuilder
+from app.rag.service import RAGService
+from app.retrieval.ranking import RankedResult
+from app.tools.web_search import WebSearchHit, WebSearchResult
+
+
+@dataclass
+class _FakeChatSession:
+    id: uuid.UUID
+    user_id: uuid.UUID
+
+
+@dataclass
+class _FakeMessage:
+    id: uuid.UUID
+    session_id: uuid.UUID
+    role: MessageRole
+    content: str
+    model_used: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    latency_ms: int | None = None
+    generation_time_ms: int | None = None
+
+
+class FakeChatSessionService:
+    def __init__(self, session: _FakeChatSession) -> None:
+        self.session = session
+
+    async def get(self, session_id: uuid.UUID) -> _FakeChatSession:
+        return self.session
+
+
+class FakeChatMessageService:
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+        self._messages: list[_FakeMessage] = []
+
+    async def create_message(self, **kwargs) -> _FakeMessage:
+        self.created.append(kwargs)
+        msg = _FakeMessage(
+            id=uuid.uuid4(),
+            session_id=kwargs["session_id"],
+            role=kwargs["role"],
+            content=kwargs["content"],
+            model_used=kwargs.get("model_used"),
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            completion_tokens=kwargs.get("completion_tokens"),
+            latency_ms=kwargs.get("latency_ms"),
+            generation_time_ms=kwargs.get("generation_time_ms"),
+        )
+        self._messages.append(msg)
+        return msg
+
+    async def list_by_session(self, session_id: uuid.UUID, limit: int = 50) -> list[_FakeMessage]:
+        return [m for m in self._messages if m.session_id == session_id][-limit:]
+
+
+class FakeCitationService:
+    def __init__(self) -> None:
+        self.created: list[tuple[uuid.UUID, list]] = []
+
+    async def create_citations_for_message(self, message_id: uuid.UUID, citations: list) -> list:
+        self.created.append((message_id, citations))
+        return citations
+
+
+class FakeRetriever:
+    def __init__(self, results: list[RankedResult] | None = None) -> None:
+        self.results = results or []
+        self.calls: list[dict] = []
+
+    async def retrieve(self, question: str, **kwargs) -> list[RankedResult]:
+        self.calls.append({"question": question, **kwargs})
+        return self.results
+
+    async def close(self) -> None:
+        return None
+
+
+class FakeLLMClient:
+    def __init__(self, answer: str = "Python is a programming language.") -> None:
+        self.answer = answer
+        self.calls: list[dict] = []
+        self.model = "test-chat-model"
+
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+    ) -> LLMResponse:
+        self.calls.append(
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "num_predict": num_predict,
+            }
+        )
+        return LLMResponse(
+            answer=self.answer,
+            model_name="test-chat-model",
+            token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            finish_reason="stop",
+        )
+
+    async def close(self) -> None:
+        return None
+
+
+class FakeWebSearchProvider:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def search(self, query: str) -> WebSearchResult:
+        self.calls.append(query)
+        return WebSearchResult(
+            query=query,
+            provider="fake",
+            hits=[
+                WebSearchHit(
+                    title="Good Friday 2026",
+                    url="https://example.com/good-friday-2026",
+                    snippet="Good Friday in 2026 falls on Friday, 3 April 2026.",
+                )
+            ],
+        )
+
+
+def _ranked(text: str, rank: int = 1) -> RankedResult:
+    return RankedResult(
+        chunk_id=uuid.uuid4(),
+        chunk_text=text,
+        document_id=uuid.uuid4(),
+        document_version_id=uuid.uuid4(),
+        similarity_score=0.9,
+        rank=rank,
+        document_title="Deployment_Guide.docx",
+    )
+
+
+def _make_service(
+    *,
+    retrieval_results: list[RankedResult] | None = None,
+    web_search: FakeWebSearchProvider | None = None,
+    llm: FakeLLMClient | None = None,
+) -> tuple[RAGService, _FakeChatSession, FakeRetriever, FakeLLMClient, FakeWebSearchProvider]:
+    session = _FakeChatSession(id=uuid.uuid4(), user_id=uuid.uuid4())
+    retriever = FakeRetriever(retrieval_results or [_ranked("Nginx reverse proxy notes.")])
+    llm_client = llm or FakeLLMClient()
+    web = web_search or FakeWebSearchProvider()
+    service = RAGService(
+        session=None,
+        retriever=retriever,
+        prompt_builder=PromptBuilder(),
+        llm_client=llm_client,
+        message_service=FakeChatMessageService(),
+        citation_service=FakeCitationService(),
+        session_service=FakeChatSessionService(session),
+        web_search=web,
+    )
+    return service, session, retriever, llm_client, web
+
+
+class TestAgentRouterAsk:
+    @pytest.mark.asyncio
+    async def test_good_friday_routes_web_and_skips_retriever(self) -> None:
+        service, session, retriever, llm, web = _make_service()
+
+        response = await service.ask(session.id, "When is Good Friday in 2026?")
+
+        assert web.calls == ["When is Good Friday in 2026?"]
+        assert retriever.calls == []
+        assert "Good Friday" in response.answer or "April" in response.answer or "found" in response.answer.lower()
+        assert response.sources == []
+
+    @pytest.mark.asyncio
+    async def test_deployment_guide_routes_rag_and_calls_retriever(self) -> None:
+        service, session, retriever, llm, web = _make_service()
+
+        response = await service.ask(
+            session.id,
+            "What does Deployment_Guide.docx say about Nginx?",
+        )
+
+        assert len(retriever.calls) >= 1
+        assert web.calls == []
+        assert response.answer  # existing RAG path produces an answer
+        assert len(llm.calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_percent_routes_calculator_and_skips_retriever(self) -> None:
+        service, session, retriever, llm, web = _make_service()
+
+        response = await service.ask(session.id, "What is 18% of 45000?")
+
+        assert retriever.calls == []
+        assert web.calls == []
+        assert "8100" in response.answer
+        assert response.sources == []
+
+    @pytest.mark.asyncio
+    async def test_python_routes_direct_and_skips_retriever(self) -> None:
+        service, session, retriever, llm, web = _make_service()
+
+        response = await service.ask(session.id, "What is Python?")
+
+        assert retriever.calls == []
+        assert web.calls == []
+        assert len(llm.calls) == 1
+        assert llm.calls[0]["num_predict"] == 128
+        assert "Python" in response.answer
+        assert response.sources == []
+
+    @pytest.mark.asyncio
+    async def test_web_search_empty_hits_returns_no_results_message(self) -> None:
+        class EmptyWebSearchProvider:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            async def search(self, query: str) -> WebSearchResult:
+                self.calls.append(query)
+                return WebSearchResult(query=query, provider="fake_empty", hits=[])
+
+        empty_web = EmptyWebSearchProvider()
+        service, session, retriever, llm, _ = _make_service(web_search=empty_web)
+
+        response = await service.ask(session.id, "When is Good Friday in 2026?")
+
+        assert empty_web.calls == ["When is Good Friday in 2026?"]
+        assert retriever.calls == []
+        assert len(llm.calls) == 0  # Ollama NOT invoked for WEB route
+        assert "could not find reliable web results" in response.answer.lower()
+        assert response.sources == []
+
+
