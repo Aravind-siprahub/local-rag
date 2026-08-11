@@ -33,8 +33,12 @@ class EmbeddingClient(Protocol):
     async def close(self) -> None: ...
 
 
+_QUERY_EMBEDDING_CACHE: dict[tuple[str, str], list[float]] = {}
+_MAX_CACHE_SIZE = 1000
+
+
 class OllamaEmbeddingClient:
-    """Async Ollama `/api/embeddings` client with retry and timeout support."""
+    """Async Ollama `/api/embeddings` client with retry, timeout, and query caching support."""
 
     def __init__(
         self,
@@ -58,11 +62,17 @@ class OllamaEmbeddingClient:
         self._owns_client = client is None
 
     async def embed(self, text: str) -> list[float]:
-        """Generate one embedding vector for a single text input."""
+        """Generate one embedding vector for a single text input with LRU caching."""
         if not text or not text.strip():
             raise EmbeddingClientError("Cannot embed empty text.")
 
-        payload = {"model": self.model, "prompt": text, "keep_alive": "10m"}
+        norm_text = text.strip()
+        cache_key = (self.model.strip().lower(), norm_text)
+        if cache_key in _QUERY_EMBEDDING_CACHE:
+            logger.info("[EMBEDDING CACHE HIT] model=%s prompt=%r", self.model, norm_text[:50])
+            return list(_QUERY_EMBEDDING_CACHE[cache_key])
+
+        payload = {"model": self.model, "prompt": norm_text, "keep_alive": "10m"}
         response_data = await self._request_with_retry("/api/embeddings", payload)
         embedding = response_data.get("embedding")
         if not isinstance(embedding, list):
@@ -80,9 +90,14 @@ class OllamaEmbeddingClient:
             self.dimensions,
             len(float_vector),
             [round(v, 4) for v in float_vector[:5]],
-            text[:50],
+            norm_text[:50],
         )
 
+        if len(_QUERY_EMBEDDING_CACHE) >= _MAX_CACHE_SIZE:
+            oldest_key = next(iter(_QUERY_EMBEDDING_CACHE))
+            _QUERY_EMBEDDING_CACHE.pop(oldest_key, None)
+
+        _QUERY_EMBEDDING_CACHE[cache_key] = float_vector
         return float_vector
 
 

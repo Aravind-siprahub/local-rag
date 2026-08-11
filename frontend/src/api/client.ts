@@ -14,14 +14,15 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use(
   (config) => {
-    console.log("[12] AXIOS REQUEST");
-    console.log(config.method);
-    console.log(config.url);
-    console.log(config.data);
+    if (!config.headers['X-Request-ID']) {
+      const requestId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+      config.headers['X-Request-ID'] = requestId
+    }
+    console.log(`[AXIOS REQUEST] ${config.method?.toUpperCase()} ${config.url} (Request-ID: ${config.headers['X-Request-ID']})`);
     return config;
   },
   (error) => {
-    console.error("[14] AXIOS ERROR", error);
+    console.error("[AXIOS ERROR]", error);
     return Promise.reject(error);
   }
 );

@@ -1,7 +1,7 @@
 """Unified chat API — RAG Q&A and session transcript access."""
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 
 from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_rag_service
 from app.core.swagger_constants import OPENAPI_PLACEHOLDER_UUID
@@ -42,12 +42,18 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 )
 async def ask_chat(
     payload: ChatRequest,
+    response: Response,
+    x_request_id: str | None = Header(None, alias="X-Request-ID"),
     rag: RAGService = Depends(get_rag_service),
     session_service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatResponse:
     import logging
     logger = logging.getLogger(__name__)
-    logger.info("[CHAT REQUEST PAYLOAD] %s", payload.model_dump())
+
+    request_id = x_request_id or str(uuid.uuid4())
+    response.headers["X-Request-ID"] = request_id
+
+    logger.info("[CHAT REQUEST PAYLOAD] request_id=%s %s", request_id, payload.model_dump())
 
     filters = SearchFilters(
         document_id=payload.document_id,
@@ -69,24 +75,25 @@ async def ask_chat(
             filters=filters,
             top_k=payload.top_k,
             similarity_threshold=payload.similarity_threshold,
+            request_id=request_id,
         )
     except RAGError as exc:
-        logger.error("[CHAT RAG ERROR] %s", exc)
+        logger.error("[CHAT RAG ERROR] request_id=%s %s", request_id, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except LLMTimeoutError as exc:
-        logger.error("[CHAT LLM TIMEOUT] %s", exc)
+        logger.error("[CHAT LLM TIMEOUT] request_id=%s %s", request_id, exc)
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="The AI model took too long to generate a response. Please try asking again.",
         ) from exc
     except LLMUnavailableError as exc:
-        logger.error("[CHAT LLM UNAVAILABLE] %s", exc)
+        logger.error("[CHAT LLM UNAVAILABLE] request_id=%s %s", request_id, exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Ollama model service unavailable: {exc.reason}",
         ) from exc
     except LLMClientError as exc:
-        logger.error("[CHAT LLM ERROR] %s", exc)
+        logger.error("[CHAT LLM ERROR] request_id=%s %s", request_id, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"AI generation failed: {exc}",

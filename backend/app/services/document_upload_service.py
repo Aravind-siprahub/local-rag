@@ -43,17 +43,17 @@ logger = logging.getLogger(__name__)
 # is unreliable in practice (many browsers/OSes send "application/
 # octet-stream" for .md, some send nothing) — extension is the primary
 # signal, Content-Type is a secondary sanity check with a generic fallback.
-ALLOWED_EXTENSIONS: dict[str, frozenset[str]] = {
-    ".pdf": frozenset({"application/pdf"}),
-    ".docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
-    ".doc": frozenset({"application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
-    ".txt": frozenset({"text/plain"}),
-    ".md": frozenset({"text/markdown", "text/x-markdown", "text/plain"}),
-    ".markdown": frozenset({"text/markdown", "text/x-markdown", "text/plain"}),
-    ".csv": frozenset({"text/csv", "application/csv", "text/plain"}),
-    ".xlsx": frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"}),
-    ".pptx": frozenset({"application/vnd.openxmlformats-officedocument.presentationml.presentation"}),
-    ".json": frozenset({"application/json", "text/plain"}),
+ALLOWED_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    ".pdf": ("application/pdf",),
+    ".docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",),
+    ".doc": ("application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ".txt": ("text/plain",),
+    ".md": ("text/markdown", "text/x-markdown", "text/plain"),
+    ".markdown": ("text/markdown", "text/x-markdown", "text/plain"),
+    ".csv": ("text/csv", "application/csv", "text/plain"),
+    ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"),
+    ".pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation",),
+    ".json": ("application/json", "text/plain"),
 }
 _GENERIC_CONTENT_TYPES = frozenset({"application/octet-stream", "", None})
 

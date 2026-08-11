@@ -81,12 +81,28 @@ _REASONING_PREFIX_PATTERNS: tuple[str, ...] = (
     r"(?is)^the user is asking(?:.*?[.!?]+\s+(?=[A-Z0-9])|.*?(?=\n\n|\Z))",
     r"(?is)^the user wants(?:.*?[.!?]+\s+(?=[A-Z0-9])|.*?(?=\n\n|\Z))",
     r"(?is)^the user has asked(?:.*?[.!?]+\s+(?=[A-Z0-9])|.*?(?=\n\n|\Z))",
-    # --- "The answer should / will be" meta-commentary ---
-    r"(?is)^the answer (?:should|will|is going to) be(?:.*?[.!?]+\s+(?=[A-Z0-9])|.*?(?=\n\n|\Z))",
-    r"(?is)^(?:my |the )?(?:answer|response) (?:should|will|needs? to)(?:.*?[.!?]+\s+(?=[A-Z0-9])|.*?(?=\n\n|\Z))",
+    # --- Generic LLM Greetings / Filler Intros ---
+    r"(?is)^hello!?\s+i'?m\s+ready\s+to\s+help.*?(?=\n\n|\Z)",
+    r"(?is)^hello!?\s+(?:how\s+can\s+i\s+help|just\s+let\s+me\s+know).*?(?=\n\n|\Z)",
+    r"(?is)^sure[,!]?\s+(?:i\s+can\s+help|i'll\s+help).*?(?=\n\n|\Z)",
+    r"(?is)^let\s+me\s+help\s+you\s+with.*?(?=\n\n|\Z)",
+    r"(?is)^i\s+found\s+the\s+following\s+information.*?(?=\n\n|\Z)",
+    r"(?is)^here\s+is\s+the\s+information\s+(?:from|about).*?(?=\n\n|\Z)",
+    r"(?is)^(?:based\s+on|according\s+to)\s+(?:your\s+)?uploaded\s+documents?.*?(?=\n\n|\Z)",
+    # --- Query analysis / CoT meta-commentary openers ---
+    r"(?is)^okay[,.]?\s+.*?(?=\n\n|\Z)",
+    r"(?is)^(?:that|the)\s+(?:phrasing|wording|statement|query|question|user's?\s+input|core\s+question)\s+(?:is|seems|might|could).*?(?=\n\n|\Z)",
+    r"(?is)^the user\s+(?:seems|might|probably|specifically|appears|is\s+asking|wants|has\s+asked).*?(?=\n\n|\Z)",
+    r"(?is)^i recall\s+that.*?(?=\n\n|\Z)",
+    r"(?is)^wait[,.]?\s+.*?(?=\n\n|\Z)",
+    r"(?is)^checks?\s+reliable\s+knowledge.*?(?=\n\n|\Z)",
+    r"(?is)^(?:checking|recalling|analyzing|unpacking|evaluating)\s+.*?(?=\n\n|\Z)",
+    r"(?is)^since\s+(?:they|the\s+user|i|we)\s+.*?(?=\n\n|\Z)",
+    r"(?is)^so\s+the\s+(?:cleanest|best|final|direct)\s+(?:response|answer)\s+is[:.]?\s*",
+    r"(?is)^the\s+(?:cleanest|best|final|direct)\s+(?:response|answer)\s+is[:.]?\s*",
+    r"(?is)^in\s+astronomy[,.]?\s+.*?(?=\n\n|\Z)",
 )
 
-# Entire-response reasoning when qwen3 puts CoT in message.content (think=false).
 _REASONING_ONLY_RE = re.compile(
     r"(?is)^(?:"
     r"okay[,.]?\s+(?:the user|let me|let'?s|so\s+i\s+need)|"
@@ -94,12 +110,13 @@ _REASONING_ONLY_RE = re.compile(
     r"let me think|"
     r"first[,.]?\s+i(?:'|')?ll|"
     r"first[,.]?\s+i need to|"
-    r"i need to|i should|the user is asking|the user wants"
+    r"i need to|i should|the user is asking|the user wants|the user seems|the user might|"
+    r"that phrasing is|the phrasing is|checks reliable knowledge|i recall that"
     r")[\s\S]*$"
 )
 
 _REASONING_START_RE = re.compile(
-    r"(?is)^(?:okay|hmm|let me|i need to|i should|the user)\b",
+    r"(?is)^(?:okay|hmm|let me|i need to|i should|the user|that phrasing|the phrasing|checks reliable)\b",
 )
 
 # Truncated reasoning tail when num_predict cuts off mid-monologue.

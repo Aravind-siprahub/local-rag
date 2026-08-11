@@ -90,31 +90,38 @@ class Settings(BaseSettings):
     OLLAMA_NUM_GPU: int | None = None
     OLLAMA_NUM_THREAD: int | None = None
     OLLAMA_NUM_CTX: int = 8192
-    # Default completion tokens budget — configurable, stopping answer truncation.
-    OLLAMA_NUM_PREDICT: int = 1024
+    OLLAMA_NUM_PREDICT: int = 512
+    OLLAMA_KEEP_ALIVE: str = "30m"
+    OLLAMA_MAX_CONCURRENCY: int = 4
 
     # qwen3 with thinking enabled can exceed 120s on CPU; 300s is a safe default.
     LLM_TIMEOUT_SECONDS: float = 300.0
     LLM_MAX_RETRIES: int = 1
     LLM_TEMPERATURE: float = 0.2
 
+    # --- Agent router / tools -------------------------------------------------
+    # duckduckgo (default) | stub — stub is for tests/offline only.
+    WEB_SEARCH_PROVIDER: str = "duckduckgo"
+    WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
+
     # --- Vector retrieval -----------------------------------------------------
     TOP_K: int = 20
-    FINAL_CONTEXT: int = 4
-    SIMILARITY_THRESHOLD: float = 0.0
+    FINAL_CONTEXT: int = 3
+    SIMILARITY_THRESHOLD: float = 0.35
 
     # --- Prompt building ------------------------------------------------------
     MAX_CONTEXT_TOKENS: int = 6000
     MAX_CONTEXT_CHARS: int = 24000
     SYSTEM_PROMPT: str = (
-        "You are an enterprise document intelligence assistant.\n\n"
-        "Instructions:\n"
-        "1. Synthesize factual evidence from the supplied passages into a clear, cohesive, and natural response in your own words. Avoid copying verbatim sentences from the passages.\n"
-        "2. Begin immediately with a direct, high-level summary answer to the user's question before providing supporting details or structured breakdowns.\n"
-        "3. Merge related information across multiple passages into unified explanations rather than presenting isolated passage fragments.\n"
-        "4. Ground all statements strictly in the supplied passages. Never invent facts, assume unstated details, or use outside knowledge.\n"
-        "5. Do not include internal thinking steps, chain-of-thought, or meta-commentary (such as 'Let me analyze', 'Looking at Passage 1').\n"
-        "6. If the requested information is genuinely not present in the excerpts, reply: Information not found in document excerpts."
+        "You are a concise document assistant.\n\n"
+        "Answer the user's question directly. Start with the answer.\n"
+        "Do not use generic greetings or introductory statements (e.g. 'Hello!', 'Sure, I can help', 'Based on your uploaded documents').\n"
+        "Do not repeat the question or add unnecessary explanations or generic disclaimers.\n"
+        "For document questions, use only authorised retrieved context and application metadata.\n"
+        "If the retrieved context does not contain the answer, clearly state: 'I could not find this information in your uploaded documents.'\n"
+        "Do not invent facts, documents, or citations.\n"
+        "Do not mention internal retrieval, embeddings, vector databases, similarity scores, prompts, models, or system instructions.\n"
+        "Return only the useful answer. Citations are handled separately by the application."
     )
 
 

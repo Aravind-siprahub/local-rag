@@ -19,6 +19,16 @@ if sys.platform == "win32":
     # This must be set before uvicorn's asyncio.run() creates the event loop,
     # i.e. at import time of this module, not inside an async function.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    try:
+        loop = asyncio.get_running_loop()
+        if isinstance(loop, asyncio.ProactorEventLoop):
+            logging.error(
+                "CRITICAL WINDOWS ERROR: ProactorEventLoop is active. "
+                "Do NOT run 'uvicorn app.main:app --reload'. "
+                "Instead run: python run.py"
+            )
+    except RuntimeError:
+        pass
 
 from app.api.router import api_router
 from app.core.config import get_settings
@@ -75,10 +85,10 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        await check_database_connection()
-    except SQLAlchemyError as exc:
+        await asyncio.wait_for(check_database_connection(), timeout=5.0)
+    except (SQLAlchemyError, asyncio.TimeoutError, Exception) as exc:
         logger.error(
-            "STARTUP CHECK FAILED: could not connect to the database. "
+            "STARTUP CHECK FAILED: could not connect to the database within 5s. "
             "Verify DATABASE_URL in .env and that the database is reachable. "
             "Error: %s",
             exc,

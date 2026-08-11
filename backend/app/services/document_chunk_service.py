@@ -48,6 +48,11 @@ class DocumentChunkService(BaseService[DocumentChunk, uuid.UUID, DocumentChunkRe
             raise NotFoundError(f"DocumentVersion with id={document_version_id!r} was not found.")
 
         try:
+            from sqlalchemy import delete
+            stmt_del = delete(DocumentChunk).where(DocumentChunk.document_version_id == document_version_id)
+            await self.session.execute(stmt_del)
+            await self.session.flush()
+
             created = [
                 await self.repository.create(document_version_id=document_version_id, **chunk)
                 for chunk in chunks

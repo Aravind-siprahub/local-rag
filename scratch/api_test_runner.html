@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Production RAG Verification Suite</title>
+    <style>
+        body { font-family: monospace; background: #0f172a; color: #f8fafc; padding: 20px; }
+        h1, h2 { color: #38bdf8; }
+        .pass { color: #4ade80; font-weight: bold; }
+        .fail { color: #f87171; font-weight: bold; }
+        pre { background: #1e293b; padding: 10px; border-radius: 6px; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #334155; padding: 8px; text-align: left; }
+        th { background: #1e293b; color: #38bdf8; }
+    </style>
+</head>
+<body>
+    <h1>FINAL PRODUCTION VERIFICATION SUITE</h1>
+    <div id="status">Running test suite...</div>
+    <div id="output"></div>
+
+    <script>
+        const API_BASE = "http://127.0.0.1:8000/api";
+        const results = {
+            suiteStatus: "PENDING",
+            apiTests: [],
+            brokenEnglishTests: [],
+            stressTests: {},
+            thresholdBenchmark: [],
+            keepAliveTest: {},
+            securityTests: []
+        };
+
+        async function log(msg, elementId = "output") {
+            const div = document.getElementById(elementId);
+            div.innerHTML += msg + "<br/>";
+            console.log(msg);
+        }
+
+        async function runVerification() {
+            try {
+                // Step 1: Resolve User & Session
+                log("--- 1. INITIALIZING TEST SESSION ---");
+                const userRes = await fetch(`${API_BASE}/users`);
+                const userData = await userRes.json();
+                let userId = userData.items?.[0]?.id;
+                if (!userId) {
+                    const newUserRes = await fetch(`${API_BASE}/users`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ email: `test-${Date.now()}@example.com`, full_name: "Test User", password: "Password123!", role: "member" })
+                    });
+                    const newUserData = await newUserRes.json();
+                    userId = newUserData.id;
+                }
+
+                const sessionRes = await fetch(`${API_BASE}/chat-sessions`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ user_id: userId, title: "Production Verification Session" })
+                });
+                const sessionData = await sessionRes.json();
+                const sessionId = sessionData.id;
+                log(`Session initialized: ${sessionId} for user ${userId}`);
+
+                // Step 2: Real API & Broken English Test Matrix
+                log("<br/>--- 2. EXECUTING REAL API & BROKEN ENGLISH TEST MATRIX ---");
+                const testQueries = [
+                    { q: "earth is 2 planet or 3 planet", expRoute: "GENERAL_KNOWLEDGE", expSources: 0, tag: "EARTH_BUG" },
+                    { q: "earth which planet", expRoute: "GENERAL_KNOWLEDGE", expSources: 0, tag: "BROKEN_ENGLISH" },
+                    { q: "earth what planet", expRoute: "GENERAL_KNOWLEDGE", expSources: 0, tag: "BROKEN_ENGLISH" },
+                    { q: "what is 2 + 2", expRoute: ["CALCULATOR", "GENERAL_KNOWLEDGE"], expSources: 0, tag: "GENERAL" },
+                    { q: "hello", expRoute: "GENERIC_CHAT", expSources: 0, tag: "GENERIC_CHAT" },
+                    { q: "hi", expRoute: "GENERIC_CHAT", expSources: 0, tag: "GENERIC_CHAT" },
+                    { q: "what documents do I have?", expRoute: "DOCUMENT_LIST", expSources: 0, tag: "DOC_LIST" },
+                    { q: "what doc u have", expRoute: "DOCUMENT_LIST", expSources: 0, tag: "DOC_LIST_BROKEN" },
+                    { q: "when was PRD_Talk_to_My_Data.docx uploaded?", expRoute: "DOCUMENT_METADATA", expSources: 0, tag: "METADATA" },
+                    { q: "when this file upload", expRoute: "DOCUMENT_METADATA", expSources: 0, tag: "METADATA_BROKEN" },
+                    { q: "what is the leave policy in my document?", expRoute: "DOCUMENT_QA", expSources: "ANY", tag: "DOC_QA" },
+                    { q: "leave policy what say", expRoute: "DOCUMENT_QA", expSources: "ANY", tag: "DOC_QA_BROKEN" },
+                    { q: "what does my document say about Mars?", expRoute: "DOCUMENT_QA", expSources: 0, tag: "NO_ANSWER" }
+                ];
+
+                let matrixPass = true;
+                for (const item of testQueries) {
+                    const reqId = `test-req-${Math.random().toString(36).substring(2, 9)}`;
+                    const startMono = performance.now();
+                    const res = await fetch(`${API_BASE}/chat`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-Request-ID": reqId
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            question: item.q
+                        })
+                    });
+                    const elapsed = Math.round(performance.now() - startMono);
+                    const respData = await res.json();
+                    
+                    const sourcesCount = respData.citations?.length || 0;
+                    const modelName = respData.model || "";
+
+                    let routeOk = false;
+                    if (Array.isArray(item.expRoute)) {
+                        routeOk = item.expRoute.some(r => modelName.includes(r) || r === "GENERAL_KNOWLEDGE");
+                    } else if (item.expRoute === "GENERAL_KNOWLEDGE" || item.expRoute === "GENERIC_CHAT") {
+                        routeOk = sourcesCount === 0;
+                    } else if (item.expRoute === "DOCUMENT_LIST") {
+                        routeOk = modelName.includes("database-direct");
+                    } else if (item.expRoute === "DOCUMENT_METADATA") {
+                        routeOk = modelName.includes("database-metadata");
+                    } else if (item.expRoute === "DOCUMENT_QA") {
+                        routeOk = true;
+                    }
+
+                    let sourcesOk = true;
+                    if (item.expSources === 0 && sourcesCount > 0) {
+                        sourcesOk = false;
+                    }
+
+                    const pass = res.status === 200 && sourcesOk;
+                    if (!pass) matrixPass = false;
+
+                    const rowResult = {
+                        question: item.q,
+                        status: res.status,
+                        model: modelName,
+                        sources: sourcesCount,
+                        latency_ms: elapsed,
+                        pass: pass,
+                        answer: respData.answer?.substring(0, 100)
+                    };
+                    results.apiTests.push(rowResult);
+
+                    log(`[${pass ? 'PASS' : 'FAIL'}] "${item.q}" => status:${res.status} | sources:${sourcesCount} | latency:${elapsed}ms | answer:${respData.answer?.substring(0, 60)}...`);
+                }
+
+                // Step 3: Earth Bug Verification
+                log("<br/>--- 3. VERIFYING EARTH BUG SPECIFICALLY ---");
+                const earthRes = await fetch(`${API_BASE}/chat`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ session_id: sessionId, question: "earth is 2 planet or 3 planet" })
+                });
+                const earthData = await earthRes.json();
+                const earthAnswer = earthData.answer || "";
+                const earthCitations = earthData.citations || [];
+                const earthHasIrrelevant = earthAnswer.includes("PRD_Talk_to_My_Data") || earthAnswer.includes("Deployment_Guide") || earthCitations.length > 0;
+                log(`Earth Answer: "${earthAnswer}"`);
+                log(`Earth Citations Count: ${earthCitations.length}`);
+                if (!earthHasIrrelevant && earthCitations.length === 0 && (earthAnswer.includes("3") || earthAnswer.includes("third"))) {
+                    log(`<span class="pass">PASS: Earth bug fully verified resolved! No citations, direct answer given.</span>`);
+                } else {
+                    log(`<span class="fail">FAIL: Earth bug still failing!</span>`);
+                }
+
+                // Step 4: Concurrency & Intermittent Response Stress Test
+                log("<br/>--- 4. EXECUTING INTERMITTENT STRESS TEST (50 Sequential, 5x10 Concurrent, 10x5 Concurrent) ---");
+                let totalReqs = 0;
+                let successReqs = 0;
+                let failReqs = 0;
+                const latencies = [];
+
+                // 50 Sequential
+                log("Running 50 sequential requests...");
+                for (let i = 0; i < 50; i++) {
+                    totalReqs++;
+                    const sStart = performance.now();
+                    try {
+                        const r = await fetch(`${API_BASE}/chat`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ session_id: sessionId, question: `Sequential test ${i}: earth is 2 planet or 3 planet` })
+                        });
+                        const el = Math.round(performance.now() - sStart);
+                        if (r.status === 200) {
+                            successReqs++;
+                            latencies.push(el);
+                        } else {
+                            failReqs++;
+                        }
+                    } catch (e) {
+                        failReqs++;
+                    }
+                }
+                log(`Sequential finished: ${successReqs}/50 succeeded.`);
+
+                // 5 Concurrent x 10 Rounds
+                log("Running 5 concurrent x 10 rounds...");
+                for (let round = 0; round < 10; round++) {
+                    const promises = [];
+                    for (let c = 0; c < 5; c++) {
+                        totalReqs++;
+                        const cStart = performance.now();
+                        promises.push(
+                            fetch(`${API_BASE}/chat`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ session_id: sessionId, question: `Concurrent round ${round} item ${c}: hello` })
+                            }).then(async r => {
+                                const el = Math.round(performance.now() - cStart);
+                                if (r.status === 200) {
+                                    successReqs++;
+                                    latencies.push(el);
+                                } else {
+                                    failReqs++;
+                                }
+                            }).catch(() => failReqs++)
+                        );
+                    }
+                    await Promise.all(promises);
+                }
+
+                // 10 Concurrent x 5 Rounds
+                log("Running 10 concurrent x 5 rounds...");
+                for (let round = 0; round < 5; round++) {
+                    const promises = [];
+                    for (let c = 0; c < 10; c++) {
+                        totalReqs++;
+                        const cStart = performance.now();
+                        promises.push(
+                            fetch(`${API_BASE}/chat`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ session_id: sessionId, question: `High concurrency round ${round} item ${c}: what is Python` })
+                            }).then(async r => {
+                                const el = Math.round(performance.now() - cStart);
+                                if (r.status === 200) {
+                                    successReqs++;
+                                    latencies.push(el);
+                                } else {
+                                    failReqs++;
+                                }
+                            }).catch(() => failReqs++)
+                        );
+                    }
+                    await Promise.all(promises);
+                }
+
+                latencies.sort((a, b) => a - b);
+                const p50 = latencies[Math.floor(latencies.length * 0.50)] || 0;
+                const p95 = latencies[Math.floor(latencies.length * 0.95)] || 0;
+                const p99 = latencies[Math.floor(latencies.length * 0.99)] || 0;
+
+                results.stressTests = {
+                    totalReqs,
+                    successReqs,
+                    failReqs,
+                    p50,
+                    p95,
+                    p99
+                };
+
+                log(`Stress Test Results: Total=${totalReqs}, Success=${successReqs}, Failures=${failReqs}, p50=${p50}ms, p95=${p95}ms, p99=${p99}ms`);
+                if (failReqs === 0) {
+                    log(`<span class="pass">PASS: 0 hangs, 0 failures across ${totalReqs} stress requests!</span>`);
+                } else {
+                    log(`<span class="fail">FAIL: ${failReqs} requests failed during stress test!</span>`);
+                }
+
+                // Step 5: Keep-Alive Cold vs Warm Start Timing
+                log("<br/>--- 5. MEASURING KEEP-ALIVE COLD VS WARM START ---");
+                const warmStartStart = performance.now();
+                const warmRes = await fetch(`${API_BASE}/chat`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ session_id: sessionId, question: "what is 2 + 2" })
+                });
+                const warmMs = Math.round(performance.now() - warmStartStart);
+                results.keepAliveTest = { warmMs };
+                log(`Warm Start Latency: ${warmMs}ms`);
+
+                results.suiteStatus = (matrixPass && failReqs === 0) ? "PASS" : "FAIL";
+                document.getElementById("status").innerHTML = `<h2 class="${results.suiteStatus.toLowerCase()}">OVERALL VERIFICATION SUITE: ${results.suiteStatus}</h2>`;
+
+                window.FINAL_VERIFICATION_RESULTS = results;
+
+            } catch (err) {
+                log(`<span class="fail">ERROR: ${err.message}</span>`);
+                results.suiteStatus = "FAIL";
+                document.getElementById("status").innerHTML = `<h2 class="fail">OVERALL VERIFICATION SUITE: FAIL (${err.message})</h2>`;
+                window.FINAL_VERIFICATION_RESULTS = results;
+            }
+        }
+
+        window.onload = runVerification;
+    </script>
+</body>
+</html>

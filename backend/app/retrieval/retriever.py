@@ -117,13 +117,11 @@ class Retriever:
             ft_task = search_fulltext(self.session, question.strip(), top_k=candidate_top_k, filters=filters_obj)
             sem_hits, ft_hits = await asyncio.gather(sem_task, ft_task, return_exceptions=True)
 
-            if isinstance(sem_hits, Exception):
-                sem_hits = []
-            if isinstance(ft_hits, Exception):
-                ft_hits = []
+            clean_sem_hits: list[SearchHit] = sem_hits if isinstance(sem_hits, list) else []
+            clean_ft_hits: list[SearchHit] = ft_hits if isinstance(ft_hits, list) else []
 
-            hits = list(sem_hits) + list(ft_hits)
-            candidate_results = rank_hybrid_rrf(sem_hits, ft_hits, similarity_threshold=effective_threshold)[:candidate_top_k]
+            hits = clean_sem_hits + clean_ft_hits
+            candidate_results = rank_hybrid_rrf(clean_sem_hits, clean_ft_hits, similarity_threshold=effective_threshold)[:candidate_top_k]
 
         retrieval_time_ms = int((time.monotonic() - retrieval_search_start) * 1000)
 
@@ -183,7 +181,10 @@ class Retriever:
                 .join(DocumentChunk, Embedding.chunk_id == DocumentChunk.id)
                 .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
                 .join(Document, DocumentVersion.document_id == Document.id)
-                .where(Embedding.model_name == self.model_name)
+                .where(
+                    (Embedding.model_name == self.model_name)
+                    | (Embedding.model_name.ilike(f"{self.model_name.split(':')[0]}%"))
+                )
                 .where(Document.deleted_at.is_(None))
             )
             if filters.user_id is not None:
@@ -193,16 +194,17 @@ class Retriever:
             if filters.document_version_id is not None:
                 stmt = stmt.where(DocumentVersion.id == filters.document_version_id)
 
-            scoped_count = int((await self.session.execute(stmt)).scalar_one())
-            global_count = int(
-                (
-                    await self.session.execute(
-                        select(func.count())
-                        .select_from(Embedding)
-                        .where(Embedding.model_name == self.model_name)
+            scoped_count = (await self.session.execute(stmt)).scalar_one()
+            global_count = (
+                await self.session.execute(
+                    select(func.count())
+                    .select_from(Embedding)
+                    .where(
+                        (Embedding.model_name == self.model_name)
+                        | (Embedding.model_name.ilike(f"{self.model_name.split(':')[0]}%"))
                     )
-                ).scalar_one()
-            )
+                )
+            ).scalar_one()
         except Exception as exc:
             logger.debug("Could not count embeddings for empty-retrieval diagnostics: %s", exc)
 

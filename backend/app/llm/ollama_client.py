@@ -35,8 +35,20 @@ _OOM_MARKERS = (
 )
 
 
+_OLLAMA_CONCURRENCY_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def _get_concurrency_semaphore() -> asyncio.Semaphore:
+    global _OLLAMA_CONCURRENCY_SEMAPHORE
+    if _OLLAMA_CONCURRENCY_SEMAPHORE is None:
+        settings = get_settings()
+        limit = max(1, getattr(settings, "OLLAMA_MAX_CONCURRENCY", 4))
+        _OLLAMA_CONCURRENCY_SEMAPHORE = asyncio.Semaphore(limit)
+    return _OLLAMA_CONCURRENCY_SEMAPHORE
+
+
 class OllamaLLMClient:
-    """Async Ollama `/api/chat` client with retry, timeout, and error handling."""
+    """Async Ollama `/api/chat` client with retry, timeout, bounded concurrency, and keep-alive support."""
 
     def __init__(
         self,
@@ -60,11 +72,11 @@ class OllamaLLMClient:
         self.max_retries = max_retries if max_retries is not None else settings.LLM_MAX_RETRIES
         self.retry_backoff = retry_backoff
         self.use_gpu = settings.OLLAMA_USE_GPU if use_gpu is None else use_gpu
-        # Explicit constructor args win; otherwise fall back to settings.
         self.num_gpu = num_gpu if num_gpu is not None else settings.OLLAMA_NUM_GPU
         self.num_thread = num_thread if num_thread is not None else settings.OLLAMA_NUM_THREAD
         self.num_ctx = settings.OLLAMA_NUM_CTX
         self.num_predict = settings.OLLAMA_NUM_PREDICT
+        self.keep_alive = getattr(settings, "OLLAMA_KEEP_ALIVE", "30m")
         self._client = client
         self._owns_client = client is None
 
@@ -91,6 +103,9 @@ class OllamaLLMClient:
         num_predict: int | None = None,
     ) -> dict[str, Any]:
         options = self._build_options(num_predict=num_predict)
+        ka: str | int = self.keep_alive
+        if isinstance(ka, str) and (ka.startswith("-") and ka[1:].isdigit() or ka.isdigit()):
+            ka = int(ka)
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -98,10 +113,9 @@ class OllamaLLMClient:
                 {"role": "user", "content": user_prompt.strip()},
             ],
             "stream": stream,
-            "keep_alive": "10m",
+            "keep_alive": ka,
             "options": options,
         }
-        # Disable chain-of-thought only on models that support the `think` parameter.
         if supports_think_parameter(self.model):
             payload["think"] = False
         return payload
@@ -113,7 +127,7 @@ class OllamaLLMClient:
         *,
         num_predict: int | None = None,
     ) -> LLMResponse:
-        """Generate a completion from system and user prompts."""
+        """Generate a completion from system and user prompts with concurrency bounds."""
         if not user_prompt or not user_prompt.strip():
             raise LLMClientError("user_prompt must not be empty.")
         if not system_prompt or not system_prompt.strip():
@@ -124,7 +138,7 @@ class OllamaLLMClient:
 
         logger.info(
             "Ollama LLM request starting: model=%s execution=%s num_gpu=%s "
-            "num_thread=%s num_predict=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=10m think=%s",
+            "num_thread=%s num_predict=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=%s think=%s",
             self.model,
             "GPU enabled" if self.use_gpu else "CPU fallback",
             options.get("num_gpu", "default"),
@@ -133,12 +147,15 @@ class OllamaLLMClient:
             self.timeout,
             self.max_retries,
             payload["stream"],
+            self.keep_alive,
             payload.get("think", "omitted"),
         )
         started_at = datetime.now(timezone.utc)
         start_mono = time.monotonic()
 
-        response_data = await self._request_with_retry("/api/chat", payload)
+        sem = _get_concurrency_semaphore()
+        async with sem:
+            response_data = await self._request_with_retry("/api/chat", payload)
 
         latency_ms = int((time.monotonic() - start_mono) * 1000)
         logger.info(

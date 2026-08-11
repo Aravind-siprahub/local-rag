@@ -116,6 +116,14 @@ class TestSanitizeResponse:
         raw = "Okay, let's tackle this problem. The user is asking for the total revenue."
         assert sanitize_response(raw) == ""
 
+    def test_strips_phrasing_commentary_monologue(self) -> None:
+        raw = (
+            "That phrasing is a bit odd - they probably meant '2 planets or 3 planets'.\n\n"
+            "Okay, let me unpack this. The user seems confused about planetary counts.\n\n"
+            "Earth is the 3rd planet from the Sun."
+        )
+        assert sanitize_response(raw) == "Earth is the 3rd planet from the Sun."
+
     def test_truncated_reasoning_tail_returns_empty(self) -> None:
         raw = (
             "Okay, let me try to figure this out. The user is asking about revenue.\n\n"

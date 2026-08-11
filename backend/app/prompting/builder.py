@@ -77,7 +77,7 @@ class PromptBuilder:
         )
 
 
-def _trim_passage_around_query(text: str, question: str, max_chars: int = 1200) -> str:
+def _trim_passage_around_query(text: str, question: str, max_chars: int = 3500) -> str:
     """Trim oversized chunks to a passage window around matched query sentences."""
     text = text.strip()
     if len(text) <= max_chars:
@@ -88,18 +88,19 @@ def _trim_passage_around_query(text: str, question: str, max_chars: int = 1200) 
     if not sentences:
         return text[:max_chars].rstrip() + "..."
 
-    q_tokens = set(w.lower() for w in re.findall(r"\w+", question) if len(w) > 3)
-    matched_idx = -1
+    q_tokens = set(w.lower() for w in re.findall(r"\w+", question) if len(w) >= 3)
+    matched_indices = []
     if q_tokens:
         for idx, sentence in enumerate(sentences):
             s_tokens = set(w.lower() for w in re.findall(r"\w+", sentence))
             if q_tokens & s_tokens:
-                matched_idx = idx
-                break
+                matched_indices.append(idx)
 
-    if matched_idx != -1:
-        start = max(0, matched_idx - 1)
-        end = min(len(sentences), matched_idx + 2)
+    if matched_indices:
+        first_idx = matched_indices[0]
+        last_idx = matched_indices[-1]
+        start = max(0, first_idx - 2)
+        end = min(len(sentences), last_idx + 3)
         trimmed = " ".join(sentences[start:end])
         if len(trimmed) <= max_chars:
             return f"... {trimmed} ..." if start > 0 or end < len(sentences) else trimmed

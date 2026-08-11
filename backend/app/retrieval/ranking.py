@@ -95,9 +95,8 @@ def rank_hybrid_rrf(
     for chunk_id in sorted_chunk_ids:
         hit = hit_map[chunk_id]
         sim = cosine_distance_to_similarity(hit.distance)
-        if sim < similarity_threshold and len(semantic_hits) > 0:
+        if sim < similarity_threshold:
             continue
-        rrf_score = scores[chunk_id]
         ranked.append(
             RankedResult(
                 chunk_id=hit.chunk_id,
@@ -105,7 +104,7 @@ def rank_hybrid_rrf(
                 document_id=hit.document_id,
                 document_version_id=hit.document_version_id,
                 document_title=hit.document_title,
-                similarity_score=round(rrf_score, 4),
+                similarity_score=round(sim, 4),
                 rank=rank,
                 section_title=hit.section_title,
                 page_number=hit.page_number,
@@ -136,22 +135,8 @@ def _get_neural_reranker() -> tuple[Any, str | None]:
         _reranker_model_name = "FlashRank (ms-marco-TinyBERT-L-2-v2)"
         logger.info("[RERANKER INIT] Successfully loaded FlashRank neural model")
         return _reranker_instance, _reranker_model_name
-    except ImportError:
-        logger.info("[RERANKER INIT] flashrank not found in %s. Attempting pip install...", sys.executable)
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "flashrank"])
-            import site
-            import importlib
-            importlib.reload(site)
-            from flashrank import Ranker
-            _reranker_instance = Ranker()
-            _reranker_model_name = "FlashRank (ms-marco-TinyBERT-L-2-v2)"
-            logger.info("[RERANKER INIT] Successfully installed and loaded FlashRank neural model")
-            return _reranker_instance, _reranker_model_name
-        except Exception as exc:
-            errors.append(f"FlashRank pip install error: {type(exc).__name__}: {exc}")
     except Exception as exc:
-        errors.append(f"FlashRank error: {type(exc).__name__}: {exc}")
+        errors.append(f"FlashRank not available: {type(exc).__name__}: {exc}")
 
     # Attempt 2: Optional sentence-transformers fallback
     try:
@@ -203,7 +188,7 @@ def rerank_cross_encoder(
                     {
                         "id": idx,
                         "text": cand.chunk_text,
-                        "meta": cand,
+                        "meta": {"cand_idx": idx},
                     }
                     for idx, cand in enumerate(candidates)
                 ]
@@ -212,8 +197,11 @@ def rerank_cross_encoder(
 
                 for item in results:
                     score = float(item.get("score", 0.0))
-                    cand = item["meta"]
-                    scored_candidates.append((score, cand))
+                    meta_dict = item.get("meta", {})
+                    cand_idx = meta_dict.get("cand_idx") if isinstance(meta_dict, dict) else None
+                    if cand_idx is not None and 0 <= cand_idx < len(candidates):
+                        cand = candidates[cand_idx]
+                        scored_candidates.append((score, cand))
 
             # Case 2: sentence-transformers CrossEncoder implementation
             else:
