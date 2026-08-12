@@ -89,8 +89,7 @@ async def search_fulltext(
         .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Document, DocumentVersion.document_id == Document.id)
         .where(Document.deleted_at.is_(None))
-        .where(Document.status != DocumentStatus.FAILED)
-        .where(Document.status != DocumentStatus.ARCHIVED)
+        .where(Document.status == DocumentStatus.READY)
         .where(ts_vector.op("@@")(ts_query))
     )
 
@@ -165,8 +164,7 @@ async def search_similar(
             | (Embedding.model_name.ilike(f"{model_name.split(':')[0]}%"))
         )
         .where(Document.deleted_at.is_(None))
-        .where(Document.status != DocumentStatus.FAILED)
-        .where(Document.status != DocumentStatus.ARCHIVED)
+        .where(Document.status == DocumentStatus.READY)
     )
 
     if filters.user_id is not None:

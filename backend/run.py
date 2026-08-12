@@ -40,10 +40,15 @@ if __name__ == "__main__":
     # Running directly with reload=False on Windows preserves WindowsSelectorEventLoopPolicy.
     should_reload = os.getenv("RELOAD", "false" if sys.platform == "win32" else "true").lower() == "true"
     
-    if should_reload and sys.platform != "win32":
-        uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, reload_dirs=[app_dir])
-    else:
-        from app.main import app
-        uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    try:
+        if should_reload and sys.platform != "win32":
+            uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True, reload_dirs=[app_dir])
+        else:
+            from app.main import app
+            uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    except (KeyboardInterrupt, SystemExit):
+        print("\n[INFO] Server stopped by user.")
+    except Exception as e:
+        print(f"\n[ERROR] Server error: {e}")
 
 

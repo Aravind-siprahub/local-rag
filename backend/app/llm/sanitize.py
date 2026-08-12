@@ -24,6 +24,8 @@ _REASONING_PREFIX_RE = re.compile(
     r"let me (?:think|analyze|check|look|see|consider|review|examine|re-read|reread|read)|"
     r"i(?:'ll| will) (?:think|analyze|check|look|formulate|consider|re-read|reread)|"
     r"first[,.]?\s+(?:i'll|i will|let me|the user|a simple)|"
+    r"we are given a question|"
+    r"we can say|"
     r"hmm[,.]?\s+(?:the user|i|let)|"
     r"looking at (?:the )?(?:passage|chunk|excerpt|document|context)|"
     r"okay[,.]?\s+(?:the user|let me)|"
@@ -35,9 +37,23 @@ _REASONING_PREFIX_RE = re.compile(
     r"i need to respond|"
     r"the instruction (?:says|states|requires)|"
     r"reconcil(?:e|ing) (?:the|these)|"
-    r"(?:re-read|reread|re-reading) (?:the|the prompt|the question)|"
-    r"(?:let me|i should) (?:re-read|reread|review|check) (?:the|the prompt|the question)"
+    r"(?:re-read|reread|re-reading) (?:the|the prompt|the question|the instruction)|"
+    r"(?:let me|i should) (?:re-read|reread|review|check) (?:the|the prompt|the question|the instruction)"
     r")[^\n]*\n+"
+)
+
+# Matches an ENTIRE response that is only passage analysis / narration — not a real answer.
+_PASSAGE_NARRATION_RE = re.compile(
+    r"(?is)^\s*(?:"
+    r"passage\s+\d+(?:\s+(?:mention|state|describe|discuss|say|note|indicate|show|list)s?)|"
+    r"the (?:retrieved|provided|available|given) (?:passage|document|excerpt|context|text)s?(?:\s+don'?t|\s+do\s+not|\s+doesn'?t|\s+does\s+not)?(?:\s+(?:contain|have|include|specify|mention|provide|name|state|say))?|"
+    r"(?:in|from|based on) (?:the )?passage\s+\d+|"
+    r"(?:in|from|based on) (?:the )?(?:retrieved|provided|given|available|above) (?:passage|document|excerpt|context|text)|"
+    r"the (?:passage|document|excerpt|context|text)s?(?:\s+\d+)?\s+(?:mention|state|describe|discuss|indicate|note|suggest)s?|"
+    r"(?:passage|excerpt|chunk)s?\s+\d+(?:\s+and\s+\d+)?\s+(?:both\s+)?(?:mention|state|describe|show|indicate|note)|"
+    r"so the answer would be that|"
+    r"the answer (?:is|would be|should be) that the (?:retrieved|provided|available|given) (?:passage|document|excerpt)"
+    r")"
 )
 
 _REASONING_ONLY_RE = re.compile(
@@ -45,6 +61,8 @@ _REASONING_ONLY_RE = re.compile(
     r"let me (?:think|analyze|check|look)|"
     r"okay[,.]?\s+the user|"
     r"i need to|"
+    r"we are given a question|"
+    r"we can say|"
     r"the user (?:asks|is asking|just said|seems|asked|wants|wanted)|"
     r"first[,.]?\s+i'll|"
     r"hmm[,.]?\s+the user|"
@@ -54,8 +72,8 @@ _REASONING_ONLY_RE = re.compile(
     r"however[,.]?\s+(?:the instruction|the prompt|the system|the requirement)|"
     r"the instruction (?:says|states|requires)|"
     r"reconcil(?:e|ing) (?:the|these)|"
-    r"(?:re-read|reread|re-reading) (?:the|the prompt|the question)|"
-    r"(?:let me|i should) (?:re-read|reread|review|check) (?:the|the prompt|the question)"
+    r"(?:re-read|reread|re-reading) (?:the|the prompt|the question|the instruction)|"
+    r"(?:let me|i should) (?:re-read|reread|review|check) (?:the|the prompt|the question|the instruction)"
     r").*\Z"
 )
 
@@ -85,8 +103,41 @@ def detect_reasoning_leakage(text: str | None) -> bool:
     return any(tag in lowered for tag in tags)
 
 
+def _strip_common_monologue_prefixes(text: str) -> str:
+    """Strip leading sentences that match reasoning/narration monologue."""
+    cleaned = text.strip()
+    
+    # Prefix patterns to strip (case-insensitive)
+    patterns = [
+        r"^looking\s+at\s+the\s+(?:web\s+)?search\s+results[,.:]*\s*",
+        r"^based\s+on\s+the\s+(?:web\s+)?search\s+results[,.:]*\s*",
+        r"^according\s+to\s+the\s+(?:web\s+)?search\s+results[,.:]*\s*",
+        r"^based\s+only\s+on\s+the\s+search\s+results[^.]*\s*",
+        r"^i\s+need\s+to\s+answer\s+in\s+\d+-\d+\s+sentences[,.:]*\s*",
+        r"^i\s+need\s+to\s+[^.]*sentences[,.:]*\s*",
+        r"^i\s+shouldn'?t\s+add\s+any\s+additional\s+information[,.:]*\s*",
+        r"^i\s+shouldn'?t\s+add\s+any\s+information[,.:]*\s*",
+        r"^i\s+should\s+not\s+add\s+any\s+additional\s+information[,.:]*\s*",
+        r"^i\s+should\s+not\s+add\s+any\s+information[,.:]*\s*",
+        r"^first[,.]?\s+i\s+need\s+to\s+[^.]*\s*",
+        r"^the\s+answer\s+is[,.:]*\s*",
+        r"^here\s+is\s+the\s+answer[,.:]*\s*",
+    ]
+    
+    modified = True
+    while modified:
+        modified = False
+        for pat in patterns:
+            new_text = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+            if new_text != cleaned:
+                cleaned = new_text.strip()
+                modified = True
+                break
+    return cleaned
+
+
 def sanitize_response(text: str | None) -> str:
-    """Remove thinking blocks and leading reasoning monologues; return clean answer."""
+    """Remove thinking blocks, leading reasoning monologues, and passage-narration chains."""
     if text is None or not isinstance(text, str) or not text.strip():
         return ""
 
@@ -98,6 +149,12 @@ def sanitize_response(text: str | None) -> str:
     cleaned = _UNOPENED_THINKING_RE.sub("", cleaned)
     cleaned = _strip_unclosed_thinking_blocks(cleaned)
     cleaned = _strip_reasoning_paragraphs(cleaned)
+
+    # Strip responses that are entirely passage-narration analysis (not a real answer)
+    cleaned = _strip_passage_narration(cleaned)
+    
+    # Strip common leading monologue/reasoning prefixes
+    cleaned = _strip_common_monologue_prefixes(cleaned)
 
     if _REASONING_ONLY_RE.match(cleaned):
         return ""
@@ -122,6 +179,25 @@ def _strip_reasoning_paragraphs(text: str) -> str:
             break
         cleaned = updated
     return cleaned
+
+
+def _strip_passage_narration(text: str) -> str:
+    """Remove paragraphs that are just passage analysis, not the final answer.
+
+    Strategy: split on double newlines into paragraphs. Keep only paragraphs
+    that do NOT look like passage-narration. If all are narration, return empty.
+    """
+    paragraphs = re.split(r"\n{2,}", text.strip())
+    kept: list[str] = []
+    for para in paragraphs:
+        first_sentence = para.strip().split("\n")[0]
+        # If the paragraph starts with a narration marker, skip it
+        if _PASSAGE_NARRATION_RE.match(first_sentence):
+            continue
+        kept.append(para)
+    if not kept:
+        return text  # Nothing survived — return original so we don't lose the answer
+    return "\n\n".join(kept)
 
 
 class ThinkingStreamFilter:

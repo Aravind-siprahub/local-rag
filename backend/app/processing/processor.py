@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,8 @@ from app.services.parser import DocumentParser, ParsingError
 from app.services.document_chunk_service import ChunkInput, DocumentChunkService
 from app.services.document_version_service import DocumentVersionService
 from app.services.processing_job_service import ProcessingJobService
+from app.storage.s3_storage_service import S3StorageService
+from app.storage.supabase_storage_service import SupabaseStorageService
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +89,16 @@ class DocumentProcessor:
             started_at = job.started_at
 
             version = await self.versions.get(job.document_version_id)
+            from app.services.document_service import DocumentService
+            doc_service = DocumentService(self.session)
+            document = await doc_service.get(getattr(version, "document_id", version.id))
+
             await self.versions.update(
                 version.id,
                 status=DocumentVersionStatus.PARSING,
             )
 
-            raw_bytes = await self._load_file(version.storage_key)
+            raw_bytes = await self._load_file(version, getattr(document, "storage_path", None))
             parsed_doc = await self.document_parser.parse(
                 raw_bytes,
                 version.original_filename,
@@ -152,12 +159,62 @@ class DocumentProcessor:
             logger.exception("Processing job %s failed unexpectedly", job_id)
             raise
 
-    async def _load_file(self, storage_key: str) -> bytes:
-        path = self.upload_dir / storage_key
-        if not path.is_file():
-            raise FileNotFoundError(f"Uploaded file not found at {path!r}.")
+    async def _load_file(self, version: Any, doc_storage_path: str | None = None) -> bytes:
+        version_storage_path = (getattr(version, "storage_path", None) or "").strip().lstrip("/")
+        version_storage_key = (getattr(version, "storage_key", None) or "").strip().lstrip("/")
+        doc_storage_path = (doc_storage_path or "").strip().lstrip("/")
 
-        return await asyncio.to_thread(path.read_bytes)
+        settings = get_settings()
+        if settings.s3_is_configured:
+            storage_service = S3StorageService()
+        else:
+            storage_service = SupabaseStorageService()
+
+        raw_bytes: bytes | None = None
+
+        if storage_service.is_configured:
+            remote_candidates: list[str] = []
+            for candidate in (version_storage_path, version_storage_key, doc_storage_path):
+                if candidate and candidate not in remote_candidates:
+                    remote_candidates.append(candidate)
+
+            for candidate_path in remote_candidates:
+                try:
+                    exists = await storage_service.exists_file(storage_path=candidate_path)
+                except Exception:
+                    exists = False
+
+                if exists:
+                    try:
+                        raw_bytes = await storage_service.download_file(storage_path=candidate_path)
+                        # Persist working path
+                        if candidate_path != version_storage_path:
+                            try:
+                                await self.versions.update(version.id, storage_path=candidate_path)
+                            except Exception:
+                                pass
+                        break
+                    except Exception:
+                        pass
+
+        # Local fallback
+        if raw_bytes is None:
+            local_candidates = []
+            for p in (version_storage_path, version_storage_key, doc_storage_path):
+                if p:
+                    local_candidates.append(self.upload_dir / p)
+            if version_storage_key:
+                local_candidates.append(self.upload_dir / version_storage_key)
+
+            for local_path in local_candidates:
+                if local_path.is_file():
+                    raw_bytes = await asyncio.to_thread(local_path.read_bytes)
+                    break
+
+        if raw_bytes is None:
+            raise FileNotFoundError(f"File not found remotely or locally for version {version.id!r}.")
+
+        return raw_bytes
 
     async def _fail_job(self, job: ProcessingJob, error_message: str) -> None:
         try:

@@ -2,7 +2,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
 
 import { getApiErrorMessage } from '@/api/client'
-import { listUsers, uploadDocument } from '@/services'
+import { uploadDocument, getDocument } from '@/services'
+import { getHealth } from '@/services/health.service'
+import { useCurrentUser } from '@/hooks'
 import type { RejectedFile, UploadQueueItem } from '@/types'
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024 // 25 MB
@@ -129,13 +131,25 @@ export function useUploadQueue() {
           processingJobId: response.processing_job_id,
         })
 
-        // Transition smoothly to Ready
-        setTimeout(() => {
-          updateItemStatus(item.id, { status: 'Ready' })
-        }, 1000)
+        // Poll document status instead of setTimeout
+        const pollInterval = setInterval(async () => {
+          try {
+            const doc = await getDocument(response.document_id)
+            const docStatus = typeof doc.status === 'string' ? doc.status : String(doc.status)
+            if (docStatus.toLowerCase() === 'ready' || docStatus.toLowerCase() === 'failed') {
+              clearInterval(pollInterval)
+              updateItemStatus(item.id, {
+                status: (docStatus.toLowerCase() === 'ready' ? 'Ready' : 'Failed') as any,
+                error: docStatus.toLowerCase() === 'failed' ? 'Processing failed' : undefined,
+              })
+              void queryClient.invalidateQueries({ queryKey: ['documents'] })
+            }
+          } catch (e) {
+            clearInterval(pollInterval)
+            updateItemStatus(item.id, { status: 'Failed', error: 'Failed to poll status' })
+          }
+        }, 2000)
 
-        // Invalidate documents list query so Recent Uploads re-fetches
-        void queryClient.invalidateQueries({ queryKey: ['documents'] })
       } catch (err: unknown) {
         const errorMsg = getApiErrorMessage(err)
         updateItemStatus(item.id, {

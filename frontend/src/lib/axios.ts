@@ -1,7 +1,8 @@
 import axios, { AxiosError } from 'axios'
 import { AUTH_KEYS } from '@/features/auth/utils/constants'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+// Prefer relative `/api` so the Vite dev proxy handles backend routing (no CORS).
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,

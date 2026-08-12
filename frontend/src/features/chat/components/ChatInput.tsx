@@ -29,15 +29,24 @@ export function ChatInput({
     }
   }
 
+  const isSendingRef = useRef(false)
+
   useEffect(() => {
     handleInput()
   }, [input])
+
+  useEffect(() => {
+    if (!sendDisabled) {
+      isSendingRef.current = false
+    }
+  }, [sendDisabled])
 
   const handleSend = () => {
     console.log("[1] ChatInput.handleSend()");
     console.log("Question:", input);
     const trimmed = input.trim()
-    if (!trimmed || cannotSend) return
+    if (!trimmed || cannotSend || isSendingRef.current) return
+    isSendingRef.current = true
     onSend(trimmed)
     setInput('')
     if (textareaRef.current) {

@@ -17,7 +17,7 @@ export function CitationCard({ citation }: CitationCardProps) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 font-medium text-primary">
           <FileText className="w-4 h-4" />
-          <span className="truncate max-w-[220px]">{docTitle}</span>
+          <span className="truncate max-w-55">{docTitle}</span>
         </div>
         {locationInfo && (
           <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">

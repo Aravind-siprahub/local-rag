@@ -106,6 +106,8 @@ class OllamaLLMClient:
         user_prompt: str,
         *,
         num_predict: int | None = None,
+        response_format: str | None = None,
+        temperature: float | None = None,
     ) -> LLMResponse:
         """Generate a completion from system and user prompts."""
         if not user_prompt or not user_prompt.strip():
@@ -113,38 +115,29 @@ class OllamaLLMClient:
         if not system_prompt or not system_prompt.strip():
             raise LLMClientError("system_prompt must not be empty.")
 
-        options = self._build_options(num_predict=num_predict)
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt.strip()},
-                {"role": "user", "content": user_prompt.strip()},
-            ],
-            "stream": stream,
-            "keep_alive": ka,
-            "options": options,
-        }
-        # qwen3 / thinking models often put the entire answer in `message.thinking`
-        # and leave `content` empty on long RAG prompts. Force non-thinking output.
-        from app.llm.sanitize import supports_think_parameter
-
-        if supports_think_parameter(self.model):
-            payload["think"] = False
-
+        payload = self._build_payload(
+            system_prompt,
+            user_prompt,
+            stream=False,
+            num_predict=num_predict,
+            response_format=response_format,
+            temperature=temperature,
+        )
 
         logger.info(
             "Ollama LLM request starting: model=%s execution=%s num_gpu=%s "
-            "num_thread=%s num_predict=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=%s think=%s",
+            "num_thread=%s num_predict=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=%s think=%s format=%s",
             self.model,
             "GPU enabled" if self.use_gpu else "CPU fallback",
-            options.get("num_gpu", "default"),
-            options.get("num_thread", "default"),
-            options.get("num_predict"),
+            payload["options"].get("num_gpu", "default"),
+            payload["options"].get("num_thread", "default"),
+            payload["options"].get("num_predict"),
             self.timeout,
             self.max_retries,
             payload["stream"],
             self.keep_alive,
             payload.get("think", "omitted"),
+            payload.get("format", "omitted"),
         )
         started_at = datetime.now(timezone.utc)
         start_mono = time.monotonic()
@@ -162,6 +155,37 @@ class OllamaLLMClient:
         )
         return _parse_chat_response(response_data, fallback_model=self.model)
 
+    def _build_payload(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        stream: bool = False,
+        num_predict: int | None = None,
+        response_format: str | None = None,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
+        """Build a standard Ollama `/api/chat` request body."""
+        options = self._build_options(num_predict=num_predict)
+        if temperature is not None:
+            options["temperature"] = temperature
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt.strip()},
+                {"role": "user", "content": user_prompt.strip()},
+            ],
+            "stream": stream,
+            "keep_alive": self.keep_alive,
+            "options": options,
+        }
+        if response_format is not None:
+            payload["format"] = response_format
+        # qwen3 / thinking models often put the entire answer in `message.thinking`
+        # and leave `content` empty on long RAG prompts. Force non-thinking output.
+        if supports_think_parameter(self.model):
+            payload["think"] = False
+        return payload
 
     async def generate_stream(
         self, system_prompt: str, user_prompt: str

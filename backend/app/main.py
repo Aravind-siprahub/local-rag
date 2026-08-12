@@ -98,6 +98,20 @@ async def lifespan(app: FastAPI):
         app.state.swagger_example_user_email = (
             f"swagger-{uuid_lib.uuid4().hex[:8]}@example.com"
         )
+        
+        # Standalone search provider test on boot/reload
+        async def run_search_test():
+            await asyncio.sleep(1.0) # Let server finish loading
+            logger.info("=== STARTING STARTUP WEB SEARCH TEST ===")
+            from app.tools.web_search import get_web_search_provider
+            try:
+                provider = get_web_search_provider()
+                res = await provider.search("When is Deepawali in 2026")
+                logger.info(f"=== WEB SEARCH TEST PASSED: {len(res.hits)} hits ===")
+            except Exception as e:
+                logger.error(f"=== WEB SEARCH TEST FAILED: {e} ===", exc_info=True)
+                
+        asyncio.create_task(run_search_test())
         logger.info(
             "Swagger example user email set to %s",
             app.state.swagger_example_user_email,
@@ -213,7 +227,7 @@ def create_app() -> FastAPI:
     )
 
     register_exception_handlers(app)
-    # Primary mount: frontend VITE_API_BASE_URL=http://localhost:8000/api
+    # Primary mount: direct clients may call /api/* (CORS fallback).
     app.include_router(api_router, prefix="/api")
     # Root mount: Vite proxy rewrite strips /api → /health, /users, etc.
     app.include_router(api_router)

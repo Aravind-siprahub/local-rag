@@ -30,7 +30,6 @@ export function ChatHistory({ messages, isLoading, latestCitations, loadingLabel
     )
   }
 
-  console.log("[E] messages rendered", messages.map(m => m.content));
 
   return (
     <ScrollArea className="flex-1 min-h-0 h-full px-4 py-4" ref={scrollRef}>

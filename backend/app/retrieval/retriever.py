@@ -87,38 +87,116 @@ class Retriever:
         filters_obj = filters or SearchFilters()
         mode = getattr(filters_obj, "search_mode", "hybrid")
 
+        # Detect compound query and expand to sub-queries
+        import re
+        sub_queries = [question.strip()]
+        q_lower = question.lower()
+        
+        compound_pairs = [
+            ("frontend", "backend"),
+            ("technology", "architecture"),
+            ("nginx", "ssl"),
+            ("tech", "architecture"),
+        ]
+        
+        for entity1, entity2 in compound_pairs:
+            if entity1 in q_lower and entity2 in q_lower:
+                sq1 = re.sub(rf"\b{entity2}\b", "", question, flags=re.IGNORECASE)
+                sq1 = re.sub(r"\b(and|or|\&)\b", "", sq1, flags=re.IGNORECASE)
+                sq1 = re.sub(r"\s+", " ", sq1).strip()
+                
+                sq2 = re.sub(rf"\b{entity1}\b", "", question, flags=re.IGNORECASE)
+                sq2 = re.sub(r"\b(and|or|\&)\b", "", sq2, flags=re.IGNORECASE)
+                sq2 = re.sub(r"\s+", " ", sq2).strip()
+                
+                if sq1 and sq1 != question.strip():
+                    sub_queries.append(sq1)
+                if sq2 and sq2 != question.strip():
+                    sub_queries.append(sq2)
+                logger.info("[RETRIEVER COMPOUND DETECTED] Expanded query %r into sub-queries: %r", question, sub_queries)
+                break
+
         embed_start = time.monotonic()
-        query_embedding = await self.client.embed(question.strip())
+        embed_tasks = [self.client.embed(sq) for sq in sub_queries]
+        embeddings = await asyncio.gather(*embed_tasks)
         embed_time_ms = int((time.monotonic() - embed_start) * 1000)
 
         retrieval_search_start = time.monotonic()
 
         if mode == "fulltext":
-            ft_hits = await search_fulltext(self.session, question.strip(), top_k=candidate_top_k, filters=filters_obj)
-            candidate_results = rank_results(ft_hits, 0.0)[:candidate_top_k]
-            hits = ft_hits
+            ft_tasks = [search_fulltext(self.session, sq, top_k=candidate_top_k, filters=filters_obj) for sq in sub_queries]
+            ft_results = await asyncio.gather(*ft_tasks, return_exceptions=True)
+            
+            clean_ft_hits = []
+            seen_ft = set()
+            for sublist in ft_results:
+                if isinstance(sublist, list):
+                    for hit in sublist:
+                        if hit.chunk_id not in seen_ft:
+                            seen_ft.add(hit.chunk_id)
+                            clean_ft_hits.append(hit)
+                            
+            candidate_results = rank_results(clean_ft_hits, 0.0)[:candidate_top_k]
+            hits = clean_ft_hits
         elif mode == "semantic":
-            hits = await search_similar(
-                self.session,
-                query_embedding,
-                model_name=self.model_name,
-                top_k=candidate_top_k,
-                filters=filters_obj,
-            )
-            candidate_results = rank_results(hits, effective_threshold)[:candidate_top_k]
+            sem_tasks = [
+                search_similar(
+                    self.session,
+                    emb,
+                    model_name=self.model_name,
+                    top_k=candidate_top_k,
+                    filters=filters_obj,
+                )
+                for emb in embeddings
+            ]
+            sem_results = await asyncio.gather(*sem_tasks, return_exceptions=True)
+            
+            clean_sem_hits = []
+            seen_sem = set()
+            for sublist in sem_results:
+                if isinstance(sublist, list):
+                    for hit in sublist:
+                        if hit.chunk_id not in seen_sem:
+                            seen_sem.add(hit.chunk_id)
+                            clean_sem_hits.append(hit)
+                            
+            candidate_results = rank_results(clean_sem_hits, effective_threshold)[:candidate_top_k]
+            hits = clean_sem_hits
         else:
-            sem_task = search_similar(
-                self.session,
-                query_embedding,
-                model_name=self.model_name,
-                top_k=candidate_top_k,
-                filters=filters_obj,
+            sem_tasks = [
+                search_similar(
+                    self.session,
+                    emb,
+                    model_name=self.model_name,
+                    top_k=candidate_top_k,
+                    filters=filters_obj,
+                )
+                for emb in embeddings
+            ]
+            ft_tasks = [search_fulltext(self.session, sq, top_k=candidate_top_k, filters=filters_obj) for sq in sub_queries]
+            
+            sem_results, ft_results = await asyncio.gather(
+                asyncio.gather(*sem_tasks, return_exceptions=True),
+                asyncio.gather(*ft_tasks, return_exceptions=True)
             )
-            ft_task = search_fulltext(self.session, question.strip(), top_k=candidate_top_k, filters=filters_obj)
-            sem_hits, ft_hits = await asyncio.gather(sem_task, ft_task, return_exceptions=True)
-
-            clean_sem_hits: list[SearchHit] = sem_hits if isinstance(sem_hits, list) else []
-            clean_ft_hits: list[SearchHit] = ft_hits if isinstance(ft_hits, list) else []
+            
+            clean_sem_hits = []
+            seen_sem = set()
+            for sublist in sem_results:
+                if isinstance(sublist, list):
+                    for hit in sublist:
+                        if hit.chunk_id not in seen_sem:
+                            seen_sem.add(hit.chunk_id)
+                            clean_sem_hits.append(hit)
+                            
+            clean_ft_hits = []
+            seen_ft = set()
+            for sublist in ft_results:
+                if isinstance(sublist, list):
+                    for hit in sublist:
+                        if hit.chunk_id not in seen_ft:
+                            seen_ft.add(hit.chunk_id)
+                            clean_ft_hits.append(hit)
 
             hits = clean_sem_hits + clean_ft_hits
             candidate_results = rank_hybrid_rrf(clean_sem_hits, clean_ft_hits, similarity_threshold=effective_threshold)[:candidate_top_k]

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Menu, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useChat, useConversationMessages, chatKeys } from '@/features/chat/hooks/useChat'
@@ -52,6 +52,7 @@ export function ChatPage() {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [, setOverlayVersion] = useState(0)
   const queryClient = useQueryClient()
+  const isSubmittingRef = useRef(false)
 
   useEffect(() => {
     const listener = () => setOverlayVersion((v) => v + 1)
@@ -159,7 +160,8 @@ export function ChatPage() {
 
   const handleSend = async (content: string) => {
     const keyAtStart = activeSessionId ?? DRAFT_CONVERSATION_KEY
-    if (chatRequestStore.isSending(keyAtStart)) return
+    if (chatRequestStore.isSending(keyAtStart) || isSubmittingRef.current) return
+    isSubmittingRef.current = true
 
     setErrorForActive(null)
 
@@ -280,6 +282,8 @@ export function ChatPage() {
         messages: withoutTemp,
         errorMessage: { text, lastContent: content },
       })
+    } finally {
+      isSubmittingRef.current = false
     }
   }
 

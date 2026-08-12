@@ -13,7 +13,7 @@ CHUNK_TEMPLATE = (
 USER_PROMPT_WITH_CONTEXT = (
     "Use the following document excerpts to answer the question. "
     "If the excerpts do not contain enough information, say so.\n"
-    "Respond directly with the final answer. Do NOT explain your reasoning, do NOT summarize the chunks, and do NOT use conversational filler.\n\n"
+    "Return only the final answer to the user. Never output your reasoning or analysis.\n\n"
     "{context_header}\n\n"
     "{context}\n\n"
     "{question_header}\n"
@@ -88,6 +88,8 @@ def format_user_prompt(
         base = USER_PROMPT_WITH_CONTEXT.format(
             question=question,
             context=context.strip(),
+            context_header="Retrieved Document Context",
+            question_header="Question:",
         )
     else:
         base = USER_PROMPT_WITHOUT_CONTEXT.format(question=question)

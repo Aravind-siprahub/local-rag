@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.models.document_chunk import DocumentChunk
 from app.models.embedding import Embedding
-from app.models.enums import DocumentStatus
+from app.models.enums import DocumentStatus, ProcessingJobType
 from app.schemas.actions import SetCurrentVersionRequest
 from app.schemas.document import DocumentCreate, DocumentListResponse, DocumentResponse, DocumentUpdate
 from app.schemas.upload import DocumentUploadResponse
@@ -21,6 +21,9 @@ from app.services.document_service import DocumentService
 from app.services.document_upload_service import DocumentUploadService
 from app.services.document_version_service import DocumentVersionService
 from app.services.ingestion_service import IngestionService
+from app.services.processing_job_service import ProcessingJobService
+from app.processing.processor import DocumentProcessor
+from app.embeddings.worker import EmbeddingWorker
 from app.storage.s3_storage_service import S3StorageService
 from app.storage.supabase_storage_service import SupabaseStorageService
 from app.core.config import get_settings
@@ -31,16 +34,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
 
-async def _run_ingestion_background(document_id: uuid.UUID) -> None:
+async def _run_ingestion_background(document_id: uuid.UUID, parse_job_id: uuid.UUID | None = None) -> None:
     """Async wrapper for background execution of document ingestion."""
     async with AsyncSessionLocal() as session:
         try:
-            ingestion = IngestionService(session)
-            await ingestion.run_pipeline(document_id)
+            doc_service = DocumentService(session)
+            document = await doc_service.get(document_id)
+            if not document:
+                return
+            
+            version_id = document.current_version_id
+            if version_id is None:
+                logger.error("Document %s has no current version.", document_id)
+                return
+
+            if not parse_job_id:
+                job_service = ProcessingJobService(session)
+                all_jobs = await job_service.list_by_document_version(version_id)
+                active_jobs = [j for j in all_jobs if getattr(j.status, "value", str(j.status)) in ("pending", "running")]
+                job = active_jobs[-1] if active_jobs else (all_jobs[-1] if all_jobs else None)
+                if not job or getattr(job.job_type, "value", str(job.job_type)) != "parse":
+                    job = await job_service.create_job(document_version_id=version_id, job_type=ProcessingJobType.PARSE)
+                parse_job_id = job.id
+
+            processor = DocumentProcessor(session)
+            await processor.process_job(parse_job_id)
+
+            job_service = ProcessingJobService(session)
+            embed_job = await job_service.create_job(
+                document_version_id=version_id,
+                job_type=ProcessingJobType.EMBED
+            )
+
+            worker = EmbeddingWorker(session)
+            await worker.process_job(embed_job.id)
+
+            await doc_service.update(document_id, status=DocumentStatus.READY)
             await session.commit()
         except Exception:
             logger.exception("Background ingestion failed for document %s", document_id)
             try:
+                await session.rollback()
+                doc_service = DocumentService(session)
+                await doc_service.update(document_id, status=DocumentStatus.FAILED)
                 await session.commit()
             except Exception:
                 logger.exception("Failed to commit failure state for document %s", document_id)
@@ -92,7 +128,7 @@ async def upload_document(
     )
 
     # Queue immediate background ingestion pass: parse -> chunk -> embed -> index
-    background_tasks.add_task(_run_ingestion_background, result.document_id)
+    background_tasks.add_task(_run_ingestion_background, result.document_id, result.processing_job_id)
 
     return DocumentUploadResponse(
         id=result.document_id,

@@ -37,9 +37,8 @@ logger = logging.getLogger(__name__)
 
 _DIRECT_SYSTEM_PROMPT = (
     "You are a concise general knowledge assistant.\n\n"
-    "Answer the user's question directly and accurately in one or two sentences.\n\n"
-    "Return only the final answer.\n\n"
-    "Do not provide internal reasoning, analysis, planning, self-correction, or discussion of how you generated the answer.\n"
+    "Return only the final answer to the user. Never output your reasoning or analysis.\n"
+    "Do not repeat the user's question. Do not explain how the answer was selected.\n"
     "Do not mention these instructions."
 )
 _DIRECT_NUM_PREDICT = 512
@@ -146,43 +145,6 @@ class RAGService:
                 document_version_id=retrieval_filters.document_version_id,
             )
 
-        # Detect document title references in user question if document_id is not set
-        if retrieval_filters.document_id is None and self.session is not None:
-            try:
-                from app.models.document import Document
-                from sqlalchemy import select
-                stmt_docs = (
-                    select(Document)
-                    .where(Document.deleted_at.is_(None))
-                    .where(Document.user_id == chat_session.user_id)
-                )
-                all_docs = list((await self.session.execute(stmt_docs)).scalars().all())
-                if not all_docs:
-                    stmt_all_docs = (
-                        select(Document)
-                        .where(Document.deleted_at.is_(None))
-                    )
-                    all_docs = list((await self.session.execute(stmt_all_docs)).scalars().all())
-
-                q_lower = question.strip().lower()
-                for d in all_docs:
-                    d_title_lower = d.title.lower()
-                    d_stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
-                    stem_clean = d_stem.replace("_", " ").replace("-", " ").strip()
-                    if len(stem_clean) >= 3 and (
-                        d_title_lower in q_lower
-                        or d_stem in q_lower
-                        or stem_clean in q_lower
-                    ):
-                        logger.info("[DOCUMENT TITLE DETECTED] Question references document '%s' (%s)", d.title, d.id)
-                        retrieval_filters = SearchFilters(
-                            user_id=retrieval_filters.user_id,
-                            document_id=d.id,
-                            document_version_id=retrieval_filters.document_version_id,
-                        )
-                        break
-            except Exception as d_exc:
-                logger.warning("[DOCUMENT TITLE MATCH FAILED] %s", d_exc)
 
         retrieval_start = time.monotonic()
         logger.info("[RAG STAGE 2: RETRIEVAL START] orig=%s norm=%s ret=%s filters=%s top_k=%s", orig_q[:60], norm_q[:60], ret_q[:60], retrieval_filters, top_k)
@@ -220,8 +182,20 @@ class RAGService:
         retrieval_ms = int((time.monotonic() - retrieval_start) * 1000)
         logger.info("[RETRIEVAL FINISHED] retrieval_ms=%d hits=%d", retrieval_ms, len(retrieved_chunks))
 
+        # NOTE: Do NOT re-apply similarity_threshold here. The retriever already filtered by
+        # cosine similarity and the reranker then re-scored using cross-encoder (different scale).
+        # Applying a cosine threshold to cross-encoder scores silently drops valid chunks.
+        settings = get_settings()
+        seen_keys: set[uuid.UUID] = set()
+        deduped_chunks = []
+        for c in retrieved_chunks:
+            if c.chunk_id not in seen_keys:
+                seen_keys.add(c.chunk_id)
+                deduped_chunks.append(c)
+                if len(deduped_chunks) >= getattr(settings, "FINAL_CONTEXT", 3):
+                    break
         # Relevance Gate: If zero chunks pass similarity threshold
-        if not retrieved_chunks:
+        if not deduped_chunks:
             total_ms = int((time.monotonic() - start_mono) * 1000)
             fallback_answer = "I could not find this information in your uploaded documents."
             logger.warning("[NO RELEVANT DOCUMENTS FOUND] 0 chunks passed relevance gate. Returning fallback response.")
@@ -266,13 +240,24 @@ class RAGService:
         prompt_start = time.monotonic()
         prompt = self.prompt_builder.build(
             question.strip(),
-            retrieved_chunks,
+            deduped_chunks,
         )
         context_ms = int((time.monotonic() - prompt_start) * 1000)
 
-        top_sim = retrieved_chunks[0].similarity_score if retrieved_chunks else 0.0
+        logger.info("=== RETRIEVED CHUNKS START ===")
+        for idx, c in enumerate(deduped_chunks, 1):
+            logger.info(
+                "[RAG RETRIEVED CHUNK] index=%d chunk_id=%s document_id=%s doc_title=%r section=%r score=%.4f full_text=%r",
+                idx, str(c.chunk_id), str(c.document_id), getattr(c, 'document_title', '?'), getattr(c, 'section_title', '?'),
+                c.similarity_score, c.chunk_text
+            )
+        logger.info("=== RETRIEVED CHUNKS END ===")
+        
+        logger.info("=== FINAL LLM CONTEXT START ===")
+        logger.info("[RAG FINAL LLM CONTEXT]\nSYSTEM_PROMPT:\n%s\nUSER_PROMPT:\n%s", prompt.system_prompt, prompt.user_prompt)
+        logger.info("=== FINAL LLM CONTEXT END ===")
 
-        settings = get_settings()
+        top_sim = deduped_chunks[0].similarity_score if deduped_chunks else 0.0
         num_predict = settings.OLLAMA_NUM_PREDICT
 
         llm_start = time.monotonic()
@@ -334,7 +319,7 @@ class RAGService:
             context_ms=context_ms,
             llm_ms=llm_ms,
             total_ms=total_ms,
-            chunks_retrieved=len(retrieved_chunks),
+            chunks_retrieved=len(deduped_chunks),
             top_similarity=top_sim,
             status="SUCCESS",
             error_type=None,
@@ -457,18 +442,14 @@ class RAGService:
             if fallback_chunks:
                 retrieved_chunks = fallback_chunks
 
+        # NOTE: Do NOT re-apply cosine similarity_threshold to cross-encoder-reranked scores.
+        # The reranker already selected and re-scored the best candidates; scores are not cosine values.
         settings = get_settings()
-        effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
-        valid_stream_chunks = [
-            c for c in retrieved_chunks
-            if c.similarity_score >= effective_threshold
-        ]
-        seen_keys: set[tuple[uuid.UUID, Any, Any]] = set()
+        seen_keys: set[uuid.UUID] = set()
         deduped_chunks = []
-        for c in valid_stream_chunks:
-            key = (c.document_id, getattr(c, "page_number", None), getattr(c, "section_title", None))
-            if key not in seen_keys:
-                seen_keys.add(key)
+        for c in retrieved_chunks:
+            if c.chunk_id not in seen_keys:
+                seen_keys.add(c.chunk_id)
                 deduped_chunks.append(c)
                 if len(deduped_chunks) >= getattr(settings, "FINAL_CONTEXT", 3):
                     break
@@ -488,8 +469,8 @@ class RAGService:
 
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
 
-        if not retrieved_chunks:
-            fallback_ans = "Information not found in document excerpts."
+        if not deduped_chunks:
+            fallback_ans = "I could not find this information in your uploaded documents."
             total_ms = int((time.monotonic() - start_mono) * 1000)
             assistant_msg = await self.messages.create_message(
                 session_id=session_id,
@@ -504,25 +485,42 @@ class RAGService:
 
         prompt = self.prompt_builder.build(
             question.strip(),
-            retrieved_chunks,
+            deduped_chunks,
         )
+
+        logger.info("=== RETRIEVED CHUNKS START ===")
+        for idx, c in enumerate(deduped_chunks, 1):
+            logger.info(
+                "[RAG RETRIEVED CHUNK] index=%d chunk_id=%s document_id=%s doc_title=%r section=%r score=%.4f full_text=%r",
+                idx, str(c.chunk_id), str(c.document_id), getattr(c, 'document_title', '?'), getattr(c, 'section_title', '?'),
+                c.similarity_score, c.chunk_text
+            )
+        logger.info("=== RETRIEVED CHUNKS END ===")
+        
+        logger.info("=== FINAL LLM CONTEXT START ===")
+        logger.info("[RAG FINAL LLM CONTEXT]\nSYSTEM_PROMPT:\n%s\nUSER_PROMPT:\n%s", prompt.system_prompt, prompt.user_prompt)
+        logger.info("=== FINAL LLM CONTEXT END ===")
 
         full_answer_chunks: list[str] = []
         try:
             if hasattr(self.llm_client, "generate_stream"):
+                # Buffer ALL tokens first — do NOT stream raw tokens to client.
+                # The model may emit chain-of-thought ("Passage 1 mentions...",
+                # "Wait...") that must be sanitized before the user sees it.
                 async for token in self.llm_client.generate_stream(prompt.system_prompt, prompt.user_prompt):
                     full_answer_chunks.append(token)
-                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
             else:
                 resp = await self.llm_client.generate(prompt.system_prompt, prompt.user_prompt)
                 safe = sanitize_response(resp.answer)
                 full_answer_chunks.append(safe)
-                yield f"data: {json.dumps({'type': 'token', 'content': safe})}\n\n"
         except Exception as exc:
             logger.error("Streaming error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
 
-        full_answer = sanitize_response("".join(full_answer_chunks).strip()) or "Information not found in document excerpts."
+        full_answer = sanitize_response("".join(full_answer_chunks).strip()) or "I could not find this information in your uploaded documents."
+
+        # Now emit the clean, sanitized answer as a single token
+        yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
         total_ms = int((time.monotonic() - start_mono) * 1000)
 
         assistant_message = await self.messages.create_message(
@@ -579,15 +577,15 @@ class RAGService:
                 start_mono=start_mono,
                 question=question,
             )
-        elif route == Route.WEB:
-            res = await self._ask_web(
+        elif route == Route.CALCULATOR:
+            res = await self._ask_calculator(
                 session_id=session_id,
                 question=question,
                 user_message_id=user_message_id,
                 start_mono=start_mono,
             )
-        elif route == Route.CALCULATOR:
-            res = await self._ask_calculator(
+        elif route == Route.GENERAL_KNOWLEDGE:
+            res = await self._ask_web(
                 session_id=session_id,
                 question=question,
                 user_message_id=user_message_id,
@@ -603,6 +601,12 @@ class RAGService:
             )
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
+        status = "SUCCESS"
+        error_type = None
+        if res.model.startswith("web-search:error:"):
+            status = "ERROR"
+            error_type = res.model.split(":", 2)[2]
+            
         self._log_structured_trace(
             request_id=request_id or str(uuid.uuid4()),
             user_hash=user_hash or "anonymous",
@@ -616,8 +620,8 @@ class RAGService:
             total_ms=total_ms,
             chunks_retrieved=0,
             top_similarity=0.0,
-            status="SUCCESS",
-            error_type=None,
+            status=status,
+            error_type=error_type,
         )
         return res
 
@@ -706,6 +710,7 @@ class RAGService:
             "normalized_query": norm_q[:100],
             "intent": route.value,
             "route": route.value,
+            "provider": "duckduckgo" if route == Route.GENERAL_KNOWLEDGE else "none",
             "embedding_ms": 0,
             "retrieval_ms": retrieval_ms,
             "context_ms": context_ms,
@@ -780,24 +785,95 @@ class RAGService:
         user_message_id: uuid.UUID,
         start_mono: float,
     ) -> RAGResponse:
+        """Search the web and synthesize a clean answer using the LLM."""
+        provider_name = "duckduckgo"
+        logger.info("[WEB SEARCH START] provider=%s query=%r", provider_name, question)
         try:
             result = await self.web_search.search(question)
-            answer_text = result.concise_answer()
+            total_ms = int((time.monotonic() - start_mono) * 1000)
+            if result.hits:
+                logger.info("[WEB SEARCH SUCCESS] provider=%s query=%r hits_count=%d latency_ms=%d", provider_name, question, len(result.hits), total_ms)
+                # Build a concise context from top web snippets
+                snippets = "\n".join(
+                    f"- {h.snippet}" for h in result.hits[:5] if h.snippet.strip()
+                )
+                web_system_prompt = (
+                    "You are a concise assistant. Based ONLY on the web search results below, "
+                    "answer the user's question directly in 1–3 sentences.\n\n"
+                    "CRITICAL RULES:\n"
+                    "1. Return ONLY the final direct answer inside a JSON object with the format: {\"answer\": \"final answer only\"}.\n"
+                    "2. Do not include reasoning, chain of thought, or meta-commentary inside or outside the JSON.\n"
+                    "3. Do not describe the search results or say things like 'Looking at the search results...'.\n"
+                    "4. Do not repeat the user's question.\n"
+                    "5. Do not include phrases like 'I need to', 'I shouldn't', 'The answer is', or 'Based on the results...' inside the answer field."
+                )
+                web_user_prompt = (
+                    f"Web search results for '{question}':\n{snippets}\n\n"
+                    f"Question: {question}\n"
+                    "Provide a valid JSON response with the final answer as detailed in the rules. JSON:"
+                )
+                try:
+                    llm_resp = await self.llm_client.generate(
+                        web_system_prompt,
+                        web_user_prompt,
+                        num_predict=256,
+                        response_format="json",
+                        temperature=0.0,
+                    )
+                    raw_text = llm_resp.answer.strip()
+                    logger.info("[WEB SEARCH LLM RAW RESPONSE] %r", raw_text)
+                    
+                    # Robust JSON extraction
+                    start_idx = raw_text.find("{")
+                    end_idx = raw_text.rfind("}")
+                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                        json_str = raw_text[start_idx:end_idx + 1]
+                    else:
+                        json_str = raw_text
+
+                    try:
+                        parsed = json.loads(json_str)
+                        ans = parsed.get("answer", "").strip()
+                        answer_text = sanitize_response(ans).strip()
+                    except (json.JSONDecodeError, ValueError) as json_err:
+                        logger.warning("[WEB SEARCH JSON PARSE FAILURE] Could not parse JSON response, falling back to sanitization: %s", json_err)
+                        answer_text = sanitize_response(raw_text).strip()
+                        
+                    if not answer_text:
+                        answer_text = result.concise_answer()
+                except Exception as llm_exc:
+                    logger.error("[WEB SEARCH LLM ERROR] failed to generate answer using LLM: %s", llm_exc, exc_info=True)
+                    answer_text = result.concise_answer()
+            else:
+                logger.warning("[WEB SEARCH EMPTY] provider=%s query=%r empty results", provider_name, question)
+                answer_text = "I could not find reliable web results for that question right now."
+                raise WebSearchError("Web search yielded no results. Please try again.")
+            
             model_name = f"web-search:{result.provider}"
+
         except WebSearchError as exc:
-            logger.error("[AI ROUTER] web search error: %s", exc, exc_info=True)
-            answer_text = (
-                "I could not find reliable web results for that question right now. "
-                "Please try again shortly."
-            )
-            model_name = "web-search:error"
+            msg = str(exc)
+            if "timeout" in msg.lower():
+                error_type = "timeout"
+                answer_text = "Web search timed out. Please try again shortly."
+            elif "no results" in msg.lower() or "yielded no results" in msg.lower():
+                error_type = "empty_results"
+                answer_text = "I could not find reliable web results for that question right now."
+            elif "unavailable" in msg.lower():
+                error_type = "provider_unavailable"
+                answer_text = "Web search is temporarily unavailable. Please try again shortly."
+            else:
+                error_type = "search_failed"
+                answer_text = "Web search failed. Please try again shortly."
+                
+            logger.error("[WEB SEARCH FAILURE] provider=%s query=%r error_type=%s reason=%r", provider_name, question, error_type, msg)
+            model_name = f"web-search:error:{error_type}"
+
         except Exception as exc:
-            logger.error("[AI ROUTER] unexpected web search exception: %s", exc, exc_info=True)
-            answer_text = (
-                "I could not find reliable web results for that question right now. "
-                "Please try again shortly."
-            )
-            model_name = "web-search:error"
+            error_type = "unexpected_error"
+            logger.error("[WEB SEARCH FAILURE] provider=%s query=%r error_type=%s reason=%r", provider_name, question, error_type, str(exc), exc_info=True)
+            answer_text = "An unexpected error occurred during web search."
+            model_name = f"web-search:error:{error_type}"
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
         assistant_message = await self.messages.create_message(
