@@ -227,7 +227,7 @@ def create_app() -> FastAPI:
     )
 
     register_exception_handlers(app)
-    # Primary mount: direct clients may call /api/* (CORS fallback).
+    # Primary mount: frontend VITE_API_BASE_URL=http://localhost:8000/api
     app.include_router(api_router, prefix="/api")
     # Root mount: Vite proxy rewrite strips /api → /health, /users, etc.
     app.include_router(api_router)

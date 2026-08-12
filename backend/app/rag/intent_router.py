@@ -342,6 +342,14 @@ def classify(
 ) -> Route:
     """Return the route for ``question`` using lightweight deterministic rules.
 
+def classify(
+    question: str,
+    *,
+    document_titles: Sequence[str] | None = None,
+    context_texts: Sequence[str] | None = None,
+) -> Route:
+    """Return the route for ``question`` using lightweight deterministic rules.
+
     Optional ``document_titles`` / ``context_texts`` enable corpus-aware routing
     for project questions without hard-coding brand names into GENERAL→RAG.
     """

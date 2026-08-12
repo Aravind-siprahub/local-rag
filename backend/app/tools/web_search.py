@@ -179,65 +179,17 @@ class DuckDuckGoWebSearchProvider:
             response = await client.get("https://api.duckduckgo.com/", params=params)
             response.raise_for_status()
             payload = response.json()
-            hits = _hits_from_duckduckgo(payload)
+        except httpx.TimeoutException as exc:
+            logger.warning("[WEB SEARCH] duckduckgo timeout")
+            raise WebSearchError("Web search timed out. Please try again.") from exc
+        except httpx.HTTPError as exc:
+            logger.warning("[WEB SEARCH] duckduckgo http error")
+            raise WebSearchError("Web search is temporarily unavailable.") from exc
         except Exception as exc:
-            logger.warning("[WEB SEARCH] duckduckgo instant answer API failed: %s", exc)
+            logger.exception("[WEB SEARCH] duckduckgo unexpected error")
+            raise WebSearchError("Web search failed.") from exc
 
-        # HTML Scraping Fallback if API returned no hits
-        if not hits:
-            logger.info("[WEB SEARCH] instant answer returned 0 hits, trying HTML fallback...")
-            debug_info = []
-            try:
-                headers = {
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    ),
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.5",
-                }
-                # Create a fresh client just for the fallback to ensure redirect options & headers are clean
-                async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=10.0) as client:
-                    debug_info.append("Sending POST to https://html.duckduckgo.com/html/")
-                    response = await client.post(
-                        "https://html.duckduckgo.com/html/",
-                        data={"q": q}
-                    )
-                    debug_info.append(f"Response status: {response.status_code}")
-                    if response.status_code == 200:
-                        parser = DuckDuckGoHTMLParser()
-                        parser.feed(response.text)
-                        debug_info.append(f"Found {len(parser.hits)} parsed result hits")
-                        for hit in parser.hits:
-                            hits.append(hit)
-                                
-                        # Backup: if result divs are not structured, grab snippets directly
-                        if not hits:
-                            b_parser = BackupSnippetParser()
-                            b_parser.feed(response.text)
-                            debug_info.append(f"Found {len(b_parser.snippets)} result__snippet tags in backup")
-                            for snippet in b_parser.snippets:
-                                hits.append(WebSearchHit(title="Search Result", url="", snippet=snippet))
-                        debug_info.append(f"Parsed {len(hits)} hits")
-                    else:
-                        debug_info.append(f"Response body preview: {response.text[:500]}")
-            except Exception as exc:
-                logger.warning("[WEB SEARCH] duckduckgo HTML fallback failed: %s", exc)
-                debug_info.append(f"Exception: {str(exc)}")
-            
-            # Write to a debug file so we can view it directly
-            import os
-            try:
-                os.makedirs("scratch", exist_ok=True)
-                with open("scratch/search_debug.log", "w", encoding="utf-8") as f:
-                    f.write("\n".join(debug_info))
-            except Exception as f_exc:
-                logger.error("Failed to write search debug log: %s", f_exc)
-
-        if not hits:
-            raise WebSearchError("Web search yielded no results. Please try again.")
-
+        hits = _hits_from_duckduckgo(payload)
         return WebSearchResult(query=q, hits=hits, provider="duckduckgo")
 
     async def _get_client(self) -> httpx.AsyncClient:

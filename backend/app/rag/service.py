@@ -145,6 +145,43 @@ class RAGService:
                 document_version_id=retrieval_filters.document_version_id,
             )
 
+        # Detect document title references in user question if document_id is not set
+        if retrieval_filters.document_id is None and self.session is not None:
+            try:
+                from app.models.document import Document
+                from sqlalchemy import select
+                stmt_docs = (
+                    select(Document)
+                    .where(Document.deleted_at.is_(None))
+                    .where(Document.user_id == chat_session.user_id)
+                )
+                all_docs = list((await self.session.execute(stmt_docs)).scalars().all())
+                if not all_docs:
+                    stmt_all_docs = (
+                        select(Document)
+                        .where(Document.deleted_at.is_(None))
+                    )
+                    all_docs = list((await self.session.execute(stmt_all_docs)).scalars().all())
+
+                q_lower = question.strip().lower()
+                for d in all_docs:
+                    d_title_lower = d.title.lower()
+                    d_stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
+                    stem_clean = d_stem.replace("_", " ").replace("-", " ").strip()
+                    if len(stem_clean) >= 3 and (
+                        d_title_lower in q_lower
+                        or d_stem in q_lower
+                        or stem_clean in q_lower
+                    ):
+                        logger.info("[DOCUMENT TITLE DETECTED] Question references document '%s' (%s)", d.title, d.id)
+                        retrieval_filters = SearchFilters(
+                            user_id=retrieval_filters.user_id,
+                            document_id=d.id,
+                            document_version_id=retrieval_filters.document_version_id,
+                        )
+                        break
+            except Exception as d_exc:
+                logger.warning("[DOCUMENT TITLE MATCH FAILED] %s", d_exc)
 
         retrieval_start = time.monotonic()
         logger.info("[RAG STAGE 2: RETRIEVAL START] orig=%s norm=%s ret=%s filters=%s top_k=%s", orig_q[:60], norm_q[:60], ret_q[:60], retrieval_filters, top_k)
@@ -240,7 +277,7 @@ class RAGService:
         prompt_start = time.monotonic()
         prompt = self.prompt_builder.build(
             question.strip(),
-            deduped_chunks,
+            retrieved_chunks,
         )
         context_ms = int((time.monotonic() - prompt_start) * 1000)
 
@@ -257,7 +294,7 @@ class RAGService:
         logger.info("[RAG FINAL LLM CONTEXT]\nSYSTEM_PROMPT:\n%s\nUSER_PROMPT:\n%s", prompt.system_prompt, prompt.user_prompt)
         logger.info("=== FINAL LLM CONTEXT END ===")
 
-        top_sim = deduped_chunks[0].similarity_score if deduped_chunks else 0.0
+        settings = get_settings()
         num_predict = settings.OLLAMA_NUM_PREDICT
 
         llm_start = time.monotonic()
@@ -485,7 +522,7 @@ class RAGService:
 
         prompt = self.prompt_builder.build(
             question.strip(),
-            deduped_chunks,
+            retrieved_chunks,
         )
 
         logger.info("=== RETRIEVED CHUNKS START ===")

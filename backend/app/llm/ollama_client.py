@@ -106,8 +106,6 @@ class OllamaLLMClient:
         user_prompt: str,
         *,
         num_predict: int | None = None,
-        response_format: str | None = None,
-        temperature: float | None = None,
     ) -> LLMResponse:
         """Generate a completion from system and user prompts."""
         if not user_prompt or not user_prompt.strip():
@@ -115,14 +113,24 @@ class OllamaLLMClient:
         if not system_prompt or not system_prompt.strip():
             raise LLMClientError("system_prompt must not be empty.")
 
-        payload = self._build_payload(
-            system_prompt,
-            user_prompt,
-            stream=False,
-            num_predict=num_predict,
-            response_format=response_format,
-            temperature=temperature,
-        )
+        options = self._build_options(num_predict=num_predict)
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt.strip()},
+                {"role": "user", "content": user_prompt.strip()},
+            ],
+            "stream": stream,
+            "keep_alive": ka,
+            "options": options,
+        }
+        # qwen3 / thinking models often put the entire answer in `message.thinking`
+        # and leave `content` empty on long RAG prompts. Force non-thinking output.
+        from app.llm.sanitize import supports_think_parameter
+
+        if supports_think_parameter(self.model):
+            payload["think"] = False
+
 
         logger.info(
             "Ollama LLM request starting: model=%s execution=%s num_gpu=%s "

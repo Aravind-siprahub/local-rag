@@ -2,9 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
 
 import { getApiErrorMessage } from '@/api/client'
-import { uploadDocument, getDocument } from '@/services'
-import { getHealth } from '@/services/health.service'
-import { useCurrentUser } from '@/hooks'
+import { listUsers, uploadDocument } from '@/services'
 import type { RejectedFile, UploadQueueItem } from '@/types'
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024 // 25 MB

@@ -45,8 +45,7 @@ export function ChatInput({
     console.log("[1] ChatInput.handleSend()");
     console.log("Question:", input);
     const trimmed = input.trim()
-    if (!trimmed || cannotSend || isSendingRef.current) return
-    isSendingRef.current = true
+    if (!trimmed || cannotSend) return
     onSend(trimmed)
     setInput('')
     if (textareaRef.current) {
