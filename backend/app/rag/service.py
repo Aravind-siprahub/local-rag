@@ -49,7 +49,7 @@ class RAGError(Exception):
 
 
 class RAGService:
-    """End-to-end RAG pipeline: retrieve → prompt → generate → persist.
+    """End-to-end RAG pipeline: retrieve -> prompt -> generate -> persist.
 
     Independent of FastAPI — accepts plain strings and UUIDs. Uses existing
     services for chat messages and citations without modifying their
@@ -94,6 +94,7 @@ class RAGService:
         if not question or not question.strip():
             raise RAGError("Question must not be empty.")
 
+        top_sim = 0.0
         req_id = request_id or str(uuid.uuid4())
         chat_session = await self.sessions.get(session_id)
         user_hash = hashlib.sha256(str(chat_session.user_id).encode()).hexdigest()[:12]
@@ -116,6 +117,7 @@ class RAGService:
             question.strip(),
             document_titles=document_titles,
             context_texts=context_texts,
+            request_id=req_id,
         )
 
         logger.info(
@@ -231,6 +233,8 @@ class RAGService:
                 deduped_chunks.append(c)
                 if len(deduped_chunks) >= getattr(settings, "FINAL_CONTEXT", 3):
                     break
+
+        top_sim = deduped_chunks[0].similarity_score if deduped_chunks else 0.0
         # Relevance Gate: If zero chunks pass similarity threshold
         if not deduped_chunks:
             total_ms = int((time.monotonic() - start_mono) * 1000)
@@ -431,10 +435,12 @@ class RAGService:
             session_id=session_id,
             exclude_message_id=user_message.id,
         )
+        req_id = str(uuid.uuid4())
         route = classify(
             question.strip(),
             document_titles=document_titles,
             context_texts=context_texts,
+            request_id=req_id,
         )
 
         if route != Route.DOCUMENT_QA and route != Route.RAG:
@@ -444,6 +450,7 @@ class RAGService:
                 question=question.strip(),
                 user_message_id=user_message.id,
                 start_mono=start_mono,
+                request_id=req_id,
                 norm_q=norm_q,
             )
             yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
@@ -627,6 +634,7 @@ class RAGService:
                 question=question,
                 user_message_id=user_message_id,
                 start_mono=start_mono,
+                request_id=request_id,
             )
         else:
             res = await self._ask_direct(
@@ -821,15 +829,24 @@ class RAGService:
         question: str,
         user_message_id: uuid.UUID,
         start_mono: float,
+        request_id: str | None = None,
     ) -> RAGResponse:
         """Search the web and synthesize a clean answer using the LLM."""
-        provider_name = "duckduckgo"
-        logger.info("[WEB SEARCH START] provider=%s query=%r", provider_name, question)
+        provider_name = getattr(self.web_search, "provider", "duckduckgo")
+        req_id = request_id or "N/A"
         try:
-            result = await self.web_search.search(question)
+            result = await self.web_search.search(question, request_id=req_id)
             total_ms = int((time.monotonic() - start_mono) * 1000)
             if result.hits:
-                logger.info("[WEB SEARCH SUCCESS] provider=%s query=%r hits_count=%d latency_ms=%d", provider_name, question, len(result.hits), total_ms)
+                logger.info(
+                    "[WEB SEARCH SUCCESS] request_id=%s provider=%s query=%r hits_count=%d latency_ms=%d",
+                    req_id,
+                    result.provider,
+                    question,
+                    len(result.hits),
+                    total_ms,
+                )
+                logger.info("[WEB SEARCH LLM] request_id=%s result_count=%d", req_id, len(result.hits))
                 # Build a concise context from top web snippets
                 snippets = "\n".join(
                     f"- {h.snippet}" for h in result.hits[:5] if h.snippet.strip()
@@ -858,7 +875,7 @@ class RAGService:
                         temperature=0.0,
                     )
                     raw_text = llm_resp.answer.strip()
-                    logger.info("[WEB SEARCH LLM RAW RESPONSE] %r", raw_text)
+                    logger.info("[WEB SEARCH LLM RAW RESPONSE] request_id=%s %r", req_id, raw_text)
                     
                     # Robust JSON extraction
                     start_idx = raw_text.find("{")
@@ -873,16 +890,16 @@ class RAGService:
                         ans = parsed.get("answer", "").strip()
                         answer_text = sanitize_response(ans).strip()
                     except (json.JSONDecodeError, ValueError) as json_err:
-                        logger.warning("[WEB SEARCH JSON PARSE FAILURE] Could not parse JSON response, falling back to sanitization: %s", json_err)
+                        logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s Could not parse JSON response, falling back to sanitization: %s", req_id, json_err)
                         answer_text = sanitize_response(raw_text).strip()
                         
                     if not answer_text:
                         answer_text = result.concise_answer()
                 except Exception as llm_exc:
-                    logger.error("[WEB SEARCH LLM ERROR] failed to generate answer using LLM: %s", llm_exc, exc_info=True)
+                    logger.error("[WEB SEARCH LLM ERROR] request_id=%s failed to generate answer using LLM: %s", req_id, llm_exc, exc_info=True)
                     answer_text = result.concise_answer()
             else:
-                logger.warning("[WEB SEARCH EMPTY] provider=%s query=%r empty results", provider_name, question)
+                logger.warning("[WEB SEARCH EMPTY] request_id=%s provider=%s query=%r empty results", req_id, provider_name, question)
                 answer_text = "I could not find reliable web results for that question right now."
                 raise WebSearchError("Web search yielded no results. Please try again.")
             
@@ -896,19 +913,22 @@ class RAGService:
             elif "no results" in msg.lower() or "yielded no results" in msg.lower():
                 error_type = "empty_results"
                 answer_text = "I could not find reliable web results for that question right now."
-            elif "unavailable" in msg.lower():
+            elif "unavailable" in msg.lower() or "http" in msg.lower():
                 error_type = "provider_unavailable"
                 answer_text = "Web search is temporarily unavailable. Please try again shortly."
+            elif "parse" in msg.lower():
+                error_type = "parser_failure"
+                answer_text = "Web search failed to parse results. Please try again shortly."
             else:
                 error_type = "search_failed"
                 answer_text = "Web search failed. Please try again shortly."
                 
-            logger.error("[WEB SEARCH FAILURE] provider=%s query=%r error_type=%s reason=%r", provider_name, question, error_type, msg)
+            logger.error("[WEB SEARCH FAILURE] request_id=%s provider=%s query=%r error_type=%s reason=%r", req_id, provider_name, question, error_type, msg)
             model_name = f"web-search:error:{error_type}"
 
         except Exception as exc:
             error_type = "unexpected_error"
-            logger.error("[WEB SEARCH FAILURE] provider=%s query=%r error_type=%s reason=%r", provider_name, question, error_type, str(exc), exc_info=True)
+            logger.error("[WEB SEARCH FAILURE] request_id=%s provider=%s query=%r error_type=%s reason=%r", req_id, provider_name, question, str(exc), exc_info=True)
             answer_text = "An unexpected error occurred during web search."
             model_name = f"web-search:error:{error_type}"
 
@@ -1052,7 +1072,7 @@ class RAGService:
                 .where(Document.deleted_at.is_(None))
                 .where(Document.user_id == user_id)
             )
-            titles = [str(t) for t in (await self.session.execute(stmt)).scalars().all() if t]
+            titles = [t for t in (await self.session.execute(stmt)).scalars().all() if t]
         except Exception as exc:
             logger.warning("[ROUTING HINTS] failed to load document titles: %s", exc)
 

@@ -1,4 +1,4 @@
-"""End-to-end retrieval: embed question → search → rank."""
+"""End-to-end retrieval: embed question -> search -> rank."""
 from __future__ import annotations
 
 import logging

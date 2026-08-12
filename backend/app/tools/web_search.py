@@ -8,57 +8,57 @@ from typing import Protocol, runtime_checkable
 import httpx
 from html.parser import HTMLParser
 
+import time
+
 logger = logging.getLogger(__name__)
 
 class DuckDuckGoHTMLParser(HTMLParser):
     def __init__(self):
         super().__init__()
-        self.hits = []
-        self.in_result = False
-        self.in_title = False
-        self.in_snippet = False
-        self.current_title = []
-        self.current_url = ""
-        self.current_snippet = []
+        self.hits: list[WebSearchHit] = []
+        self._current_title: list[str] = []
+        self._current_snippet: list[str] = []
+        self._current_url: str = ""
+        self._in_title: bool = False
+        self._in_snippet: bool = False
 
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
         class_name = attrs_dict.get("class", "")
         classes = class_name.split() if class_name else []
-        
-        if tag == "div" and "result" in classes:
-            self.in_result = True
-            self.current_title = []
-            self.current_url = ""
-            self.current_snippet = []
-            
-        elif self.in_result:
-            if tag == "a" and "result__a" in classes:
-                self.in_title = True
-                self.current_url = attrs_dict.get("href", "")
-            elif tag == "a" and "result__snippet" in classes:
-                self.in_snippet = True
+
+        if tag == "a" and any(c in classes for c in ("result__a", "result__title", "large")):
+            self._in_title = True
+            href = attrs_dict.get("href", "")
+            if href:
+                self._current_url = href
+        elif any(c in classes for c in ("result__snippet", "result__body")):
+            self._in_snippet = True
 
     def handle_endtag(self, tag):
-        if tag == "div" and self.in_result:
-            title = "".join(self.current_title).strip()
-            snippet = "".join(self.current_snippet).strip()
+        if tag == "a" and self._in_title:
+            self._in_title = False
+        elif self._in_snippet:
+            self._in_snippet = False
+            title = "".join(self._current_title).strip()
+            snippet = "".join(self._current_snippet).strip()
             if snippet:
-                self.hits.append(WebSearchHit(
-                    title=title or "Search Result",
-                    url=self.current_url,
-                    snippet=snippet
-                ))
-            self.in_result = False
-        elif tag == "a":
-            self.in_title = False
-            self.in_snippet = False
+                self.hits.append(
+                    WebSearchHit(
+                        title=title or "Search Result",
+                        url=self._current_url,
+                        snippet=snippet,
+                    )
+                )
+            self._current_title = []
+            self._current_snippet = []
+            self._current_url = ""
 
     def handle_data(self, data):
-        if self.in_title:
-            self.current_title.append(data)
-        elif self.in_snippet:
-            self.current_snippet.append(data)
+        if self._in_title:
+            self._current_title.append(data)
+        elif self._in_snippet:
+            self._current_snippet.append(data)
 
 class BackupSnippetParser(HTMLParser):
     def __init__(self):
@@ -71,12 +71,12 @@ class BackupSnippetParser(HTMLParser):
         attrs_dict = dict(attrs)
         class_name = attrs_dict.get("class", "")
         classes = class_name.split() if class_name else []
-        if tag == "a" and "result__snippet" in classes:
+        if tag in ("a", "td", "div") and "result__snippet" in classes:
             self.in_snippet = True
             self.current_snippet = []
 
     def handle_endtag(self, tag):
-        if tag == "a" and self.in_snippet:
+        if self.in_snippet:
             text = "".join(self.current_snippet).strip()
             if text:
                 self.snippets.append(text)
@@ -123,16 +123,16 @@ class WebSearchResult:
 class WebSearchProvider(Protocol):
     """Vendor-agnostic web search contract."""
 
-    async def search(self, query: str) -> WebSearchResult: ...
+    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult: ...
 
 
 class StubWebSearchProvider:
     """Deterministic provider for tests and offline use — no network calls."""
 
-    async def search(self, query: str) -> WebSearchResult:
+    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
         q = (query or "").strip() or "empty"
-        logger.info("[WEB SEARCH] provider=stub query_len=%d", len(q))
-        return WebSearchResult(
+        logger.info("[WEB SEARCH START] provider=stub query=%r request_id=%s", q, request_id or "N/A")
+        result = WebSearchResult(
             query=q,
             provider="stub",
             hits=[
@@ -146,10 +146,12 @@ class StubWebSearchProvider:
                 )
             ],
         )
+        logger.info("[WEB SEARCH RESULT] provider=stub status=200 result_count=1 latency_ms=0 request_id=%s", request_id or "N/A")
+        return result
 
 
 class DuckDuckGoWebSearchProvider:
-    """DuckDuckGo Instant Answer API — no API key required."""
+    """DuckDuckGo Instant Answer API + HTML Search fallback — no API key required."""
 
     def __init__(
         self,
@@ -161,36 +163,112 @@ class DuckDuckGoWebSearchProvider:
         self._client = client
         self._owns_client = client is None
 
-    async def search(self, query: str) -> WebSearchResult:
+    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
         q = (query or "").strip().strip('"').strip("'").strip()
         if not q:
             raise WebSearchError("Search query must not be empty.")
 
-        logger.info("[WEB SEARCH] provider=duckduckgo query_len=%d", len(q))
-        params = {
-            "q": q,
-            "format": "json",
-            "no_html": "1",
-            "skip_disambig": "1",
-        }
-        hits = []
+        req_id = request_id or "N/A"
+        start_mono = time.monotonic()
+        logger.info("[WEB SEARCH START] provider=duckduckgo query=%r request_id=%s", q, req_id)
+
+        hits: list[WebSearchHit] = []
+        http_status: int | None = None
+
+        # 1. Try Instant Answer API (fast, structured)
         try:
             client = await self._get_client()
+            params = {
+                "q": q,
+                "format": "json",
+                "no_html": "1",
+                "skip_disambig": "1",
+            }
             response = await client.get("https://api.duckduckgo.com/", params=params)
-            response.raise_for_status()
-            payload = response.json()
-        except httpx.TimeoutException as exc:
-            logger.warning("[WEB SEARCH] duckduckgo timeout")
-            raise WebSearchError("Web search timed out. Please try again.") from exc
+            http_status = response.status_code
+            if response.status_code == 200:
+                payload = response.json()
+                hits = _hits_from_duckduckgo(payload)
+        except httpx.TimeoutException:
+            logger.warning("[WEB SEARCH] duckduckgo instant answer timeout")
         except httpx.HTTPError as exc:
-            logger.warning("[WEB SEARCH] duckduckgo http error")
-            raise WebSearchError("Web search is temporarily unavailable.") from exc
+            logger.warning("[WEB SEARCH] duckduckgo instant answer http error: %s", exc)
         except Exception as exc:
-            logger.exception("[WEB SEARCH] duckduckgo unexpected error")
-            raise WebSearchError("Web search failed.") from exc
+            logger.warning("[WEB SEARCH] duckduckgo instant answer unexpected error: %s", exc)
 
-        hits = _hits_from_duckduckgo(payload)
-        return WebSearchResult(query=q, hits=hits, provider="duckduckgo")
+        logger.info("[WEB SEARCH API RESULT] request_id=%s api_hits=%d", req_id, len(hits))
+
+        # 2. Fallback: HTML Scrape if Instant Answer returned 0 hits
+        if not hits:
+            logger.info("[WEB SEARCH FALLBACK START] request_id=%s url=https://html.duckduckgo.com/html/", req_id)
+            try:
+                client = await self._get_client()
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    )
+                }
+                response = await client.post(
+                    "https://html.duckduckgo.com/html/",
+                    data={"q": q},
+                    headers=headers,
+                )
+                http_status = response.status_code
+                if response.status_code == 200:
+                    parser = DuckDuckGoHTMLParser()
+                    parser.feed(response.text)
+                    hits = parser.hits
+                    if not hits:
+                        backup_parser = BackupSnippetParser()
+                        backup_parser.feed(response.text)
+                        hits = [
+                            WebSearchHit(title="Search Result", url="", snippet=snip)
+                            for snip in backup_parser.snippets
+                        ]
+                logger.info("[WEB SEARCH FALLBACK RESULT] request_id=%s status=%s parsed_count=%d", req_id, http_status, len(hits))
+            except httpx.TimeoutException as exc:
+                latency_ms = int((time.monotonic() - start_mono) * 1000)
+                logger.warning(
+                    "[WEB SEARCH RESULT] provider=duckduckgo status=%s result_count=0 latency_ms=%d request_id=%s",
+                    http_status or "timeout",
+                    latency_ms,
+                    req_id,
+                )
+                raise WebSearchError("Web search timed out. Please try again.") from exc
+            except httpx.HTTPError as exc:
+                latency_ms = int((time.monotonic() - start_mono) * 1000)
+                logger.warning(
+                    "[WEB SEARCH RESULT] provider=duckduckgo status=%s result_count=0 latency_ms=%d request_id=%s",
+                    http_status or "http_error",
+                    latency_ms,
+                    req_id,
+                )
+                raise WebSearchError("Web search is temporarily unavailable.") from exc
+            except Exception as exc:
+                latency_ms = int((time.monotonic() - start_mono) * 1000)
+                logger.exception(
+                    "[WEB SEARCH RESULT] provider=duckduckgo status=%s result_count=0 latency_ms=%d request_id=%s",
+                    http_status or "error",
+                    latency_ms,
+                    req_id,
+                )
+                raise WebSearchError("Web search failed.") from exc
+
+        latency_ms = int((time.monotonic() - start_mono) * 1000)
+        logger.info(
+            "[WEB SEARCH RESULT] provider=duckduckgo status=%s result_count=%d latency_ms=%d request_id=%s",
+            http_status if http_status is not None else 200,
+            len(hits),
+            latency_ms,
+            req_id,
+        )
+
+        if not hits:
+            raise WebSearchError("Web search yielded no results. Please try again.")
+
+        return WebSearchResult(query=q, hits=hits[:5], provider="duckduckgo")
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:

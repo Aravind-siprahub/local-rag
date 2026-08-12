@@ -33,7 +33,7 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
     operation_id="chat_ask",
     summary="Ask a question using RAG",
     description=(
-        "Runs retrieval → prompt building → LLM generation, persists the user "
+        "Runs retrieval -> prompt building -> LLM generation, persists the user "
         "and assistant messages, and stores citations for retrieved chunks.\n\n"
         "**Session id:** create one first via **POST /chat-sessions** (tag: "
         "Chat Sessions), then paste the returned `id` here. "
@@ -48,12 +48,18 @@ async def ask_chat(
     session_service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatResponse:
     import logging
+    import sys
+    import time
+    from app.tools.web_search import DuckDuckGoWebSearchProvider
     logger = logging.getLogger(__name__)
 
     request_id = x_request_id or str(uuid.uuid4())
     response.headers["X-Request-ID"] = request_id
 
-    logger.info("[CHAT REQUEST PAYLOAD] request_id=%s %s", request_id, payload.model_dump())
+    start_time = time.monotonic()
+    provider_module = sys.modules.get(DuckDuckGoWebSearchProvider.__module__)
+    module_file = getattr(provider_module, "__file__", "unknown")
+    logger.info('[CHAT START] request_id=%s query="%s" module_file="%s"', request_id, payload.question, module_file)
 
     filters = SearchFilters(
         document_id=payload.document_id,
@@ -77,23 +83,29 @@ async def ask_chat(
             similarity_threshold=payload.similarity_threshold,
             request_id=request_id,
         )
+        total_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info('[CHAT END] request_id=%s status=200 total_ms=%d', request_id, total_ms)
     except RAGError as exc:
-        logger.error("[CHAT RAG ERROR] request_id=%s %s", request_id, exc)
+        total_ms = int((time.monotonic() - start_time) * 1000)
+        logger.error("[CHAT END] request_id=%s status=400 total_ms=%d error=%s", request_id, total_ms, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except LLMTimeoutError as exc:
-        logger.error("[CHAT LLM TIMEOUT] request_id=%s %s", request_id, exc)
+        total_ms = int((time.monotonic() - start_time) * 1000)
+        logger.error("[CHAT END] request_id=%s status=504 total_ms=%d error=%s", request_id, total_ms, exc)
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="The AI model took too long to generate a response. Please try asking again.",
         ) from exc
     except LLMUnavailableError as exc:
-        logger.error("[CHAT LLM UNAVAILABLE] request_id=%s %s", request_id, exc)
+        total_ms = int((time.monotonic() - start_time) * 1000)
+        logger.error("[CHAT END] request_id=%s status=503 total_ms=%d error=%s", request_id, total_ms, exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Ollama model service unavailable: {exc.reason}",
         ) from exc
     except LLMClientError as exc:
-        logger.error("[CHAT LLM ERROR] request_id=%s %s", request_id, exc)
+        total_ms = int((time.monotonic() - start_time) * 1000)
+        logger.error("[CHAT END] request_id=%s status=502 total_ms=%d error=%s", request_id, total_ms, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"AI generation failed: {exc}",

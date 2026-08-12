@@ -164,9 +164,9 @@ class Settings(BaseSettings):
     def build_ollama_runtime_options(self, *, temperature: float | None = None) -> dict[str, Any]:
         """Ollama `/api/chat` `options` for temperature, GPU offload, and threads.
 
-        - `OLLAMA_USE_GPU=false` → `num_gpu=0` (force CPU; avoids CUDA OOM on small VRAM).
-        - `OLLAMA_USE_GPU=true` + `OLLAMA_NUM_GPU` set → pass that layer count.
-        - `OLLAMA_USE_GPU=true` + `OLLAMA_NUM_GPU` unset → omit `num_gpu` (Ollama default).
+        - `OLLAMA_USE_GPU=false` -> `num_gpu=0` (force CPU; avoids CUDA OOM on small VRAM).
+        - `OLLAMA_USE_GPU=true` + `OLLAMA_NUM_GPU` set -> pass that layer count.
+        - `OLLAMA_USE_GPU=true` + `OLLAMA_NUM_GPU` unset -> omit `num_gpu` (Ollama default).
         """
         options: dict[str, Any] = {
             "temperature": self.LLM_TEMPERATURE if temperature is None else temperature,

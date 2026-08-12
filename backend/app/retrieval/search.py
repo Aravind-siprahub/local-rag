@@ -1,6 +1,6 @@
 """Vector similarity search over pgvector embeddings.
 
-Retrieval-layer queries join embeddings → chunks → versions → documents so
+Retrieval-layer queries join embeddings -> chunks -> versions -> documents so
 filters can scope results by user, document, or version without modifying
 the existing `EmbeddingRepository`.
 """

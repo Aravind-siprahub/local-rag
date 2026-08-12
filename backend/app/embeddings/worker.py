@@ -34,7 +34,7 @@ class EmbeddingWorkerResult:
 class EmbeddingWorker:
     """Runs the embedding pipeline for a pending `embed` processing job.
 
-    Transitions document version: chunked → embedding → embedded.
+    Transitions document version: chunked -> embedding -> embedded.
     Uses existing services for persistence and job state management.
     Independent of chat and vector search retrieval.
     """

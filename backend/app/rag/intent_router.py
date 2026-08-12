@@ -339,22 +339,17 @@ def classify(
     *,
     document_titles: Sequence[str] | None = None,
     context_texts: Sequence[str] | None = None,
-) -> Route:
-    """Return the route for ``question`` using lightweight deterministic rules.
-
-def classify(
-    question: str,
-    *,
-    document_titles: Sequence[str] | None = None,
-    context_texts: Sequence[str] | None = None,
+    request_id: str | None = None,
 ) -> Route:
     """Return the route for ``question`` using lightweight deterministic rules.
 
     Optional ``document_titles`` / ``context_texts`` enable corpus-aware routing
-    for project questions without hard-coding brand names into GENERAL→RAG.
+    for project questions without hard-coding brand names into GENERAL->RAG.
     """
     text = (question or "").strip()
+    req_id = request_id or "N/A"
     if not text:
+        logger.info('[AI ROUTER] request_id="%s" question="" selected_intent="GENERIC_CHAT" selected_route="generic_chat"', req_id)
         return Route.GENERIC_CHAT
 
     from app.rag.query_normalizer import normalize_query
@@ -378,8 +373,15 @@ def classify(
     elif _is_calculator(text, lower):
         route = Route.CALCULATOR
     else:
-        # General questions (dates, current events, facts) → web search
+        # General questions (dates, current events, facts) -> web search
         route = Route.GENERAL_KNOWLEDGE
 
-    logger.info('[AI ROUTER] question="%s" norm="%s" route=%s', text[:200], lower[:200], route.value)
+    logger.info(
+        '[AI ROUTER] request_id="%s" query="%s" norm="%s" selected_intent="%s" selected_route="%s"',
+        req_id,
+        text[:200],
+        lower[:200],
+        route.name,
+        route.value,
+    )
     return route

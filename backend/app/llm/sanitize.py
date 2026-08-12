@@ -74,6 +74,19 @@ def supports_think_parameter(model: str | None) -> bool:
     return any(marker in lowered for marker in _THINK_MODEL_MARKERS)
 
 
+def is_reasoning_model(model: str | None) -> bool:
+    """Return True if the model is a reasoning/thinking model (e.g. qwen3, deepseek-r1, qwq, o1)."""
+    if not model:
+        return False
+    lowered = model.lower()
+    reasoning_markers = ("qwen3", "deepseek-r1", "qwq", "o1-", "o1/", "/o1", "thinking", "reasoning")
+    if any(marker in lowered for marker in reasoning_markers):
+        return True
+    if lowered == "o1":
+        return True
+    return False
+
+
 def detect_reasoning_leakage(text: str | None) -> bool:
     """Detect if unhandled internal thinking tags exist in output."""
     if not text or not isinstance(text, str) or not text.strip():

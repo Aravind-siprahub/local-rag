@@ -10,7 +10,7 @@ import os
 import sys
 import time
 from datetime import datetime
-import requests
+import httpx
 
 API_URL = os.getenv("API_URL", "http://localhost:8000/api/chat")
 BENCHMARK_PATH = os.path.join(os.path.dirname(__file__), "benchmark_dataset.json")
@@ -44,7 +44,7 @@ def run_evaluation():
     # 1. Verify API Connectivity
     health_url = API_URL.replace("/api/chat", "/api/health")
     try:
-        health_res = requests.get(health_url, timeout=5)
+        health_res = httpx.get(health_url, timeout=5)
         if health_res.status_code == 200:
             print(f"[HEALTH CHECK OK] API is live and responding: {health_res.json()}")
         else:
@@ -98,7 +98,7 @@ def run_evaluation():
         eval_session_id = os.getenv("EVAL_SESSION_ID", "00000000-0000-0000-0000-000000000000")
         start_time = time.time()
         try:
-            resp = requests.post(
+            resp = httpx.post(
                 API_URL,
                 json={"question": question, "session_id": eval_session_id},
                 timeout=180,

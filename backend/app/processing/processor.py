@@ -1,4 +1,4 @@
-"""Orchestrate parse → clean → chunk and persist results via existing services."""
+"""Orchestrate parse -> clean -> chunk and persist results via existing services."""
 from __future__ import annotations
 
 import asyncio
@@ -68,7 +68,7 @@ class DocumentProcessor:
     async def process_job(self, job_id: uuid.UUID) -> ProcessingResult:
         """Execute the full pipeline for one processing job.
 
-        Transitions the job pending → running → completed (or failed on error).
+        Transitions the job pending -> running -> completed (or failed on error).
         Updates the parent document version status and timestamps on success.
         """
         job = await self.jobs.get(job_id)
