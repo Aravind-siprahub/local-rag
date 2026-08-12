@@ -88,6 +88,8 @@ def format_user_prompt(
         base = USER_PROMPT_WITH_CONTEXT.format(
             question=question,
             context=context.strip(),
+            context_header="Retrieved Document Context",
+            question_header="Question:",
         )
     else:
         base = USER_PROMPT_WITHOUT_CONTEXT.format(question=question)

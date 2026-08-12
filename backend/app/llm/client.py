@@ -55,6 +55,8 @@ class LLMClient(Protocol):
         user_prompt: str,
         *,
         num_predict: int | None = None,
+        response_format: str | None = None,
+        temperature: float | None = None,
     ) -> LLMResponse: ...
 
     async def close(self) -> None: ...

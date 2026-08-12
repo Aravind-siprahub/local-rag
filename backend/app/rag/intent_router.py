@@ -21,7 +21,6 @@ class Route(str, Enum):
     GENERAL_KNOWLEDGE = "GENERAL_KNOWLEDGE"
     GENERIC_CHAT = "GENERIC_CHAT"
     CALCULATOR = "CALCULATOR"
-    WEB = "WEB"
     DIRECT = "DIRECT"
 
 
@@ -223,23 +222,6 @@ _DOC_METADATA_KEYWORDS = (
     "when was document",
 )
 
-# Current / external information cues
-_WEB_KEYWORDS = (
-    "weather today",
-    "exchange rate",
-    "exchange rates",
-    "stock price",
-    "stock prices",
-    "current price",
-    "current prices",
-    "latest news",
-    "news today",
-    "what time is it",
-    "today's date",
-    "public holiday",
-    "public holidays",
-)
-
 
 def _is_generic_chat(lower: str) -> bool:
     if _GREETING_PATTERNS.match(lower):
@@ -352,11 +334,13 @@ def _is_calculator(text: str, lower: str) -> bool:
     return False
 
 
-def _is_web(lower: str) -> bool:
-    if any(kw in lower for kw in _WEB_KEYWORDS):
-        return True
-    return False
-
+def classify(
+    question: str,
+    *,
+    document_titles: Sequence[str] | None = None,
+    context_texts: Sequence[str] | None = None,
+) -> Route:
+    """Return the route for ``question`` using lightweight deterministic rules.
 
 def classify(
     question: str,
@@ -393,9 +377,8 @@ def classify(
         route = Route.DOCUMENT_QA
     elif _is_calculator(text, lower):
         route = Route.CALCULATOR
-    elif _is_web(lower):
-        route = Route.WEB
     else:
+        # General questions (dates, current events, facts) → web search
         route = Route.GENERAL_KNOWLEDGE
 
     logger.info('[AI ROUTER] question="%s" norm="%s" route=%s', text[:200], lower[:200], route.value)

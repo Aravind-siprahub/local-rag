@@ -128,8 +128,10 @@ def _build_context(
         page = str(getattr(result, "page_number", 1) or 1)
         chunk_id = str(result.chunk_id)
 
-        # Apply passage trimming for long chunks if question is present
-        effective_text = _trim_passage_around_query(result.chunk_text, question) if question else result.chunk_text
+        # Apply simple truncation only — do NOT use passage trimming around keywords.
+        # The trim function removes sentences that don't contain query words, which silently
+        # strips answer content when it's in a different sentence from the matched keyword.
+        effective_text = result.chunk_text if len(result.chunk_text) <= 3500 else result.chunk_text[:3500].rstrip() + "..."
 
         chunk_block = format_chunk(
             context_index,

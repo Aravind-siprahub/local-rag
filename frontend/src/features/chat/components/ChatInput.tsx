@@ -29,9 +29,17 @@ export function ChatInput({
     }
   }
 
+  const isSendingRef = useRef(false)
+
   useEffect(() => {
     handleInput()
   }, [input])
+
+  useEffect(() => {
+    if (!sendDisabled) {
+      isSendingRef.current = false
+    }
+  }, [sendDisabled])
 
   const handleSend = () => {
     console.log("[1] ChatInput.handleSend()");

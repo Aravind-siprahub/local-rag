@@ -85,6 +85,39 @@ def detect_reasoning_leakage(text: str | None) -> bool:
     return any(tag in lowered for tag in tags)
 
 
+def _strip_common_monologue_prefixes(text: str) -> str:
+    """Strip leading sentences that match reasoning/narration monologue."""
+    cleaned = text.strip()
+    
+    # Prefix patterns to strip (case-insensitive)
+    patterns = [
+        r"^looking\s+at\s+the\s+(?:web\s+)?search\s+results[,.:]*\s*",
+        r"^based\s+on\s+the\s+(?:web\s+)?search\s+results[,.:]*\s*",
+        r"^according\s+to\s+the\s+(?:web\s+)?search\s+results[,.:]*\s*",
+        r"^based\s+only\s+on\s+the\s+search\s+results[^.]*\s*",
+        r"^i\s+need\s+to\s+answer\s+in\s+\d+-\d+\s+sentences[,.:]*\s*",
+        r"^i\s+need\s+to\s+[^.]*sentences[,.:]*\s*",
+        r"^i\s+shouldn'?t\s+add\s+any\s+additional\s+information[,.:]*\s*",
+        r"^i\s+shouldn'?t\s+add\s+any\s+information[,.:]*\s*",
+        r"^i\s+should\s+not\s+add\s+any\s+additional\s+information[,.:]*\s*",
+        r"^i\s+should\s+not\s+add\s+any\s+information[,.:]*\s*",
+        r"^first[,.]?\s+i\s+need\s+to\s+[^.]*\s*",
+        r"^the\s+answer\s+is[,.:]*\s*",
+        r"^here\s+is\s+the\s+answer[,.:]*\s*",
+    ]
+    
+    modified = True
+    while modified:
+        modified = False
+        for pat in patterns:
+            new_text = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+            if new_text != cleaned:
+                cleaned = new_text.strip()
+                modified = True
+                break
+    return cleaned
+
+
 def sanitize_response(text: str | None) -> str:
     """Remove thinking blocks and leading reasoning monologues; return clean answer."""
     if text is None or not isinstance(text, str) or not text.strip():

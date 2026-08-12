@@ -6,8 +6,85 @@ from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 import httpx
+from html.parser import HTMLParser
 
 logger = logging.getLogger(__name__)
+
+class DuckDuckGoHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hits = []
+        self.in_result = False
+        self.in_title = False
+        self.in_snippet = False
+        self.current_title = []
+        self.current_url = ""
+        self.current_snippet = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        class_name = attrs_dict.get("class", "")
+        classes = class_name.split() if class_name else []
+        
+        if tag == "div" and "result" in classes:
+            self.in_result = True
+            self.current_title = []
+            self.current_url = ""
+            self.current_snippet = []
+            
+        elif self.in_result:
+            if tag == "a" and "result__a" in classes:
+                self.in_title = True
+                self.current_url = attrs_dict.get("href", "")
+            elif tag == "a" and "result__snippet" in classes:
+                self.in_snippet = True
+
+    def handle_endtag(self, tag):
+        if tag == "div" and self.in_result:
+            title = "".join(self.current_title).strip()
+            snippet = "".join(self.current_snippet).strip()
+            if snippet:
+                self.hits.append(WebSearchHit(
+                    title=title or "Search Result",
+                    url=self.current_url,
+                    snippet=snippet
+                ))
+            self.in_result = False
+        elif tag == "a":
+            self.in_title = False
+            self.in_snippet = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.current_title.append(data)
+        elif self.in_snippet:
+            self.current_snippet.append(data)
+
+class BackupSnippetParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.snippets = []
+        self.in_snippet = False
+        self.current_snippet = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        class_name = attrs_dict.get("class", "")
+        classes = class_name.split() if class_name else []
+        if tag == "a" and "result__snippet" in classes:
+            self.in_snippet = True
+            self.current_snippet = []
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.in_snippet:
+            text = "".join(self.current_snippet).strip()
+            if text:
+                self.snippets.append(text)
+            self.in_snippet = False
+
+    def handle_data(self, data):
+        if self.in_snippet:
+            self.current_snippet.append(data)
 
 
 class WebSearchError(Exception):
@@ -85,7 +162,7 @@ class DuckDuckGoWebSearchProvider:
         self._owns_client = client is None
 
     async def search(self, query: str) -> WebSearchResult:
-        q = (query or "").strip()
+        q = (query or "").strip().strip('"').strip("'").strip()
         if not q:
             raise WebSearchError("Search query must not be empty.")
 
@@ -96,6 +173,7 @@ class DuckDuckGoWebSearchProvider:
             "no_html": "1",
             "skip_disambig": "1",
         }
+        hits = []
         try:
             client = await self._get_client()
             response = await client.get("https://api.duckduckgo.com/", params=params)
