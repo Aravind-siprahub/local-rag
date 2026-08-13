@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AuthStore } from '@/features/auth/utils/authStore'
+import { authApi } from '@/features/auth/api/authApi'
 
 /* ─── tiny helpers ─────────────────────────────────────────── */
 function FieldError({ msg }: { msg?: string }) {
@@ -23,7 +24,7 @@ export const Login: React.FC = () => {
   const navigate = useNavigate()
 
   const [formData, setFormData] = useState({ email: '', password: '', remember: false })
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
+  const [errors, setErrors] = useState<{ email?: string; password?: string; form?: string }>({})
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -31,7 +32,7 @@ export const Login: React.FC = () => {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target
     setFormData((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }))
-    if (name in errors) setErrors((prev) => ({ ...prev, [name]: undefined }))
+    if (name in errors) setErrors((prev) => ({ ...prev, [name]: undefined, form: undefined }))
   }
 
   /* ── validation ── */
@@ -49,16 +50,27 @@ export const Login: React.FC = () => {
     e.preventDefault()
     if (!validate()) return
     setIsSubmitting(true)
-    await new Promise((r) => setTimeout(r, 800))
-    AuthStore.setSession('demo-access-token', {
-      id: 'usr_1',
-      email: formData.email,
-      fullName: formData.email.split('@')[0] || 'User',
-    })
-    AuthStore.setRememberedEmail(formData.email, formData.remember)
-    window.dispatchEvent(new Event('auth:change'))
-    setIsSubmitting(false)
-    void navigate('/')
+    setErrors({})
+    try {
+      const data = await authApi.login({
+        email: formData.email.trim(),
+        password: formData.password,
+      })
+      AuthStore.setSession(data.accessToken, data.user)
+      AuthStore.setRememberedEmail(formData.email, formData.remember)
+      window.dispatchEvent(new Event('auth:change'))
+      void navigate('/')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string }; status?: number } }
+      const detail = e?.response?.data?.detail
+      setErrors({
+        form: typeof detail === 'string'
+          ? detail.replace(/^Authentication failed:\s*/i, '')
+          : 'Invalid email or password. Please try again.',
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -171,6 +183,14 @@ export const Login: React.FC = () => {
               Remember me for 30 days
             </Label>
           </div>
+
+          {/* Form-level error (e.g. bad credentials from backend) */}
+          {errors.form && (
+            <p className="flex items-center gap-1.5 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-200">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+              {errors.form}
+            </p>
+          )}
 
           {/* Submit */}
           <Button

@@ -123,7 +123,7 @@ class FakeWebSearchProvider:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def search(self, query: str) -> WebSearchResult:
+    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
         self.calls.append(query)
         return WebSearchResult(
             query=query,
@@ -155,14 +155,16 @@ def _make_service(
     retrieval_results: list[RankedResult] | None = None,
     web_search: FakeWebSearchProvider | None = None,
     llm: FakeLLMClient | None = None,
+    retriever: FakeRetriever | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> tuple[RAGService, _FakeChatSession, FakeRetriever, FakeLLMClient, FakeWebSearchProvider]:
-    session = _FakeChatSession(id=uuid.uuid4(), user_id=uuid.uuid4())
-    retriever = FakeRetriever(retrieval_results or [_ranked("Nginx reverse proxy notes.")])
+    session = _FakeChatSession(id=uuid.uuid4(), user_id=user_id or uuid.uuid4())
+    active_retriever = retriever or FakeRetriever(retrieval_results or [_ranked("Nginx reverse proxy notes.")])
     llm_client = llm or FakeLLMClient()
     web = web_search or FakeWebSearchProvider()
     service = RAGService(
         session=None,
-        retriever=retriever,
+        retriever=active_retriever,
         prompt_builder=PromptBuilder(),
         llm_client=llm_client,
         message_service=FakeChatMessageService(),
@@ -170,7 +172,7 @@ def _make_service(
         session_service=FakeChatSessionService(session),
         web_search=web,
     )
-    return service, session, retriever, llm_client, web
+    return service, session, active_retriever, llm_client, web
 
 
 class TestAgentRouterAsk:
@@ -229,7 +231,7 @@ class TestAgentRouterAsk:
             def __init__(self) -> None:
                 self.calls: list[str] = []
 
-            async def search(self, query: str) -> WebSearchResult:
+            async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
                 self.calls.append(query)
                 return WebSearchResult(query=query, provider="fake_empty", hits=[])
 

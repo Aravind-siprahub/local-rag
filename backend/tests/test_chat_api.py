@@ -17,8 +17,10 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+from typing import Generator
+
 @pytest.fixture(autouse=True)
-def clear_overrides() -> None:
+def clear_overrides() -> Generator[None, None, None]:
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
@@ -104,12 +106,17 @@ class FakeChatMessageService:
 
 
 def _setup_overrides(session_id: uuid.UUID, user_id: uuid.UUID) -> FakeRAGService:
+    from app.api.dependencies import get_current_user
+    from app.models.user import User
     fake_rag = FakeRAGService()
     app.dependency_overrides[get_rag_service] = lambda: fake_rag
     app.dependency_overrides[get_chat_session_service] = lambda: FakeChatSessionService(
         FakeChatSession(session_id, user_id)
     )
     app.dependency_overrides[get_chat_message_service] = lambda: FakeChatMessageService(session_id)
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=user_id, email="test@example.com", hashed_password="pwd", is_active=True
+    )
     return fake_rag
 
 
@@ -160,10 +167,10 @@ class TestChatAPI:
             async def close(self):
                 return None
 
+        user_id = uuid.uuid4()
+        _setup_overrides(session_id, user_id)
+
         app.dependency_overrides[get_rag_service] = lambda: FailingRAG()
-        app.dependency_overrides[get_chat_session_service] = lambda: FakeChatSessionService(
-            FakeChatSession(session_id, uuid.uuid4())
-        )
 
         response = client.post(
             "/chat",

@@ -158,12 +158,6 @@ class RAGService:
                     .where(Document.user_id == chat_session.user_id)
                 )
                 all_docs = list((await self.session.execute(stmt_docs)).scalars().all())
-                if not all_docs:
-                    stmt_all_docs = (
-                        select(Document)
-                        .where(Document.deleted_at.is_(None))
-                    )
-                    all_docs = list((await self.session.execute(stmt_all_docs)).scalars().all())
 
                 q_lower = question.strip().lower()
                 for d in all_docs:
@@ -238,10 +232,10 @@ class RAGService:
         # Relevance Gate: If zero chunks pass similarity threshold
         if not deduped_chunks:
             total_ms = int((time.monotonic() - start_mono) * 1000)
-            fallback_answer = "I could not find this information in your uploaded documents."
+            fallback_answer = "I could not find this information in the uploaded documents."
             logger.warning("[NO RELEVANT DOCUMENTS FOUND] 0 chunks passed relevance gate. Returning fallback response.")
 
-            self._log_structured_trace(
+            await self._log_structured_trace(
                 request_id=req_id,
                 user_hash=user_hash,
                 session_id=session_id,
@@ -276,12 +270,21 @@ class RAGService:
                 assistant_message_id=assistant_message.id,
             )
 
-        # Fetch recent chat history only to enrich the retrieval question when needed.
-        # PromptBuilder currently accepts question + chunks (no chat_history kwarg).
+        # Fetch recent chat history to resolve follow-up context and pronouns
+        chat_history_dicts: list[dict[str, str]] = []
+        try:
+            recent_msgs = await self.messages.list_by_session(session_id, limit=6)
+            # Filter out the current user message just inserted
+            prior_msgs = [m for m in recent_msgs if m.id != user_message.id][-4:]
+            chat_history_dicts = [{"role": getattr(m.role, "value", str(m.role)), "content": m.content} for m in prior_msgs]
+        except Exception as h_exc:
+            logger.warning("[CHAT HISTORY CONTEXT ERROR] %s", h_exc)
+
         prompt_start = time.monotonic()
         prompt = self.prompt_builder.build(
             question.strip(),
-            retrieved_chunks,
+            deduped_chunks,
+            chat_history=chat_history_dicts if chat_history_dicts else None,
         )
         context_ms = int((time.monotonic() - prompt_start) * 1000)
 
@@ -310,7 +313,7 @@ class RAGService:
         # Truncation check: only retry when the first pass produced no usable answer.
         if getattr(llm_response, "finish_reason", None) == "length":
             first_pass = sanitize_response(llm_response.answer)
-            if not first_pass or len(first_pass.strip()) < 20:
+            if not first_pass or len(first_pass.strip()) < 50 or first_pass.endswith("...") or first_pass.endswith("…") or first_pass.endswith(".."):
                 logger.warning(
                     "[LLM TRUNCATION DETECTED] finish_reason=length and answer unusable. "
                     "Retrying once with num_predict *= 2 (%d)",
@@ -327,17 +330,29 @@ class RAGService:
                     "[LLM TRUNCATION DETECTED] finish_reason=length but usable answer present; skipping retry"
                 )
 
+        # Reasoning Leakage check: retry once if reasoning tags/monologue leak
+        if detect_reasoning_leakage(llm_response.answer):
+            logger.warning(
+                "[LLM LEAKAGE DETECTED] Reasoning leakage found in response. "
+                "Retrying once..."
+            )
+            llm_response = await self.llm_client.generate(
+                prompt.system_prompt,
+                prompt.user_prompt,
+                num_predict=num_predict,
+            )
+
         # Sanitize answer from thinking tags or monologue prefixes
         clean_ans = sanitize_response(llm_response.answer)
         clean_ans_lower = clean_ans.lower().strip()
         if not clean_ans or clean_ans_lower == "i could not find this information in the uploaded documents." or clean_ans_lower == "i could not find this information in your uploaded documents." or clean_ans_lower == "information not found in document excerpts." or clean_ans_lower == "information not found":
-            answer_text = "I could not find this information in your uploaded documents."
+            answer_text = "I could not find this information in the uploaded documents."
         else:
             answer_text = clean_ans
 
         # Citation Validation: Strict threshold enforcement & deduplication
         effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
-        if answer_text == "I could not find this information in your uploaded documents.":
+        if answer_text == "I could not find this information in the uploaded documents.":
             sources = []
         else:
             raw_sources = _sources_from_prompt(prompt)
@@ -349,7 +364,12 @@ class RAGService:
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
 
-        self._log_structured_trace(
+        chunk_ids = [str(c.chunk_id) for c in deduped_chunks]
+        doc_ids = [str(c.document_id) for c in deduped_chunks]
+        version_ids = [str(c.document_version_id) for c in deduped_chunks]
+        sim_scores = [round(c.similarity_score, 4) for c in deduped_chunks]
+
+        await self._log_structured_trace(
             request_id=req_id,
             user_hash=user_hash,
             session_id=session_id,
@@ -364,6 +384,10 @@ class RAGService:
             top_similarity=top_sim,
             status="SUCCESS",
             error_type=None,
+            retrieved_chunk_ids=chunk_ids,
+            retrieved_doc_ids=doc_ids,
+            doc_version_ids=version_ids,
+            similarity_scores=sim_scores,
         )
 
         token_usage = llm_response.token_usage
@@ -514,7 +538,7 @@ class RAGService:
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
 
         if not deduped_chunks:
-            fallback_ans = "I could not find this information in your uploaded documents."
+            fallback_ans = "I could not find this information in the uploaded documents."
             total_ms = int((time.monotonic() - start_mono) * 1000)
             assistant_msg = await self.messages.create_message(
                 session_id=session_id,
@@ -529,7 +553,7 @@ class RAGService:
 
         prompt = self.prompt_builder.build(
             question.strip(),
-            retrieved_chunks,
+            deduped_chunks,
         )
 
         logger.info("=== RETRIEVED CHUNKS START ===")
@@ -561,7 +585,7 @@ class RAGService:
             logger.error("Streaming error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
 
-        full_answer = sanitize_response("".join(full_answer_chunks).strip()) or "I could not find this information in your uploaded documents."
+        full_answer = sanitize_response("".join(full_answer_chunks).strip()) or "I could not find this information in the uploaded documents."
 
         # Now emit the clean, sanitized answer as a single token
         yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
@@ -628,7 +652,7 @@ class RAGService:
                 user_message_id=user_message_id,
                 start_mono=start_mono,
             )
-        elif route == Route.GENERAL_KNOWLEDGE:
+        elif route == Route.WEB:
             res = await self._ask_web(
                 session_id=session_id,
                 question=question,
@@ -652,7 +676,7 @@ class RAGService:
             status = "ERROR"
             error_type = res.model.split(":", 2)[2]
             
-        self._log_structured_trace(
+        await self._log_structured_trace(
             request_id=request_id or str(uuid.uuid4()),
             user_hash=user_hash or "anonymous",
             session_id=session_id,
@@ -729,7 +753,7 @@ class RAGService:
             assistant_message_id=assistant_msg.id,
         )
 
-    def _log_structured_trace(
+    async def _log_structured_trace(
         self,
         *,
         request_id: str,
@@ -746,6 +770,10 @@ class RAGService:
         top_similarity: float,
         status: str,
         error_type: str | None = None,
+        retrieved_chunk_ids: list[str] | None = None,
+        retrieved_doc_ids: list[str] | None = None,
+        doc_version_ids: list[str] | None = None,
+        similarity_scores: list[float] | None = None,
     ) -> None:
         trace_payload = {
             "request_id": request_id,
@@ -767,6 +795,30 @@ class RAGService:
             "error_type": error_type,
         }
         logger.info("[ENTERPRISE RAG TRACE] %s", json.dumps(trace_payload))
+
+        if self.session:
+            try:
+                from app.services.trace_service import TraceStore
+                trace_store = TraceStore(self.session)
+                await trace_store.save_trace_safely(
+                    request_id=request_id,
+                    session_id=session_id,
+                    original_query=orig_q,
+                    normalized_query=norm_q,
+                    detected_intent=route.name,
+                    selected_route=route.value,
+                    retrieval_duration_ms=retrieval_ms,
+                    retrieved_chunk_ids=retrieved_chunk_ids or [],
+                    retrieved_document_ids=retrieved_doc_ids or [],
+                    document_version_ids=doc_version_ids or [],
+                    similarity_scores=similarity_scores or [top_similarity],
+                    llm_duration_ms=llm_ms,
+                    total_duration_ms=total_ms,
+                    error_type=error_type,
+                    status=status,
+                )
+            except Exception as exc:
+                logger.warning("[TRACE PERSISTENCE ERROR] request_id=%s: %s", request_id, exc)
 
     async def _ask_document_list(
         self,
@@ -928,7 +980,7 @@ class RAGService:
 
         except Exception as exc:
             error_type = "unexpected_error"
-            logger.error("[WEB SEARCH FAILURE] request_id=%s provider=%s query=%r error_type=%s reason=%r", req_id, provider_name, question, str(exc), exc_info=True)
+            logger.error("[WEB SEARCH FAILURE] request_id=%s provider=%s query=%r error_type=%s reason=%r", req_id, provider_name, question, error_type, str(exc), exc_info=True)
             answer_text = "An unexpected error occurred during web search."
             model_name = f"web-search:error:{error_type}"
 
@@ -1067,12 +1119,10 @@ class RAGService:
 
         titles: list[str] = []
         try:
-            stmt = (
-                select(Document.title)
-                .where(Document.deleted_at.is_(None))
-                .where(Document.user_id == user_id)
-            )
-            titles = [t for t in (await self.session.execute(stmt)).scalars().all() if t]
+            from app.repositories.document_repository import DocumentRepository
+            repo = DocumentRepository(self.session)
+            docs = await repo.list_by_user(user_id)
+            titles = [d.title for d in docs if d.title]
         except Exception as exc:
             logger.warning("[ROUTING HINTS] failed to load document titles: %s", exc)
 

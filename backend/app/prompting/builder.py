@@ -163,12 +163,31 @@ def _build_context(
             continue
 
         remaining = max_context_chars - used_chars - separator_len
-        if remaining <= len(f"Chunk {context_index}\n"):
-            break
+        empty_block = format_chunk(
+            context_index,
+            "",
+            title=title,
+            section=section,
+            page=page,
+            chunk_id=chunk_id,
+        )
+        template_len = len(empty_block)
+        is_single_chunk = len(retrieved_chunks) == 1
 
-        truncated_text = _truncate_text(effective_text, remaining - len(f"Chunk {context_index}\n"))
+        if remaining <= template_len:
+            if not is_single_chunk or used_chars > 0:
+                break
+
+        if is_single_chunk and remaining <= template_len:
+            allowed_text_chars = max(10, remaining - 10)
+        else:
+            allowed_text_chars = remaining - template_len
+
+        truncated_text = _truncate_text(effective_text, allowed_text_chars)
         if not truncated_text.strip():
-            break
+            if not is_single_chunk:
+                break
+            truncated_text = "..."
 
         truncated_block = format_chunk(
             context_index,

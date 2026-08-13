@@ -11,11 +11,26 @@ export const authApi = {
    */
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
     try {
-      const response = await apiClient.post<AuthResponse>('/auth/login', {
+      // Backend returns snake_case: { access_token, token_type, user }
+      const response = await apiClient.post<{
+        access_token: string
+        token_type: string
+        user: { id: string; email: string; full_name?: string; role?: string; created_at?: string }
+      }>('/auth/login', {
         email: credentials.email,
         password: credentials.password,
       })
-      return response.data
+      const raw = response.data
+      return {
+        accessToken: raw.access_token,
+        user: {
+          id: raw.user.id,
+          email: raw.user.email,
+          fullName: raw.user.full_name ?? raw.user.email.split('@')[0],
+          role: (raw.user.role as User['role']) ?? 'user',
+          createdAt: raw.user.created_at,
+        },
+      }
     } catch (error: any) {
       // Fallback dev handling if backend endpoints are in stub mode
       if (error.response?.status === 404 || error.code === 'ERR_NETWORK') {

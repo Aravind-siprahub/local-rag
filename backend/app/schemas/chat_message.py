@@ -10,6 +10,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import MessageRole
+from app.schemas.citation import CitationResponse
 from app.schemas.common import CreatedAtSchema, ORMModel, PaginatedResponse
 
 
@@ -42,6 +43,7 @@ class ChatMessageResponse(ChatMessageBase, CreatedAtSchema, ORMModel):
     # accepted on Create.
     total_tokens: int | None = None
     error_message: str | None = None
+    citations: list[CitationResponse] = Field(default_factory=list)
 
 
 ChatMessageListResponse = PaginatedResponse[ChatMessageResponse]

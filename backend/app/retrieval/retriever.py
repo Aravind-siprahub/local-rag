@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.embeddings.client import EmbeddingClient, OllamaEmbeddingClient
-from app.retrieval.ranking import RankedResult, rank_results
-from app.retrieval.search import SearchFilters, search_similar
+from app.retrieval.ranking import RankedResult, rank_results, rank_hybrid_rrf, rerank_cross_encoder
+from app.retrieval.search import SearchFilters, search_similar, search_fulltext
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +55,7 @@ class Retriever:
         """Embed a user question, retrieve Top 20 candidates via hybrid search, and rerank to Top 5."""
         import time
         import asyncio
-        from app.retrieval.ranking import rank_hybrid_rrf, rank_results, rerank_cross_encoder
-        from app.retrieval.search import search_fulltext, search_similar
+        # ranking imports moved to module level
 
         if not question or not question.strip():
             raise RetrievalError("Question must not be empty.")

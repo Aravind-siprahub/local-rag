@@ -27,8 +27,8 @@ class TestPromptBuilder:
         prompt = builder.build("What is the summary?", chunks)
 
         assert prompt.system_prompt == "System rules."
-        assert "[Chunk 1]" in prompt.user_prompt
-        assert "[Chunk 2]" in prompt.user_prompt
+        assert "First chunk." in prompt.user_prompt
+        assert "Second chunk." in prompt.user_prompt
         assert "What is the summary?" in prompt.user_prompt
         assert len(prompt.retrieved_chunks) == 2
         assert prompt.retrieved_chunks[0].context_index == 1

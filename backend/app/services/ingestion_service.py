@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.embeddings.client import EmbeddingClientError, OllamaEmbeddingClient
-from app.embeddings.generator import EmbeddingGenerator
 from app.models.document import Document
 from app.models.document_version import DocumentVersion
 from app.models.embedding import Embedding
@@ -354,6 +353,7 @@ class IngestionService:
                 raise ValueError(f"No DB chunks found for version {version.id!r}.")
 
             client = OllamaEmbeddingClient()
+            from app.embeddings.generator import EmbeddingGenerator
             generator = EmbeddingGenerator(self.session, client)
             try:
                 gen_result = await generator.embed_chunks(db_chunks)

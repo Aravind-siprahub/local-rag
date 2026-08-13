@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AuthStore } from '@/features/auth/utils/authStore'
+import { authApi } from '@/features/auth/api/authApi'
 import { createUser } from '@/services/users.service'
 
 /* ─── helpers ───────────────────────────────────────────────── */
@@ -29,11 +30,12 @@ const RULES: StrengthRule[] = [
   { label: 'Uppercase letter', test: (pw) => /[A-Z]/.test(pw) },
   { label: 'Lowercase letter', test: (pw) => /[a-z]/.test(pw) },
   { label: 'Number', test: (pw) => /[0-9]/.test(pw) },
+  { label: 'Special character (!@#$%^&* etc.)', test: (pw) => /[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;/`~]/.test(pw) },
 ]
 
-const STRENGTH_LABELS = ['', 'Weak', 'Fair', 'Good', 'Strong'] as const
-const STRENGTH_COLORS = ['', 'bg-red-500', 'bg-amber-500', 'bg-yellow-400', 'bg-emerald-500'] as const
-const STRENGTH_TEXT   = ['', 'text-red-400', 'text-amber-400', 'text-yellow-400', 'text-emerald-400'] as const
+const STRENGTH_LABELS = ['', 'Very Weak', 'Weak', 'Fair', 'Good', 'Strong'] as const
+const STRENGTH_COLORS = ['', 'bg-red-600', 'bg-red-500', 'bg-amber-500', 'bg-yellow-400', 'bg-emerald-500'] as const
+const STRENGTH_TEXT   = ['', 'text-red-500', 'text-red-400', 'text-amber-400', 'text-yellow-400', 'text-emerald-400'] as const
 
 function PasswordStrength({ password }: { password: string }) {
   const strength = useMemo(() => RULES.filter((r) => r.test(password)).length, [password])
@@ -133,6 +135,7 @@ export const Signup: React.FC = () => {
     password?: string
     confirmPassword?: string
     acceptTerms?: string
+    form?: string
   }>({})
 
   const [showPassword, setShowPassword] = useState(false)
@@ -143,7 +146,7 @@ export const Signup: React.FC = () => {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target
     setFormData((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }))
-    if (name in errors) setErrors((prev) => ({ ...prev, [name]: undefined }))
+    if (name in errors) setErrors((prev) => ({ ...prev, [name]: undefined, form: undefined }))
   }
 
   /* ── validation ── */
@@ -153,7 +156,8 @@ export const Signup: React.FC = () => {
     if (!formData.email.trim()) errs.email = 'Email address is required'
     else if (!/\S+@\S+\.\S+/.test(formData.email)) errs.email = 'Enter a valid email address'
     if (!formData.password) errs.password = 'Password is required'
-    else if (formData.password.length < 8) errs.password = 'Password must be at least 8 characters'
+    else if (!RULES.every((r) => r.test(formData.password)))
+      errs.password = 'Password does not meet all requirements'
     if (!formData.confirmPassword) errs.confirmPassword = 'Please confirm your password'
     else if (formData.password !== formData.confirmPassword)
       errs.confirmPassword = 'Passwords do not match'
@@ -167,43 +171,49 @@ export const Signup: React.FC = () => {
     e.preventDefault()
     if (!validate()) return
     setIsSubmitting(true)
+    setErrors({})
 
     try {
-      // 1. Create user in Supabase via backend API
-      //    The form password already passes the strength rules shown in the UI,
-      //    which mirror the backend PasswordPolicy exactly.
-      const dbUser = await createUser({
-        email: formData.email,
+      // 1. Create user account via backend
+      await createUser({
+        email: formData.email.trim(),
         password: formData.password,
-        full_name: formData.fullName,
+        full_name: formData.fullName.trim(),
         role: 'member',
       })
 
-      // 2. Persist session with real DB user id
-      AuthStore.setSession('demo-access-token', {
-        id: dbUser.id,
-        email: dbUser.email,
-        fullName: dbUser.full_name ?? formData.fullName,
+      // 2. Immediately login to get a real signed JWT
+      const data = await authApi.login({
+        email: formData.email.trim(),
+        password: formData.password,
       })
+      AuthStore.setSession(data.accessToken, data.user)
+      window.dispatchEvent(new Event('auth:change'))
+      void navigate('/')
     } catch (err: unknown) {
-      // If user already exists (409) or other error, fall back to demo session
-      const e = err as { response?: { status?: number; data?: unknown } }
-      if (e?.response?.status === 409) {
-        // User with this email already exists — just log in normally
-        console.info('[Signup] User already exists, using existing account')
-      } else {
-        console.warn('[Signup] Could not create DB user:', e?.response?.data ?? err)
-      }
-      AuthStore.setSession('demo-access-token', {
-        id: 'usr_local',
-        email: formData.email,
-        fullName: formData.fullName,
-      })
-    }
+      const e = err as { response?: { status?: number; data?: { detail?: string } } }
+      const status = e?.response?.status
+      const detail = e?.response?.data?.detail
 
-    window.dispatchEvent(new Event('auth:change'))
-    setIsSubmitting(false)
-    void navigate('/')
+      if (status === 409) {
+        // Email already registered — redirect to login
+        setErrors({ form: 'An account with this email already exists. Please sign in.' })
+      } else if (status === 422) {
+        // Backend validation failed (e.g. password too weak)
+        const msg = typeof detail === 'string'
+          ? detail.replace(/^Value error,\s*/i, '')
+          : 'Invalid signup data. Please check your inputs.'
+        setErrors({ form: msg })
+      } else {
+        setErrors({
+          form: typeof detail === 'string'
+            ? detail
+            : 'Account creation failed. Please try again.',
+        })
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -347,6 +357,14 @@ export const Signup: React.FC = () => {
             </div>
             <FieldError msg={errors.acceptTerms} />
           </div>
+
+          {/* Form-level error (backend 422 / 409 / auth failure) */}
+          {errors.form && (
+            <p className="flex items-center gap-1.5 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-200">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+              {errors.form}
+            </p>
+          )}
 
           {/* Submit */}
           <Button

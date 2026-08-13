@@ -4,20 +4,82 @@ Endpoints depend on `get_*_service`, never construct a service directly —
 this is what makes `app.dependency_overrides[get_user_service] = ...` work
 for testing without a real database, and keeps the DI wiring in one place.
 """
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.models.user import User
+from app.rag.service import RAGService
+from app.repositories.user_repository import UserRepository
 from app.services.chat_message_service import ChatMessageService
 from app.services.chat_session_service import ChatSessionService
 from app.services.document_service import DocumentService
 from app.services.document_upload_service import DocumentUploadService
 from app.services.document_version_service import DocumentVersionService
+from app.services.owner_resolution import OPENAPI_PLACEHOLDER_UUID, resolve_owner_user_id
 from app.services.processing_job_service import ProcessingJobService
 from app.services.system_setting_service import SystemSettingService
 from app.services.user_service import UserService
-from app.rag.service import RAGService
 from app.storage.local_file_storage import LocalFileStorage
+
+
+async def get_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+) -> User:
+    """Extract and cryptographically verify authenticated user from Authorization: Bearer <jwt_token> header.
+    
+    Unverified client-controlled identity indicators (such as X-User-Id header or user_id query parameters)
+    are strictly untrusted and ignored for authentication purposes.
+    """
+    import uuid
+    from app.api.security import InvalidTokenError, TokenExpiredError, decode_access_token
+
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required: Missing or invalid Authorization Bearer header.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = auth_header[7:].strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required: Empty Bearer token supplied.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        payload = decode_access_token(token)
+        user_id_str = payload.get("sub")
+        if not user_id_str:
+            raise InvalidTokenError("JWT token missing 'sub' claim.")
+        user_uuid = uuid.UUID(user_id_str)
+    except TokenExpiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: Token has expired. {exc}",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\", error_description=\"token_expired\""},
+        ) from exc
+    except (InvalidTokenError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: Invalid or tampered token. {exc}",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        ) from exc
+
+    user_repo = UserRepository(session)
+    user = await user_repo.get(user_uuid)
+    if not user or not user.is_active or user.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: User {user_uuid} is inactive, deleted, or does not exist.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
 
 
 def get_user_service(session: AsyncSession = Depends(get_db)) -> UserService:
@@ -28,10 +90,11 @@ def get_document_service(session: AsyncSession = Depends(get_db)) -> DocumentSer
     return DocumentService(session)
 
 
+from app.storage.base import FileStorage
 from app.storage.s3_storage_service import S3StorageService
 from app.storage.supabase_storage_service import SupabaseStorageService
 
-def _get_storage_backend():
+def _get_storage_backend() -> FileStorage:
     """Return the best available storage backend.
 
     Priority: S3 (boto3) > Supabase REST > local disk

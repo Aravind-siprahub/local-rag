@@ -24,9 +24,9 @@ class RankedResult:
     chunk_text: str
     document_id: uuid.UUID
     document_version_id: uuid.UUID
-    document_title: str
     similarity_score: float
     rank: int
+    document_title: str = ""
     section_title: str | None = None
     page_number: int | None = None
     metadata_: dict | None = None

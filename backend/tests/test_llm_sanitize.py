@@ -236,7 +236,7 @@ class TestOllamaParseResponse:
         }
         result = _parse_chat_response(data, fallback_model="qwen3:8b")
         assert "Okay" not in result.answer
-        assert result.answer == ""
+        assert result.answer == "Information not found in document excerpts."
 
     def test_strips_inline_thinking_from_content(self) -> None:
         data = {

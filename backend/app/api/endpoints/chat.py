@@ -3,9 +3,11 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 
-from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_rag_service
+from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_current_user, get_rag_service
+from app.api.security import verify_ownership
 from app.core.swagger_constants import OPENAPI_PLACEHOLDER_UUID
 from app.llm.client import LLMClientError, LLMTimeoutError, LLMUnavailableError
+from app.models.user import User
 from app.rag.response import RAGResponse
 from app.rag.service import RAGError, RAGService
 from app.repositories.chat_session_repository import ChatSessionRepository
@@ -44,6 +46,7 @@ async def ask_chat(
     payload: ChatRequest,
     response: Response,
     x_request_id: str | None = Header(None, alias="X-Request-ID"),
+    current_user: User = Depends(get_current_user),
     rag: RAGService = Depends(get_rag_service),
     session_service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatResponse:
@@ -61,11 +64,6 @@ async def ask_chat(
     module_file = getattr(provider_module, "__file__", "unknown")
     logger.info('[CHAT START] request_id=%s query="%s" module_file="%s"', request_id, payload.question, module_file)
 
-    filters = SearchFilters(
-        document_id=payload.document_id,
-        document_version_id=payload.document_version_id,
-    )
-
     session_id = payload.session_id
     if session_id is None or session_id == OPENAPI_PLACEHOLDER_UUID:
         session_id = await get_or_create_swagger_demo_session(
@@ -73,6 +71,17 @@ async def ask_chat(
             sessions=ChatSessionRepository(session_service.session),
             session_service=session_service,
         )
+
+    chat_session = await session_service.get(session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail=f"Chat session {session_id} not found.")
+    verify_ownership(chat_session.user_id, current_user, "chat session")
+
+    filters = SearchFilters(
+        user_id=current_user.id,
+        document_id=payload.document_id,
+        document_version_id=payload.document_version_id,
+    )
 
     try:
         result = await rag.ask(
@@ -89,27 +98,10 @@ async def ask_chat(
         total_ms = int((time.monotonic() - start_time) * 1000)
         logger.error("[CHAT END] request_id=%s status=400 total_ms=%d error=%s", request_id, total_ms, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except LLMTimeoutError as exc:
-        total_ms = int((time.monotonic() - start_time) * 1000)
-        logger.error("[CHAT END] request_id=%s status=504 total_ms=%d error=%s", request_id, total_ms, exc)
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="The AI model took too long to generate a response. Please try asking again.",
-        ) from exc
-    except LLMUnavailableError as exc:
-        total_ms = int((time.monotonic() - start_time) * 1000)
-        logger.error("[CHAT END] request_id=%s status=503 total_ms=%d error=%s", request_id, total_ms, exc)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Ollama model service unavailable: {exc.reason}",
-        ) from exc
     except LLMClientError as exc:
         total_ms = int((time.monotonic() - start_time) * 1000)
-        logger.error("[CHAT END] request_id=%s status=502 total_ms=%d error=%s", request_id, total_ms, exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"AI generation failed: {exc}",
-        ) from exc
+        logger.error("[CHAT END] request_id=%s total_ms=%d error=%s", request_id, total_ms, exc)
+        raise exc
 
     return _to_chat_response(result)
 

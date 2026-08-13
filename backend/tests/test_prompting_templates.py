@@ -5,18 +5,19 @@ from app.prompting.templates import format_chunk, format_user_prompt
 class TestFormatChunk:
     def test_numbers_chunk(self) -> None:
         result = format_chunk(1, "Revenue grew 12%.")
-        assert "Passage 1" in result
-        assert "Content:\nRevenue grew 12%." in result
+        assert "Document: Unknown" in result
+        assert "Revenue grew 12%." in result
+        assert "[Chunk 1]" not in result
 
 
 class TestFormatUserPrompt:
     def test_includes_numbered_context_and_question(self) -> None:
-        context = "Passage 1\n\nContent:\nRevenue grew 12%.\n\nPassage 2\n\nContent:\nCosts fell 3%."
+        context = "---\nDocument: MyDoc\n\nRevenue grew 12%.\n\n---\nDocument: MyDoc\n\nCosts fell 3%."
         prompt = format_user_prompt(context, "What happened to revenue?")
 
         assert "Retrieved Document Context" in prompt
-        assert "Passage 1" in prompt
-        assert "Passage 2" in prompt
+        assert "Revenue grew 12%." in prompt
+        assert "Costs fell 3%." in prompt
         assert "Question:" in prompt
         assert "What happened to revenue?" in prompt
 
@@ -24,7 +25,7 @@ class TestFormatUserPrompt:
         prompt = format_user_prompt("", "What is EBITDA?")
 
         assert "Retrieved Document Context" in prompt
-        assert "No document excerpts available" in prompt
+        assert "No document excerpts were available" in prompt
         assert "Question:" in prompt
         assert "What is EBITDA?" in prompt
 

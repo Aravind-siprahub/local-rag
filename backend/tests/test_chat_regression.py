@@ -76,8 +76,32 @@ class TestChatAPIErrorResponses:
         return TestClient(app)
 
     @pytest.fixture(autouse=True)
-    def clear_overrides(self) -> None:
+    def setup_overrides(self) -> None:
+        from app.api.dependencies import get_current_user, get_chat_session_service
+        from app.models.user import User
+        
+        user_id = uuid.uuid4()
+        user = User(
+            id=user_id, email="test@example.com", hashed_password="pwd", is_active=True
+        )
+
+        class FakeChatSession:
+            def __init__(self, id, user_id):
+                self.id = id
+                self.user_id = user_id
+                self.title = "Test chat"
+                self.archived_at = None
+
+        class FakeChatSessionService:
+            def __init__(self):
+                self.session = MagicMock()
+
+            async def get(self, session_id):
+                return FakeChatSession(session_id, user_id)
+
         app.dependency_overrides.clear()
+        app.dependency_overrides[get_current_user] = lambda: user
+        app.dependency_overrides[get_chat_session_service] = lambda: FakeChatSessionService()
         yield
         app.dependency_overrides.clear()
 

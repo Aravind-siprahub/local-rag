@@ -72,3 +72,33 @@ def test_thinking_stream_filter_with_unopened_closing_tag() -> None:
     full_output = "".join(output)
     assert "First, I'll acknowledge" not in full_output
     assert "Hello! How can I help?" in full_output
+
+
+def test_sanitize_response_new_reasoning_monologues() -> None:
+    raw = (
+        "We are given a user query about SipraOne.\n"
+        "Let's extract information from the chunks.\n"
+        "Chunk 1 says SipraOne is deployed on Azure VM.\n"
+        "We have to be careful.\n"
+        "Which one to use?\n"
+        "Wait...\n"
+        "SipraOne was deployed on an Azure Ubuntu VM."
+    )
+    assert sanitize_response(raw) == "SipraOne was deployed on an Azure Ubuntu VM."
+
+
+def test_sanitize_response_monologue_with_answers() -> None:
+    raw = (
+        "We must answer using only the provided context. Let's extract:\n"
+        "Chunk 1 says SipraOne uses Node.js.\n"
+        "Chunk 2 says PM2 manages the frontend.\n"
+        "From the chunks, we can infer that Nginx is used as the reverse proxy."
+    )
+    expected = (
+        "SipraOne uses Node.js.\n"
+        "PM2 manages the frontend.\n"
+        "Nginx is used as the reverse proxy."
+    )
+    assert sanitize_response(raw) == expected
+
+

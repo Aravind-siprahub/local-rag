@@ -1,0 +1,5 @@
+ID: 341fd42b-4f1b-4bd0-9be4-f780323f49df, Status: completed, Type: embed, Error: None
+ID: 6fbc75a4-0fd7-46f5-b3ef-e69bd8a92471, Status: failed, Type: embed, Error: Document version 5da6c7ad-09f5-4aee-809f-1130a74001a6 is 'failed'; expected 'chunked' or 'embedding' before embedding.
+ID: da920696-4ac3-4efc-a181-2a184206fd4a, Status: completed, Type: parse, Error: None
+ID: f6e58ba2-d739-420b-99c7-cb18c795f7e8, Status: running, Type: parse, Error: None
+ID: fc5504e3-4317-46dd-b9fb-0c6df42ba45b, Status: completed, Type: parse, Error: None

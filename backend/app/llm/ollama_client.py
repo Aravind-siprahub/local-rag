@@ -47,6 +47,44 @@ def _get_concurrency_semaphore() -> asyncio.Semaphore:
     return _OLLAMA_CONCURRENCY_SEMAPHORE
 
 
+def _parse_user_prompt(user_prompt: str) -> tuple[list[dict[str, str]], str]:
+    """Extract chat history messages from the user_prompt prefix.
+
+    Returns ``(history_messages, remaining)`` where *remaining* is the full
+    context + question block that should be sent as the user message unchanged.
+    We deliberately do NOT try to re-split the context from the question here
+    because the branch conditions previously used did not match our template
+    format (USER_PROMPT_WITH_CONTEXT), causing document context to be silently
+    dropped every time.
+    """
+    user_prompt = user_prompt.strip()
+    history_messages: list[dict[str, str]] = []
+
+    remaining = user_prompt
+
+    # Extract the optional chat-history prefix added by format_user_prompt().
+    if "Recent Conversation:" in remaining and "---------------------------------" in remaining:
+        parts = remaining.split("Recent Conversation:\n", 1)
+        if len(parts) == 2:
+            after_header = parts[1]
+            if "---------------------------------" in after_header:
+                history_part, remaining = after_header.split("---------------------------------", 1)
+                remaining = remaining.strip()
+
+                for line in history_part.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("User:"):
+                        history_messages.append({"role": "user", "content": line[5:].strip()})
+                    elif line.startswith("Assistant:"):
+                        history_messages.append({"role": "assistant", "content": line[10:].strip()})
+                    elif line.startswith("[Prior Conversation Summary:") and line.endswith("]"):
+                        history_messages.append({"role": "system", "content": line[1:-1].strip()})
+
+    return history_messages, remaining or user_prompt
+
+
 class OllamaLLMClient:
     """Async Ollama `/api/chat` client with retry, timeout, bounded concurrency, and keep-alive support."""
 
@@ -169,12 +207,19 @@ class OllamaLLMClient:
         options = self._build_options(num_predict=num_predict)
         if temperature is not None:
             options["temperature"] = temperature
+
+        history_messages, remaining = _parse_user_prompt(user_prompt)
+
+        messages: list[dict[str, str]] = []
+        if system_prompt and system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt.strip()})
+
+        messages.extend(history_messages)
+        messages.append({"role": "user", "content": remaining or user_prompt.strip()})
+
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt.strip()},
-                {"role": "user", "content": user_prompt.strip()},
-            ],
+            "messages": messages,
             "stream": stream,
             "keep_alive": self.keep_alive,
             "options": options,
@@ -362,15 +407,20 @@ def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMRespon
         raise LLMAPIError("Ollama response missing 'message' object.")
 
     content = message.get("content")
+    thinking = message.get("thinking")
+
+    from app.llm.sanitize import sanitize_response, is_reasoning_model
+
+    if isinstance(content, str):
+        content = sanitize_response(content)
+
+    model_name = data.get("model") if isinstance(data.get("model"), str) else fallback_model
+
     if not isinstance(content, str) or not content.strip():
-        # Some thinking models still return the answer under alternate keys.
-        for alt_key in ("thinking", "reasoning"):
-            alt = message.get(alt_key)
-            if isinstance(alt, str) and alt.strip():
-                content = alt
-                break
-    if not isinstance(content, str) or not content.strip():
-        raise LLMAPIError("Ollama response missing assistant 'content'.")
+        if is_reasoning_model(model_name) and (not isinstance(thinking, str) or not thinking.strip()):
+            content = ""
+        else:
+            content = "Information not found in document excerpts."
 
     model_name = data.get("model") if isinstance(data.get("model"), str) else fallback_model
     finish_reason = data.get("done_reason") if isinstance(data.get("done_reason"), str) else None

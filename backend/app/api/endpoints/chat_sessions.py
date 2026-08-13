@@ -1,9 +1,11 @@
 """Chat session endpoints."""
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.dependencies import PaginationParams, get_chat_session_service
+from app.api.dependencies import PaginationParams, get_current_user, get_chat_session_service
+from app.api.security import verify_ownership
+from app.models.user import User
 from app.schemas.chat_session import ChatSessionCreate, ChatSessionListResponse, ChatSessionResponse, ChatSessionUpdate
 from app.services.chat_session_service import ChatSessionService
 
@@ -14,9 +16,11 @@ router = APIRouter(prefix="/chat-sessions", tags=["Chat Sessions"])
     "", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED, summary="Create a chat session"
 )
 async def create_chat_session(
-    payload: ChatSessionCreate, service: ChatSessionService = Depends(get_chat_session_service)
+    payload: ChatSessionCreate,
+    current_user: User = Depends(get_current_user),
+    service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatSessionResponse:
-    chat_session = await service.create_session(user_id=payload.user_id, title=payload.title)
+    chat_session = await service.create_session(user_id=current_user.id, title=payload.title)
     return ChatSessionResponse.model_validate(chat_session)
 
 
@@ -24,48 +28,33 @@ async def create_chat_session(
 async def list_chat_sessions(
     user_id: str | None = Query(
         default=None,
-        description=(
-            "Owner of the chat sessions. Omit to list sessions for the first "
-            "active user (Swagger-friendly). Get ids from GET /users."
-        ),
-        examples=["dffcb114-052e-4a3c-ad02-de94753f875d"],
+        description="Owner of the chat sessions.",
     ),
     include_archived: bool = Query(default=False),
     pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
     service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatSessionListResponse:
-    parsed_user_id: uuid.UUID | None = None
     if user_id and user_id.strip() and user_id.strip().lower() not in ("undefined", "null", "none"):
         try:
-            parsed_user_id = uuid.UUID(user_id.strip())
+            parsed_uuid = uuid.UUID(user_id.strip())
+            if str(parsed_uuid) != str(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: Cannot access chat sessions belonging to another user.",
+                )
         except ValueError:
-            from fastapi import HTTPException
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid user_id UUID format: {user_id!r}",
             )
 
-    if parsed_user_id is None:
-        from app.repositories.user_repository import UserRepository
-
-        users = await UserRepository(service.session).list_active(limit=1)
-        if not users:
-            # No users yet — return an empty list instead of an error so the
-            # frontend can render gracefully without a 422 / error state.
-            return ChatSessionListResponse(
-                items=[],
-                total=0,
-                limit=pagination.limit,
-                offset=pagination.offset,
-            )
-        parsed_user_id = users[0].id
-
     sessions = await service.list_by_user(
-        parsed_user_id, include_archived=include_archived, limit=pagination.limit, offset=pagination.offset
+        current_user.id, include_archived=include_archived, limit=pagination.limit, offset=pagination.offset
     )
     return ChatSessionListResponse(
         items=[ChatSessionResponse.model_validate(s) for s in sessions],
-        total=len(sessions),  # filtered count unavailable without modifying the repository layer
+        total=len(sessions),
         limit=pagination.limit,
         offset=pagination.offset,
     )
@@ -73,9 +62,14 @@ async def list_chat_sessions(
 
 @router.get("/{session_id}", response_model=ChatSessionResponse, summary="Get a chat session by id")
 async def get_chat_session(
-    session_id: uuid.UUID, service: ChatSessionService = Depends(get_chat_session_service)
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatSessionResponse:
     chat_session = await service.get(session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail=f"Chat session {session_id} not found.")
+    verify_ownership(chat_session.user_id, current_user, "chat session")
     return ChatSessionResponse.model_validate(chat_session)
 
 
@@ -83,27 +77,47 @@ async def get_chat_session(
 async def update_chat_session(
     session_id: uuid.UUID,
     payload: ChatSessionUpdate,
+    current_user: User = Depends(get_current_user),
     service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatSessionResponse:
+    chat_session = await service.get(session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail=f"Chat session {session_id} not found.")
+    verify_ownership(chat_session.user_id, current_user, "chat session")
+
     updates = payload.model_dump(exclude_unset=True)
-    chat_session = await service.update(session_id, **updates)
-    return ChatSessionResponse.model_validate(chat_session)
+    updated_session = await service.update(session_id, **updates)
+    return ChatSessionResponse.model_validate(updated_session)
 
 
 @router.post("/{session_id}/archive", response_model=ChatSessionResponse, summary="Archive a chat session")
 async def archive_chat_session(
-    session_id: uuid.UUID, service: ChatSessionService = Depends(get_chat_session_service)
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatSessionResponse:
-    chat_session = await service.archive(session_id)
-    return ChatSessionResponse.model_validate(chat_session)
+    chat_session = await service.get(session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail=f"Chat session {session_id} not found.")
+    verify_ownership(chat_session.user_id, current_user, "chat session")
+
+    updated_session = await service.archive(session_id)
+    return ChatSessionResponse.model_validate(updated_session)
 
 
 @router.post("/{session_id}/unarchive", response_model=ChatSessionResponse, summary="Unarchive a chat session")
 async def unarchive_chat_session(
-    session_id: uuid.UUID, service: ChatSessionService = Depends(get_chat_session_service)
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatSessionResponse:
-    chat_session = await service.unarchive(session_id)
-    return ChatSessionResponse.model_validate(chat_session)
+    chat_session = await service.get(session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail=f"Chat session {session_id} not found.")
+    verify_ownership(chat_session.user_id, current_user, "chat session")
+
+    updated_session = await service.unarchive(session_id)
+    return ChatSessionResponse.model_validate(updated_session)
 
 
 @router.delete(
@@ -113,6 +127,13 @@ async def unarchive_chat_session(
     description="Sets deleted_at; the transcript (messages/citations) is preserved.",
 )
 async def delete_chat_session(
-    session_id: uuid.UUID, service: ChatSessionService = Depends(get_chat_session_service)
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: ChatSessionService = Depends(get_chat_session_service),
 ) -> None:
+    chat_session = await service.get(session_id)
+    if not chat_session:
+        return
+    verify_ownership(chat_session.user_id, current_user, "chat session")
+
     await service.delete(session_id)

@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,9 @@ from app.services.document_version_service import DocumentVersionService
 from app.services.processing_job_service import ProcessingJobService
 from app.storage.s3_storage_service import S3StorageService
 from app.storage.supabase_storage_service import SupabaseStorageService
+
+if TYPE_CHECKING:
+    from app.services.document_service import DocumentService
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,7 @@ class DocumentProcessor:
         job_service: ProcessingJobService | None = None,
         chunk_service: DocumentChunkService | None = None,
         version_service: DocumentVersionService | None = None,
+        document_service: DocumentService | None = None,
     ) -> None:
         settings = get_settings()
         self.session = session
@@ -64,6 +68,13 @@ class DocumentProcessor:
         self.jobs = job_service or ProcessingJobService(session)
         self.chunks = chunk_service or DocumentChunkService(session)
         self.versions = version_service or DocumentVersionService(session)
+        if document_service is not None:
+            self.documents = document_service
+        elif session is not None:
+            from app.services.document_service import DocumentService
+            self.documents = DocumentService(session)
+        else:
+            self.documents = None
 
     async def process_job(self, job_id: uuid.UUID) -> ProcessingResult:
         """Execute the full pipeline for one processing job.
@@ -89,9 +100,8 @@ class DocumentProcessor:
             started_at = job.started_at
 
             version = await self.versions.get(job.document_version_id)
-            from app.services.document_service import DocumentService
-            doc_service = DocumentService(self.session)
-            document = await doc_service.get(getattr(version, "document_id", version.id))
+            doc_id = getattr(version, "document_id", getattr(version, "id", None))
+            document = await self.documents.get(doc_id) if self.documents and doc_id else None
 
             await self.versions.update(
                 version.id,
@@ -105,6 +115,14 @@ class DocumentProcessor:
                 getattr(version, "document_id", version.id),
                 version.mime_type,
             )
+            
+            now_parsed = datetime.now(timezone.utc)
+            await self.versions.update(
+                version.id,
+                status=DocumentVersionStatus.PARSED,
+                parsed_at=now_parsed,
+            )
+
             semantic_chunks = chunk_document(parsed_doc)
 
             chunk_inputs: list[ChunkInput] = [
@@ -127,7 +145,6 @@ class DocumentProcessor:
             await self.versions.update(
                 version.id,
                 status=DocumentVersionStatus.CHUNKED,
-                parsed_at=now,
                 chunked_at=now,
             )
 

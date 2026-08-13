@@ -137,6 +137,10 @@ class S3StorageService:
             checksum_sha256=checksum,
         )
 
+    async def save(self, *, content: bytes, original_filename: str) -> SavedFile:
+        """Satisfy FileStorage protocol by delegating to upload_file."""
+        return await self.upload_file(content=content, storage_path=original_filename)
+
     # ------------------------------------------------------------------
     # Download
     # ------------------------------------------------------------------

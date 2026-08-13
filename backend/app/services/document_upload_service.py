@@ -178,8 +178,10 @@ class DocumentUploadService:
                     mime_type=resolved_content_type,
                 )
                 try:
-                    local_storage = LocalFileStorage()
-                    await local_storage.save(content=content, original_filename=filename)
+                    local_destination = Path(get_settings().UPLOAD_DIR) / storage_path.lstrip("/")
+                    local_destination.parent.mkdir(parents=True, exist_ok=True)
+                    import asyncio
+                    await asyncio.to_thread(local_destination.write_bytes, content)
                 except Exception as exc:
                     logger.debug("Failed to write local backup copy: %s", exc)
             else:

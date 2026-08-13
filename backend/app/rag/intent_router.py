@@ -22,6 +22,7 @@ class Route(str, Enum):
     GENERIC_CHAT = "GENERIC_CHAT"
     CALCULATOR = "CALCULATOR"
     DIRECT = "DIRECT"
+    WEB = "WEB"
 
 
 # Greetings / Conversational patterns
@@ -101,12 +102,17 @@ _DOC_QA_PHRASES = (
     "what does the document",
     "deployment guide",
     "in deployment guide",
+    "in my project",
+    "in the project",
+    "in project",
+    "my project",
 )
 
 _DOC_QA_CUE_WORDS = (
     "document", "documents", "file", "files", "policy", "policies",
     "doc", "docs", "guide", "guides", "manual", "manuals",
     "handbook", "handbooks", "sheet", "sheets", "prd", "specification",
+    "problem statement", "problem statements",
 )
 
 _DOC_QA_ACTION_WORDS = (
@@ -137,6 +143,17 @@ _PROJECT_INFO_CUES = (
     "built with",
     "built on",
     "stack",
+    "deployment",
+    "deploy",
+    "deployed",
+    "deploying",
+    "setup",
+    "vm",
+    "virtual machine",
+    "server",
+    "process",
+    "install",
+    "installation",
 )
 
 _GENERIC_DEFINITION = re.compile(
@@ -159,6 +176,7 @@ _TITLE_NOISE = {
     "v2",
     "v3",
     "v4",
+    "project",
 }
 
 # Document list cues
@@ -220,6 +238,20 @@ _DOC_METADATA_KEYWORDS = (
     "version of",
     "when was file",
     "when was document",
+)
+
+
+# Creative / generative task verbs — these are NEVER document lookups regardless of context.
+# Queries starting with these verbs should always route to GENERAL_KNOWLEDGE or DIRECT.
+_CREATIVE_GENERATION_VERBS = re.compile(
+    r"^(?:"
+    r"write\b|create\b|generate\b|make\b|build\b|code\b|draft\b|"
+    r"design\b|implement\b|program\b|develop\b|produce\b|"
+    r"give me\b|help me\b|show me how\b|how to\b|how do i\b|"
+    r"write a\b|write me\b|create a\b|generate a\b|make a\b|build a\b|"
+    r"draw\b|sketch\b|plan\b|explain how to\b|teach me\b|tell me how\b"
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -301,22 +333,41 @@ def _is_corpus_document_qa(
     Does NOT force every entity mention into RAG:
     - "what is AIRIS?" stays GENERAL_KNOWLEDGE
     - "AIRIS what tech stack were using" becomes DOCUMENT_QA when AIRIS docs exist
+    - "write a login page" stays GENERAL_KNOWLEDGE even with corpus context
     """
     if not document_titles:
         return False
-    if not _has_project_info_cues(lower):
-        return False
     if _GENERIC_DEFINITION.match(lower):
         return False
+    # Creative/generative tasks are never document lookups even in a doc session
+    if _CREATIVE_GENERATION_VERBS.match(lower.strip()):
+        return False
 
-    if _matches_document_entity(lower, document_titles):
-        return True
+    has_entity = _matches_document_entity(lower, document_titles)
 
     # Anaphoric follow-up: entity lives in recent conversation, cues in current turn.
-    if context_texts:
+    if not has_entity and context_texts:
         context_blob = " ".join(t.lower() for t in context_texts if t)
         if context_blob and _matches_document_entity(context_blob, document_titles):
-            return True
+            # The query itself doesn't mention the entity, but the history does.
+            # We should only set has_entity = True if the query has pronouns/anaphora
+            # or direct technical project cues referencing the system.
+            anaphora_cues = [" it ", " this ", " that ", " the system ", " the project ", " the tool ", " the app ", " the codebase ", " the document ", " the file ", " the code ", " they "]
+            has_anaphora = any(cue in f" {lower} " for cue in anaphora_cues) or _has_project_info_cues(lower)
+            if has_anaphora:
+                has_entity = True
+
+    if not has_entity:
+        return False
+
+    # Route if the query contains project info cues or standard question action words
+    if _has_project_info_cues(lower):
+        return True
+    if any(action in lower for action in _DOC_QA_ACTION_WORDS):
+        return True
+    if any(req in lower for req in ["tell me", "explain", "about", "describe", "what is"]):
+        return True
+
     return False
 
 
@@ -330,6 +381,24 @@ def _is_calculator(text: str, lower: str) -> bool:
     if _CALC_EXPRESSION.match(text) and re.search(r"[\d]", text) and re.search(r"[\+\-\*\/\%]", text):
         return True
     if _CALC_KEYWORDS.search(text):
+        return True
+    return False
+
+
+def _is_web_query(text: str, lower: str) -> bool:
+    # Look for keywords indicating real-time info or search queries
+    web_keywords = {
+        "weather", "today", "tomorrow", "yesterday", "current",
+        "news", "stock", "price", "good friday", "time", "date",
+        "forecast", "temperature", "temp"
+    }
+    if any(kw in lower for kw in web_keywords):
+        return True
+    # If the question contains a specific 4-digit year like 2024, 2025, 2026
+    if re.search(r"\b20\d{2}\b", lower):
+        return True
+    # If London/cities or similar real-time queries are present, or "weather in ..."
+    if "london" in lower:
         return True
     return False
 
@@ -358,10 +427,14 @@ def classify(
 
     if _is_generic_chat(lower):
         route = Route.GENERIC_CHAT
+    elif len(lower.split()) == 1:
+        route = Route.DIRECT
     elif _is_document_list(lower):
         route = Route.DOCUMENT_LIST
     elif _is_document_metadata(lower):
         route = Route.DOCUMENT_METADATA
+    elif _is_calculator(text, lower):
+        route = Route.CALCULATOR
     elif _is_document_qa(text, lower):
         route = Route.DOCUMENT_QA
     elif _is_corpus_document_qa(
@@ -370,10 +443,10 @@ def classify(
         context_texts=context_texts,
     ):
         route = Route.DOCUMENT_QA
-    elif _is_calculator(text, lower):
-        route = Route.CALCULATOR
+    elif _is_web_query(text, lower):
+        route = Route.WEB
     else:
-        # General questions (dates, current events, facts) -> web search
+        # Default fallback for general questions
         route = Route.GENERAL_KNOWLEDGE
 
     logger.info(

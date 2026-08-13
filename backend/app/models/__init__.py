@@ -28,6 +28,7 @@ from app.models.enums import (
     VectorMetric,
 )
 from app.models.processing_job import ProcessingJob
+from app.models.rag_trace import RAGTrace
 from app.models.system_setting import SystemSetting
 from app.models.user import User
 
@@ -42,6 +43,7 @@ __all__ = [
     "ChatMessage",
     "Citation",
     "ProcessingJob",
+    "RAGTrace",
     "SystemSetting",
     # enums
     "UserRole",

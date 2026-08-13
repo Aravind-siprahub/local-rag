@@ -2,6 +2,7 @@
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat_message import ChatMessage
@@ -18,6 +19,7 @@ class ChatMessageRepository(BaseRepository[ChatMessage, uuid.UUID]):
         """Oldest first — the natural order for rendering a transcript."""
         stmt = (
             select(ChatMessage)
+            .options(selectinload(ChatMessage.citations))
             .where(ChatMessage.session_id == session_id)
             .order_by(ChatMessage.created_at)
             .limit(limit)

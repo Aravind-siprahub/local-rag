@@ -15,10 +15,16 @@ class UserRepository(BaseRepository[User, uuid.UUID]):
     async def get_by_email(self, email: str) -> User | None:
         """`email` is `CITEXT`, so this comparison is case-insensitive at
         the database level — no `.lower()`/`.ilike()` needed here.
+        Scoped to active users (deleted_at IS NULL).
         """
-        stmt = select(User).where(User.email == email)
+        clean_email = email.strip() if email else ""
+        stmt = (
+            select(User)
+            .where(User.email == clean_email, User.deleted_at.is_(None))
+            .limit(1)
+        )
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def list_active(self, *, limit: int = 100, offset: int = 0) -> list[User]:
         """Excludes soft-deleted users — mirrors the `deleted_at IS NULL`
