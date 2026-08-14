@@ -5,7 +5,7 @@ No `ChatMessageUpdate`: messages are append-only (the ORM model has no
 editing history.
 """
 import uuid
-from typing import Annotated
+from typing import Any, Annotated
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,6 +22,7 @@ class ChatMessageBase(BaseModel):
     completion_tokens: Annotated[int, Field(ge=0)] | None = None
     latency_ms: Annotated[int, Field(ge=0)] | None = None
     generation_time_ms: Annotated[int, Field(ge=0)] | None = None
+    attachments: list[dict[str, Any]] | None = None
 
     @field_validator("content")
     @classmethod

@@ -10,14 +10,24 @@ interface ChatHistoryProps {
   isLoading?: boolean
   latestCitations?: Citation[]
   loadingLabel?: string
+  onEditMessage?: (message: Message) => void
+  onRegenerateMessage?: (message: Message) => void
 }
 
-export function ChatHistory({ messages, isLoading, latestCitations, loadingLabel }: ChatHistoryProps) {
+export function ChatHistory({
+  messages,
+  isLoading,
+  latestCitations,
+  loadingLabel,
+  onEditMessage,
+  onRegenerateMessage,
+}: ChatHistoryProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (scrollRef.current) {
-      const viewport = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]') || scrollRef.current
+      const viewport =
+        scrollRef.current.querySelector('[data-radix-scroll-area-viewport]') || scrollRef.current
       viewport.scrollTop = viewport.scrollHeight
     }
   }, [messages, isLoading])
@@ -30,23 +40,26 @@ export function ChatHistory({ messages, isLoading, latestCitations, loadingLabel
     )
   }
 
-
   return (
-    <ScrollArea className="flex-1 min-h-0 h-full px-4 py-4" ref={scrollRef}>
-      <div className="max-w-3xl mx-auto flex flex-col gap-6 pb-6">
+    <ScrollArea className="flex-1 min-h-0 h-full px-3 py-4 md:px-6" ref={scrollRef}>
+      <div className="max-w-3xl mx-auto flex flex-col gap-5 pb-4">
         {messages.map((msg, index) => (
-          <div key={msg.id || index} className="group">
-            <ChatMessage 
-              message={msg} 
+          <div key={msg.id || index} className="w-full">
+            <ChatMessage
+              message={msg}
               citations={
-                // Only attach citations to the very last assistant message if we have them in state
-                (index === messages.length - 1 && msg.role === 'assistant') ? latestCitations : undefined
-              } 
+                index === messages.length - 1 && msg.role === 'assistant'
+                  ? latestCitations
+                  : undefined
+              }
+              onEdit={onEditMessage}
+              onRegenerate={onRegenerateMessage}
+              isSending={isLoading}
             />
           </div>
         ))}
         {isLoading && (
-          <div className="max-w-3xl mx-auto w-full group">
+          <div className="w-full pt-1">
             <TypingIndicator label={loadingLabel} />
           </div>
         )}

@@ -5,6 +5,7 @@ correcting a message means posting a new one, not editing history.
 """
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +33,7 @@ class ChatMessageService(BaseService[ChatMessage, uuid.UUID, ChatMessageReposito
         completion_tokens: int | None = None,
         latency_ms: int | None = None,
         generation_time_ms: int | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> ChatMessage:
         """Business rules:
         - the parent chat session must exist and not be soft-deleted;
@@ -53,6 +55,7 @@ class ChatMessageService(BaseService[ChatMessage, uuid.UUID, ChatMessageReposito
                 completion_tokens=completion_tokens,
                 latency_ms=latency_ms,
                 generation_time_ms=generation_time_ms,
+                attachments=attachments,
             )
             await self._sessions.update(chat_session, last_message_at=datetime.now(timezone.utc))
         except Exception:

@@ -289,10 +289,10 @@ async def test_citations_formatting():
     formatted = format_chunk(
         index=1,
         chunk_text=chunk.chunk_text,
-        title=chunk.document_title,
-        section=chunk.section_title,
-        page=str(chunk.page_number),
-        chunk_id=str(chunk.chunk_id),
+        title=chunk.document_title or "Unknown",
+        section=chunk.section_title or "N/A",
+        page=chunk.page_number or "N/A",
+        chunk_id=chunk.chunk_id,
     )
 
     assert "Document: Safety Manual.pdf" in formatted

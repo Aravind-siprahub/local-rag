@@ -44,6 +44,14 @@ export interface Conversation {
   created_at: string
 }
 
+export interface Attachment {
+  id: string
+  mime_type: string
+  filename: string
+  size: number
+  timestamp: string
+}
+
 export interface Message {
   id: string
   session_id: string
@@ -57,4 +65,6 @@ export interface Message {
   total_tokens?: number
   error_message?: string
   created_at: string
+  attachments?: Attachment[]
+  localImageUrl?: string
 }

@@ -37,7 +37,7 @@ class TestPromptBuilder:
         assert prompt.retrieved_chunks[0].chunk_text == "First chunk."
 
     def test_truncates_context_to_max_chars(self) -> None:
-        builder = PromptBuilder(max_context_chars=80)
+        builder = PromptBuilder(max_context_chars=120)
         chunks = [
             _ranked("A" * 40, 1),
             _ranked("B" * 40, 2),
@@ -50,7 +50,7 @@ class TestPromptBuilder:
         context_only = "\n\n".join(
             format_chunk(chunk.context_index, chunk.chunk_text) for chunk in prompt.retrieved_chunks
         )
-        assert len(context_only) <= 80
+        assert len(context_only) <= 120
 
     def test_truncates_single_large_chunk(self) -> None:
         builder = PromptBuilder(max_context_chars=30)

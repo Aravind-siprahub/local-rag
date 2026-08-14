@@ -100,12 +100,16 @@ class FakeLLMClient:
         user_prompt: str,
         *,
         num_predict: int | None = None,
+        images: list[bytes] | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
         self.calls.append(
             {
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "num_predict": num_predict,
+                "images": images,
+                "model": model,
             }
         )
         return LLMResponse(

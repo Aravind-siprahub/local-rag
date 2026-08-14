@@ -9,6 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test:chat-lifecycle": "tsx --test src/features/chat/store/chatRequest.store.test.ts",
+    "test:chat-features": "tsx --test src/features/chat/store/chatFeatures.test.ts",
     "test:chat-long": "tsx src/features/chat/store/simulate-long-request.ts"
   },
   "dependencies": {

@@ -1,15 +1,19 @@
 import { useState, useRef, useEffect } from 'react'
-import { SendHorizontal } from 'lucide-react'
+import { SendHorizontal, Paperclip, X, Image as ImageIcon, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { ModelSelector } from './ModelSelector'
+import type { Message } from '../types/chat'
 
 interface ChatInputProps {
-  onSend: (message: string) => void
-  /** Disables the entire input (rare). Prefer sendDisabled while generating. */
+  onSend: (message: string, file?: File, preservedImageUrl?: string) => void
   disabled?: boolean
-  /** Prevents duplicate Send for the active conversation only. Input stays visible/usable. */
   sendDisabled?: boolean
   placeholder?: string
+  selectedModel: string
+  onSelectModel: (modelId: string) => void
+  editingMessage?: Message | null
+  onCancelEdit?: () => void
 }
 
 export function ChatInput({
@@ -17,37 +21,96 @@ export function ChatInput({
   disabled,
   sendDisabled,
   placeholder = 'Ask a question about your documents...',
+  selectedModel,
+  onSelectModel,
+  editingMessage,
+  onCancelEdit,
 }: ChatInputProps) {
   const [input, setInput] = useState('')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [preservedImageUrl, setPreservedImageUrl] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const cannotSend = Boolean(disabled || sendDisabled)
+
+  // Sync state when entering Edit mode
+  useEffect(() => {
+    if (editingMessage) {
+      setInput(editingMessage.content || '')
+      if (editingMessage.localImageUrl) {
+        setPreservedImageUrl(editingMessage.localImageUrl)
+        setPreviewUrl(editingMessage.localImageUrl)
+      } else {
+        setPreservedImageUrl(null)
+        setPreviewUrl(null)
+      }
+      setSelectedFile(null)
+      setErrorMsg(null)
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+      }
+    }
+  }, [editingMessage])
 
   const handleInput = () => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`
     }
   }
-
-  const isSendingRef = useRef(false)
 
   useEffect(() => {
     handleInput()
   }, [input])
 
-  useEffect(() => {
-    if (!sendDisabled) {
-      isSendingRef.current = false
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setErrorMsg(null)
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Size limit: 10 MB
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMsg('Image size exceeds the 10 MB limit.')
+      return
     }
-  }, [sendDisabled])
+
+    // MIME type check
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp']
+    if (!validTypes.includes(file.type)) {
+      setErrorMsg('Unsupported image format. Only PNG, JPEG, and WEBP are supported.')
+      return
+    }
+
+    setSelectedFile(file)
+    setPreservedImageUrl(null) // New file replaces preserved image
+    const objectUrl = URL.createObjectURL(file)
+    setPreviewUrl(objectUrl)
+  }
+
+  const clearFile = () => {
+    setSelectedFile(null)
+    if (previewUrl && !preservedImageUrl) {
+      URL.revokeObjectURL(previewUrl)
+    }
+    setPreviewUrl(null)
+    setPreservedImageUrl(null)
+    setErrorMsg(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
 
   const handleSend = () => {
-    console.log("[1] ChatInput.handleSend()");
-    console.log("Question:", input);
     const trimmed = input.trim()
-    if (!trimmed || cannotSend) return
-    onSend(trimmed)
+    if ((!trimmed && !selectedFile && !preservedImageUrl) || cannotSend) return
+    onSend(trimmed, selectedFile || undefined, preservedImageUrl || undefined)
     setInput('')
+    clearFile()
+    if (onCancelEdit) {
+      onCancelEdit()
+    }
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -60,38 +123,152 @@ export function ChatInput({
     }
   }
 
+  const hasActiveImage = Boolean(previewUrl || preservedImageUrl || selectedFile)
+
   return (
-    <div className="relative flex items-end w-full rounded-xl border border-input bg-background p-2 shadow-sm focus-within:ring-1 focus-within:ring-ring">
-      <textarea
-        id="chat-input"
-        name="message"
-        autoComplete="off"
-        ref={textareaRef}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={
-          sendDisabled && !disabled
-            ? 'Generating response… you can still browse other chats'
-            : placeholder
-        }
-        disabled={disabled}
+    <div className="flex flex-col w-full gap-2">
+      {/* Editing Message Banner */}
+      {editingMessage && (
+        <div className="flex items-center justify-between px-3 py-1.5 bg-primary/10 border border-primary/20 rounded-xl text-xs text-primary animate-in fade-in-0 duration-150">
+          <div className="flex items-center gap-1.5 font-medium truncate">
+            <Pencil className="h-3.5 w-3.5 shrink-0" />
+            <span>Editing user message</span>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setInput('')
+              clearFile()
+              if (onCancelEdit) onCancelEdit()
+            }}
+            className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground hover:bg-background/60 rounded-lg"
+          >
+            Cancel edit
+          </Button>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="text-xs text-destructive px-3 py-1.5 bg-destructive/10 rounded-lg border border-destructive/20 max-w-fit self-start animate-in fade-in-0">
+          {errorMsg}
+        </div>
+      )}
+
+      <div
         className={cn(
-          'flex-1 min-h-10 max-h-50 w-full resize-none bg-transparent px-3 py-2 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50',
-          'scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent',
+          'relative flex flex-col w-full rounded-2xl border border-input bg-card/90 p-2 shadow-xs transition-all duration-200 focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/30',
+          cannotSend && 'opacity-80',
         )}
-        rows={1}
-      />
-      <Button
-        size="icon"
-        onClick={handleSend}
-        disabled={!input.trim() || cannotSend}
-        className="ml-2 mb-1 h-8 w-8 shrink-0 rounded-lg"
-        title={sendDisabled ? 'Wait for the current response in this chat' : 'Send message'}
       >
-        <SendHorizontal className="h-4 w-4" />
-        <span className="sr-only">Send message</span>
-      </Button>
+        {/* Compact Image Preview Bar inside Composer */}
+        {previewUrl && (
+          <div className="relative inline-flex items-center gap-3 m-1.5 p-1.5 pr-3 border border-border/60 rounded-xl bg-muted/40 self-start animate-in fade-in-0 duration-150">
+            <div className="relative h-12 w-12 rounded-lg overflow-hidden shrink-0 border border-border/40 bg-background">
+              <img
+                src={previewUrl}
+                alt="Attached preview"
+                className="h-full w-full object-cover"
+              />
+            </div>
+            <div className="flex flex-col min-w-0 pr-1">
+              <span className="text-xs font-medium text-foreground truncate max-w-44">
+                {selectedFile?.name || 'Attached Image'}
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                {selectedFile ? `${(selectedFile.size / 1024).toFixed(1)} KB` : 'Preserved image'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={clearFile}
+              className="p-1 text-muted-foreground hover:text-foreground hover:bg-muted rounded-full transition-colors ml-auto"
+              title="Remove attached image"
+              aria-label="Remove attached image"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        <div className="relative flex items-end w-full">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept="image/png, image/jpeg, image/jpg, image/webp"
+            className="hidden"
+            id="chat-image-input"
+          />
+
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled}
+            className={cn(
+              'h-9 w-9 mr-1 mb-0.5 shrink-0 rounded-xl text-muted-foreground hover:text-foreground transition-colors',
+              hasActiveImage && 'text-primary bg-primary/10 hover:bg-primary/20',
+            )}
+            title="Attach image (PNG, JPEG, WEBP)"
+            aria-label="Attach image"
+          >
+            {hasActiveImage ? <ImageIcon className="h-4 w-4" /> : <Paperclip className="h-4 w-4" />}
+          </Button>
+
+          <textarea
+            id="chat-input"
+            name="message"
+            autoComplete="off"
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              sendDisabled && !disabled
+                ? 'Generating response… you can still browse other chats'
+                : editingMessage
+                ? 'Modify your message and press Resubmit...'
+                : placeholder
+            }
+            disabled={disabled}
+            className={cn(
+              'flex-1 min-h-10 max-h-44 w-full resize-none bg-transparent px-2.5 py-2 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/70',
+              'scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent',
+            )}
+            rows={1}
+          />
+
+          {/* Embedded Model Selector */}
+          <div className="mb-1 mr-1 shrink-0">
+            <ModelSelector
+              selectedModel={selectedModel}
+              onSelectModel={onSelectModel}
+              hasImageAttached={hasActiveImage}
+              disabled={cannotSend}
+            />
+          </div>
+
+          <Button
+            size="icon"
+            onClick={handleSend}
+            disabled={(!input.trim() && !hasActiveImage) || cannotSend}
+            className="ml-1 mb-0.5 h-9 w-9 shrink-0 rounded-xl shadow-xs transition-transform active:scale-95"
+            title={
+              sendDisabled
+                ? 'Wait for the current response'
+                : editingMessage
+                ? 'Resubmit edited message'
+                : 'Send message'
+            }
+            aria-label={editingMessage ? 'Resubmit edited message' : 'Send message'}
+          >
+            <SendHorizontal className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }

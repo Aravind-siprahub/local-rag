@@ -63,19 +63,18 @@ def test_parse_user_prompt():
     user_prompt = format_user_prompt(context, QUERY)
     print(f"\n  user_prompt (first 400 chars):\n{user_prompt[:400]!r}\n")
 
-    history_msgs, ctx_text, actual_query = _parse_user_prompt(user_prompt)
+    history_msgs, remaining = _parse_user_prompt(user_prompt)
 
     print(f"  Parsed history messages: {len(history_msgs)}")
-    print(f"  Parsed context (first 200 chars): {(ctx_text or 'NONE')[:200]!r}")
-    print(f"  Parsed actual_query: {actual_query!r}")
+    print(f"  Parsed remaining block (first 200 chars): {remaining[:200]!r}")
 
-    if not ctx_text or "Frontend" not in ctx_text:
-        print("\n  X BUG: _parse_user_prompt is NOT extracting context text!")
+    if "Frontend" not in remaining:
+        print("\n  X BUG: _parse_user_prompt is NOT preserving context text!")
         print("     Ollama will receive ONLY the question with NO document passages.")
     else:
-        print("\n  OK: Context text correctly extracted, contains document chunks")
+        print("\n  OK: Context text correctly preserved inside the user message block")
 
-    return ctx_text
+    return remaining
 
 
 # ─── 3. test the Ollama payload builder  ───────────────────────────────────

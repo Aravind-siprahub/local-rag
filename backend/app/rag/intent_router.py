@@ -109,7 +109,7 @@ _DOC_QA_PHRASES = (
 )
 
 _DOC_QA_CUE_WORDS = (
-    "document", "documents", "file", "files", "policy", "policies",
+    "document", "documents", "documentation", "file", "files", "policy", "policies",
     "doc", "docs", "guide", "guides", "manual", "manuals",
     "handbook", "handbooks", "sheet", "sheets", "prd", "specification",
     "problem statement", "problem statements",
@@ -119,6 +119,7 @@ _DOC_QA_ACTION_WORDS = (
     "say", "state", "mention", "contain", "in", "according",
     "what", "how", "tell", "explain", "summarize", "summarise", "describe",
     "show", "find", "search", "details", "about", "abt", "ssl", "nginx", "setup",
+    "compare", "comparison", "match", "check", "contrast",
 )
 
 # Project / corpus-aware document questions (tech stack, architecture, etc.)
