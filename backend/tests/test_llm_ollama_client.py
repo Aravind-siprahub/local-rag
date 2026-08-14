@@ -237,3 +237,77 @@ async def test_oom_maps_to_unavailable_without_retry() -> None:
     assert body["error"] == "LLM unavailable"
     assert body["reason"] == "Ollama failed to load the configured model"
     assert "out-of-memory" in body["details"].lower() or "oom" in body["details"].lower()
+
+
+@pytest.mark.asyncio
+async def test_supports_vision_returns_true_for_vision_model() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/show"
+        return httpx.Response(200, json={
+            "details": {
+                "families": ["llama", "clip"]
+            }
+        })
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = OllamaLLMClient(
+            base_url="http://ollama.test",
+            model="vision-model",
+            client=http_client,
+        )
+        assert await client.supports_vision() is True
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_supports_vision_returns_false_for_non_vision_model() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/show"
+        return httpx.Response(200, json={
+            "details": {
+                "families": ["llama"]
+            }
+        })
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = OllamaLLMClient(
+            base_url="http://ollama.test",
+            model="text-model",
+            client=http_client,
+        )
+        assert await client.supports_vision() is False
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_with_images_encodes_base64() -> None:
+    capture: dict = {}
+    
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        capture["payload"] = payload
+        return httpx.Response(200, json=_chat_body(model="test-chat-model"))
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = OllamaLLMClient(
+            base_url="http://ollama.test",
+            model="test-chat-model",
+            client=http_client,
+        )
+        # 1x1 transparent GIF
+        gif_bytes = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
+        await client.generate("System.", "Question?", images=[gif_bytes])
+        await client.close()
+
+    payload = capture["payload"]
+    user_msg = payload["messages"][1]
+    assert user_msg["role"] == "user"
+    assert "images" in user_msg
+    assert isinstance(user_msg["images"], list)
+    assert len(user_msg["images"]) == 1
+    # Check that it's base64 encoded string
+    assert isinstance(user_msg["images"][0], str)
+    assert len(user_msg["images"][0]) > 10

@@ -17,8 +17,10 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+from typing import Generator
+
 @pytest.fixture(autouse=True)
-def clear_overrides() -> None:
+def clear_overrides() -> Generator[None, None, None]:
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
@@ -104,12 +106,17 @@ class FakeChatMessageService:
 
 
 def _setup_overrides(session_id: uuid.UUID, user_id: uuid.UUID) -> FakeRAGService:
+    from app.api.dependencies import get_current_user
+    from app.models.user import User
     fake_rag = FakeRAGService()
     app.dependency_overrides[get_rag_service] = lambda: fake_rag
     app.dependency_overrides[get_chat_session_service] = lambda: FakeChatSessionService(
         FakeChatSession(session_id, user_id)
     )
     app.dependency_overrides[get_chat_message_service] = lambda: FakeChatMessageService(session_id)
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=user_id, email="test@example.com", hashed_password="pwd", is_active=True
+    )
     return fake_rag
 
 
@@ -160,10 +167,10 @@ class TestChatAPI:
             async def close(self):
                 return None
 
+        user_id = uuid.uuid4()
+        _setup_overrides(session_id, user_id)
+
         app.dependency_overrides[get_rag_service] = lambda: FailingRAG()
-        app.dependency_overrides[get_chat_session_service] = lambda: FakeChatSessionService(
-            FakeChatSession(session_id, uuid.uuid4())
-        )
 
         response = client.post(
             "/chat",
@@ -212,3 +219,48 @@ class TestChatAPI:
         post_schema = paths["/chat"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
         assert "$ref" in post_schema
         assert post_schema["$ref"].endswith("ChatResponse")
+
+    def test_post_chat_multipart_form_success(self, client: TestClient) -> None:
+        session_id = uuid.uuid4()
+        fake_rag = _setup_overrides(session_id, uuid.uuid4())
+        
+        # 1x1 transparent PNG bytes
+        png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc`00\x00\x00\x00\x00\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82"
+        
+        response = client.post(
+            "/chat",
+            data={
+                "session_id": str(session_id),
+                "question": "What is in this report screenshot?",
+            },
+            files={
+                "file": ("screenshot.png", png_bytes, "image/png")
+            }
+        )
+        
+        assert response.status_code == 200
+        body = response.json()
+        assert body["answer"] == "Revenue grew 12%."
+        assert len(fake_rag.calls) == 1
+        assert fake_rag.calls[0]["question"] == "What is in this report screenshot?"
+        assert fake_rag.calls[0]["image"] == png_bytes
+        assert fake_rag.calls[0]["image_name"] == "screenshot.png"
+        assert fake_rag.calls[0]["image_mime"] == "image/png"
+
+    def test_post_chat_multipart_form_invalid_format(self, client: TestClient) -> None:
+        session_id = uuid.uuid4()
+        _setup_overrides(session_id, uuid.uuid4())
+        
+        response = client.post(
+            "/chat",
+            data={
+                "session_id": str(session_id),
+                "question": "What is in this text file?",
+            },
+            files={
+                "file": ("notes.txt", b"plain text", "text/plain")
+            }
+        )
+        
+        assert response.status_code == 400
+        assert "Unsupported file extension" in response.json()["detail"]

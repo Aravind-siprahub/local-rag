@@ -1,19 +1,16 @@
 from typing import Any
 
 CHUNK_TEMPLATE = (
-    "Passage {index}\n\n"
-    "Document:\n{title}\n\n"
-    "Section:\n{section}\n\n"
-    "Page:\n{page}\n\n"
-    "Passage ID:\n{chunk_id}\n\n"
-    "Uploaded Metadata:\nDocument '{title}' is active in user workspace\n\n"
-    "Content:\n{chunk_text}"
+    "---\n"
+    "Document: {title}\n"
+    "Section: {section}\n"
+    "Page: {page}\n\n"
+    "{chunk_text}"
 )
 
 USER_PROMPT_WITH_CONTEXT = (
-    "Use the following document excerpts to answer the question. "
-    "If the excerpts do not contain enough information, say so.\n"
-    "Respond directly with the final answer. Do NOT explain your reasoning, do NOT summarize the chunks, and do NOT use conversational filler.\n\n"
+    "Use the document passages below to answer the question. "
+    "Combine all relevant facts and return only the final answer.\n\n"
     "{context_header}\n\n"
     "{context}\n\n"
     "{question_header}\n"
@@ -23,7 +20,7 @@ USER_PROMPT_WITH_CONTEXT = (
 USER_PROMPT_WITHOUT_CONTEXT = (
     "Question:\n\n{question}\n\n"
     "---------------------------------\n\n"
-    "Retrieved Document Context\n\nNo document excerpts available."
+    "Retrieved Document Context\n\nNo document excerpts were available."
 )
 
 
@@ -33,15 +30,13 @@ def format_chunk(
     title: str = "Unknown",
     section: str = "N/A",
     page: int | str = "N/A",
-    chunk_id: Any = "N/A",
+    chunk_id: Any = "N/A",  # kept for API compatibility; no longer rendered in template
 ) -> str:
-    """Format one retrieved passage with visible index, document title, section, page, chunk_id, and text content."""
+    """Format one retrieved passage with document title, section, and page for the LLM prompt."""
     return CHUNK_TEMPLATE.format(
-        index=index,
         title=title.strip(),
         section=section.strip() if section else "General",
         page=str(page) if page is not None else "1",
-        chunk_id=str(chunk_id),
         chunk_text=chunk_text.strip(),
     )
 

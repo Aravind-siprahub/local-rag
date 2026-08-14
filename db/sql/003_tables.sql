@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     latency_ms          INTEGER,
     generation_time_ms  INTEGER,
     error_message       TEXT,
+    attachments         JSONB,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT chat_messages_content_not_blank_chk CHECK (btrim(content) <> '')

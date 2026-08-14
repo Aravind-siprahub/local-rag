@@ -52,6 +52,7 @@ class PromptBuilder:
         max_context_chars: int | None = None,
     ) -> None:
         settings = get_settings()
+        self._custom_system_prompt = system_prompt is not None
         self.system_prompt = system_prompt if system_prompt is not None else settings.SYSTEM_PROMPT
         self.max_context_chars = max_context_chars if max_context_chars is not None else settings.MAX_CONTEXT_CHARS
 
@@ -60,6 +61,8 @@ class PromptBuilder:
         question: str,
         retrieved_chunks: list[RankedResult],
         chat_history: list[dict[str, str]] | None = None,
+        *,
+        is_vision: bool = False,
     ) -> Prompt:
         """Build a prompt from a user question, chat history, and ranked retrieval results."""
         if not question or not question.strip():
@@ -70,8 +73,16 @@ class PromptBuilder:
         included_chunks, context_text = _build_context(retrieved_chunks, self.max_context_chars, question=question.strip())
         user_prompt = format_user_prompt(context_text, question.strip(), chat_history=chat_history)
 
+        system_prompt = self.system_prompt
+        if is_vision and not self._custom_system_prompt:
+            settings = get_settings()
+            if included_chunks:
+                system_prompt = settings.VISION_RAG_SYSTEM_PROMPT
+            else:
+                system_prompt = settings.VISION_SYSTEM_PROMPT
+
         return Prompt(
-            system_prompt=self.system_prompt.strip(),
+            system_prompt=system_prompt.strip(),
             user_prompt=user_prompt,
             retrieved_chunks=included_chunks,
         )
@@ -163,12 +174,31 @@ def _build_context(
             continue
 
         remaining = max_context_chars - used_chars - separator_len
-        if remaining <= len(f"Chunk {context_index}\n"):
-            break
+        empty_block = format_chunk(
+            context_index,
+            "",
+            title=title,
+            section=section,
+            page=page,
+            chunk_id=chunk_id,
+        )
+        template_len = len(empty_block)
+        is_single_chunk = len(retrieved_chunks) == 1
 
-        truncated_text = _truncate_text(effective_text, remaining - len(f"Chunk {context_index}\n"))
+        if remaining <= template_len:
+            if not is_single_chunk or used_chars > 0:
+                break
+
+        if is_single_chunk and remaining <= template_len:
+            allowed_text_chars = max(10, remaining - 10)
+        else:
+            allowed_text_chars = remaining - template_len
+
+        truncated_text = _truncate_text(effective_text, allowed_text_chars)
         if not truncated_text.strip():
-            break
+            if not is_single_chunk:
+                break
+            truncated_text = "..."
 
         truncated_block = format_chunk(
             context_index,

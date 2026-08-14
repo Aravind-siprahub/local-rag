@@ -47,6 +47,44 @@ def _get_concurrency_semaphore() -> asyncio.Semaphore:
     return _OLLAMA_CONCURRENCY_SEMAPHORE
 
 
+def _parse_user_prompt(user_prompt: str) -> tuple[list[dict[str, str]], str]:
+    """Extract chat history messages from the user_prompt prefix.
+
+    Returns ``(history_messages, remaining)`` where *remaining* is the full
+    context + question block that should be sent as the user message unchanged.
+    We deliberately do NOT try to re-split the context from the question here
+    because the branch conditions previously used did not match our template
+    format (USER_PROMPT_WITH_CONTEXT), causing document context to be silently
+    dropped every time.
+    """
+    user_prompt = user_prompt.strip()
+    history_messages: list[dict[str, str]] = []
+
+    remaining = user_prompt
+
+    # Extract the optional chat-history prefix added by format_user_prompt().
+    if "Recent Conversation:" in remaining and "---------------------------------" in remaining:
+        parts = remaining.split("Recent Conversation:\n", 1)
+        if len(parts) == 2:
+            after_header = parts[1]
+            if "---------------------------------" in after_header:
+                history_part, remaining = after_header.split("---------------------------------", 1)
+                remaining = remaining.strip()
+
+                for line in history_part.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("User:"):
+                        history_messages.append({"role": "user", "content": line[5:].strip()})
+                    elif line.startswith("Assistant:"):
+                        history_messages.append({"role": "assistant", "content": line[10:].strip()})
+                    elif line.startswith("[Prior Conversation Summary:") and line.endswith("]"):
+                        history_messages.append({"role": "system", "content": line[1:-1].strip()})
+
+    return history_messages, remaining or user_prompt
+
+
 class OllamaLLMClient:
     """Async Ollama `/api/chat` client with retry, timeout, bounded concurrency, and keep-alive support."""
 
@@ -100,6 +138,49 @@ class OllamaLLMClient:
             options["num_thread"] = self.num_thread
         return options
 
+    async def supports_vision(self, model: str | None = None) -> bool:
+        """Query the model info from Ollama to see if it supports vision/multimodal input."""
+        target_model = model or self.model
+        model_lower = target_model.lower()
+
+        # Fast path: trust the model name before hitting the network.
+        # qwen3-vl, qwen2-vl, llava*, bakllava, moondream, minicpm-v, mllama, etc.
+        _VISION_NAME_PATTERNS = ("vision", "-vl", ":vl", "llava", "mllama", "bakllava", "minicpm", "moondream")
+        if any(p in model_lower for p in _VISION_NAME_PATTERNS):
+            logger.info("[VISION] supports_vision=True (name match) model=%s", target_model)
+            return True
+
+        # Slow path: ask Ollama /api/show for explicit capability metadata.
+        try:
+            client = await self._get_client()
+            url = f"{self.base_url}/api/show"
+            payload = {"name": target_model}
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                data = response.json()
+                # 1. Explicit capabilities array (modern Ollama)
+                capabilities = data.get("capabilities", [])
+                if "vision" in capabilities:
+                    logger.info("[VISION] supports_vision=True (capabilities) model=%s", target_model)
+                    return True
+                # 2. Model family — includes qwen alongside llava/mllama/clip
+                details = data.get("details", {})
+                families = details.get("families", []) or []
+                _VISION_FAMILIES = {"mllama", "llava", "clip", "qwen", "qwen2", "qwen3", "minicpm", "moondream"}
+                if any(f in _VISION_FAMILIES for f in families):
+                    logger.info("[VISION] supports_vision=True (family=%s) model=%s", families, target_model)
+                    return True
+                # 3. model_info projector key (older Ollama builds)
+                model_info = data.get("model_info", {})
+                if any("projector" in k for k in model_info.keys()):
+                    logger.info("[VISION] supports_vision=True (projector key) model=%s", target_model)
+                    return True
+            logger.info("[VISION] supports_vision=False (Ollama show returned no vision signal) model=%s", target_model)
+            return False
+        except Exception as exc:
+            logger.warning("[VISION] /api/show failed for model=%s: %s — defaulting to False", target_model, exc)
+            return False
+
     async def generate(
         self,
         system_prompt: str,
@@ -108,6 +189,8 @@ class OllamaLLMClient:
         num_predict: int | None = None,
         response_format: str | None = None,
         temperature: float | None = None,
+        images: list[bytes] | None = None,
+        model: str | None = None,
     ) -> LLMResponse:
         """Generate a completion from system and user prompts."""
         if not user_prompt or not user_prompt.strip():
@@ -122,12 +205,14 @@ class OllamaLLMClient:
             num_predict=num_predict,
             response_format=response_format,
             temperature=temperature,
+            images=images,
+            model=model,
         )
 
         logger.info(
             "Ollama LLM request starting: model=%s execution=%s num_gpu=%s "
             "num_thread=%s num_predict=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=%s think=%s format=%s",
-            self.model,
+            model or self.model,
             "GPU enabled" if self.use_gpu else "CPU fallback",
             payload["options"].get("num_gpu", "default"),
             payload["options"].get("num_thread", "default"),
@@ -149,11 +234,11 @@ class OllamaLLMClient:
         latency_ms = int((time.monotonic() - start_mono) * 1000)
         logger.info(
             "Ollama LLM request finished: model=%s latency_ms=%d started_at=%s",
-            self.model,
+            model or self.model,
             latency_ms,
             started_at.isoformat(),
         )
-        return _parse_chat_response(response_data, fallback_model=self.model)
+        return _parse_chat_response(response_data, fallback_model=model or self.model)
 
     def _build_payload(
         self,
@@ -164,17 +249,45 @@ class OllamaLLMClient:
         num_predict: int | None = None,
         response_format: str | None = None,
         temperature: float | None = None,
+        images: list[bytes] | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """Build a standard Ollama `/api/chat` request body."""
+        import base64
+
         options = self._build_options(num_predict=num_predict)
         if temperature is not None:
             options["temperature"] = temperature
+
+        history_messages, remaining = _parse_user_prompt(user_prompt)
+
+        messages: list[dict[str, Any]] = []
+        if system_prompt and system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt.strip()})
+
+        messages.extend(history_messages)
+        
+        last_message: dict[str, Any] = {"role": "user", "content": remaining or user_prompt.strip()}
+        if images:
+            b64_images: list[str] = []
+            for img in images:
+                if isinstance(img, bytes):
+                    b64_images.append(base64.b64encode(img).decode("utf-8"))
+                elif isinstance(img, str):
+                    clean_str = img.split(",", 1)[-1] if "," in img else img
+                    b64_images.append(clean_str.strip())
+            if b64_images:
+                last_message["images"] = b64_images
+                logger.info(
+                    "[OLLAMA VISION PAYLOAD] attached %d image(s) to user message (b64 len sample=%d)",
+                    len(b64_images),
+                    len(b64_images[0]),
+                )
+        messages.append(last_message)
+
         payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt.strip()},
-                {"role": "user", "content": user_prompt.strip()},
-            ],
+            "model": model or self.model,
+            "messages": messages,
             "stream": stream,
             "keep_alive": self.keep_alive,
             "options": options,
@@ -188,7 +301,12 @@ class OllamaLLMClient:
         return payload
 
     async def generate_stream(
-        self, system_prompt: str, user_prompt: str
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        images: list[bytes] | None = None,
+        model: str | None = None,
     ):
         """Yield token deltas as they stream from Ollama `/api/chat`."""
         if not user_prompt or not user_prompt.strip():
@@ -196,7 +314,7 @@ class OllamaLLMClient:
         if not system_prompt or not system_prompt.strip():
             raise LLMClientError("system_prompt must not be empty.")
 
-        payload = self._build_payload(system_prompt, user_prompt, stream=True)
+        payload = self._build_payload(system_prompt, user_prompt, stream=True, images=images, model=model)
 
         url = f"{self.base_url}/api/chat"
         client = await self._get_client()
@@ -362,15 +480,20 @@ def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMRespon
         raise LLMAPIError("Ollama response missing 'message' object.")
 
     content = message.get("content")
+    thinking = message.get("thinking")
+
+    from app.llm.sanitize import sanitize_response, is_reasoning_model
+
+    if isinstance(content, str):
+        content = sanitize_response(content)
+
+    model_name = data.get("model") if isinstance(data.get("model"), str) else fallback_model
+
     if not isinstance(content, str) or not content.strip():
-        # Some thinking models still return the answer under alternate keys.
-        for alt_key in ("thinking", "reasoning"):
-            alt = message.get(alt_key)
-            if isinstance(alt, str) and alt.strip():
-                content = alt
-                break
-    if not isinstance(content, str) or not content.strip():
-        raise LLMAPIError("Ollama response missing assistant 'content'.")
+        if is_reasoning_model(model_name) and (not isinstance(thinking, str) or not thinking.strip()):
+            content = ""
+        else:
+            content = "Information not found in document excerpts."
 
     model_name = data.get("model") if isinstance(data.get("model"), str) else fallback_model
     finish_reason = data.get("done_reason") if isinstance(data.get("done_reason"), str) else None

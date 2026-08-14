@@ -208,6 +208,10 @@ class SupabaseStorageService:
             checksum_sha256=checksum,
         )
 
+    async def save(self, *, content: bytes, original_filename: str) -> SavedFile:
+        """Satisfy FileStorage protocol by delegating to upload_file."""
+        return await self.upload_file(content=content, storage_path=original_filename)
+
     async def download_file(self, *, storage_path: str) -> bytes:
         """Download raw file bytes from Supabase Storage bucket."""
         if not self.is_configured:

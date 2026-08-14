@@ -1,55 +1,54 @@
-import axios from 'axios'
 import { useState, useEffect } from 'react'
 import { Menu, Info } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { useChat, useConversationMessages, chatKeys } from '@/features/chat/hooks/useChat'
-import { useConversationRequestState } from '@/features/chat/hooks/useChatRequestStore'
-import { chatService } from '@/features/chat/services/chat.service'
-import {
-  DRAFT_CONVERSATION_KEY,
-  chatRequestStore,
-} from '@/features/chat/store/chatRequest.store'
+import { useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
 import { ChatHistory } from '@/features/chat/components/ChatHistory'
 import { ChatInput } from '@/features/chat/components/ChatInput'
+import { ModelSelector } from '@/features/chat/components/ModelSelector'
+import { useChat, useConversationMessages, chatKeys } from '@/features/chat/hooks/useChat'
+import {
+  chatRequestStore,
+  DRAFT_CONVERSATION_KEY,
+} from '@/features/chat/store/chatRequest.store'
+import { useConversationRequestState } from '@/features/chat/hooks/useChatRequestStore'
 import type { Message, Citation } from '@/features/chat/types/chat'
-import { getApiErrorMessage } from '@/api/client'
-import { useQueryClient } from '@tanstack/react-query'
+import { chatService } from '@/features/chat/services/chat.service'
+import { Button } from '@/components/ui/button'
 
-/** Per-conversation optimistic / overlay message state (survives navigation). */
-const conversationOverlays = new Map<
-  string,
-  {
-    messages: Message[]
-    latestCitations?: Citation[]
-    errorMessage?: { text: string; lastContent?: string } | null
-  }
->()
+interface ConversationOverlayState {
+  messages: Message[]
+  latestCitations?: Citation[]
+  errorMessage?: { text: string; lastContent?: string } | null
+}
 
+const conversationOverlays = new Map<string, ConversationOverlayState>()
 const overlayListeners = new Set<() => void>()
+
 function notifyOverlays() {
   overlayListeners.forEach((l) => l())
 }
 
-function getOverlay(id: string) {
-  return conversationOverlays.get(id) ?? { messages: [], latestCitations: undefined, errorMessage: null }
+function getOverlay(id: string): ConversationOverlayState {
+  return (
+    conversationOverlays.get(id) ?? {
+      messages: [],
+      latestCitations: undefined,
+      errorMessage: null,
+    }
+  )
 }
 
-function setOverlay(
-  id: string,
-  next: {
-    messages: Message[]
-    latestCitations?: Citation[]
-    errorMessage?: { text: string; lastContent?: string } | null
-  },
-) {
-  conversationOverlays.set(id, next)
+function setOverlay(id: string, state: ConversationOverlayState) {
+  conversationOverlays.set(id, state)
   notifyOverlays()
 }
 
 export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+  const [selectedModel, setSelectedModel] = useState<string>('qwen3:4b')
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [, setOverlayVersion] = useState(0)
   const queryClient = useQueryClient()
 
@@ -77,8 +76,7 @@ export function ChatPage() {
 
   const overlay = getOverlay(conversationKey)
 
-  // Sync server messages into the active conversation overlay when not mid-flight
-  // with only optimistic temps — merge server + keep in-flight optimistic user msg.
+  // Sync server messages into active conversation overlay when not mid-flight
   useEffect(() => {
     chatRequestStore.setActiveConversation(activeSessionId)
 
@@ -109,7 +107,6 @@ export function ChatPage() {
       setOverlay(activeSessionId, {
         ...existing,
         messages: sorted,
-        // Keep citations from the last in-memory reply if present
         latestCitations: existing.latestCitations,
       })
     }
@@ -120,8 +117,8 @@ export function ChatPage() {
   const errorMessage = overlay.errorMessage
 
   const handleNewChat = () => {
-    // Do NOT cancel the previous conversation's in-flight request.
     setActiveSessionId(undefined)
+    setEditingMessage(null)
     if (!conversationOverlays.has(DRAFT_CONVERSATION_KEY)) {
       setOverlay(DRAFT_CONVERSATION_KEY, {
         messages: [],
@@ -129,7 +126,6 @@ export function ChatPage() {
         errorMessage: null,
       })
     } else {
-      // Fresh draft each time New Chat is clicked if draft is idle
       if (!chatRequestStore.isSending(DRAFT_CONVERSATION_KEY)) {
         setOverlay(DRAFT_CONVERSATION_KEY, {
           messages: [],
@@ -142,6 +138,7 @@ export function ChatPage() {
 
   const handleSelectConversation = (id: string) => {
     setActiveSessionId(id)
+    setEditingMessage(null)
   }
 
   const handleDeleteChat = async (id: string) => {
@@ -157,11 +154,31 @@ export function ChatPage() {
     setOverlay(conversationKey, { ...current, errorMessage: value })
   }
 
-  const handleSend = async (content: string) => {
+  const handleEditUserMessage = (msg: Message) => {
+    if (msg.role === 'user') {
+      setEditingMessage(msg)
+    }
+  }
+
+  const handleRegenerateAssistantMessage = (assistantMsg: Message) => {
+    if (assistantMsg.role !== 'assistant') return
+    const msgs = getOverlay(conversationKey).messages
+    const idx = msgs.findIndex((m) => m.id === assistantMsg.id)
+    if (idx > 0 && msgs[idx - 1]?.role === 'user') {
+      const userMsg = msgs[idx - 1]
+      void handleSend(userMsg.content, undefined, userMsg.localImageUrl)
+    }
+  }
+
+  const handleSend = async (content: string, file?: File, preservedImageUrl?: string) => {
     const keyAtStart = activeSessionId ?? DRAFT_CONVERSATION_KEY
     if (chatRequestStore.isSending(keyAtStart)) return
 
     setErrorForActive(null)
+
+    const resolvedImageUrl = file
+      ? URL.createObjectURL(file)
+      : preservedImageUrl || undefined
 
     const tempUserMsg: Message = {
       id: `temp-${Date.now()}`,
@@ -169,15 +186,28 @@ export function ChatPage() {
       role: 'user',
       content,
       created_at: new Date().toISOString(),
+      localImageUrl: resolvedImageUrl,
     }
 
     const before = getOverlay(keyAtStart)
+
+    // If editing a historical user message, truncate messages from that point onward
+    let baseMessages = before.messages
+    if (editingMessage) {
+      const editIdx = baseMessages.findIndex((m) => m.id === editingMessage.id)
+      if (editIdx >= 0) {
+        baseMessages = baseMessages.slice(0, editIdx)
+      }
+    }
+
     setOverlay(keyAtStart, {
       ...before,
-      messages: [...before.messages, tempUserMsg],
+      messages: [...baseMessages, tempUserMsg],
       latestCitations: undefined,
       errorMessage: null,
     })
+
+    setEditingMessage(null)
 
     try {
       await chatRequestStore.runRequest(
@@ -190,7 +220,9 @@ export function ChatPage() {
             const title =
               content.split(' ').slice(0, 5).join(' ') +
               (content.split(' ').length > 5 ? '...' : '')
-            const newSession = await createConversation.mutateAsync(title)
+            const newSession = await createConversation.mutateAsync(
+              title || (file || preservedImageUrl ? 'Image analysis' : 'New chat'),
+            )
             currentSessionId = newSession.id
             ctx.rekeyTo(currentSessionId)
             const draftOverlay = getOverlay(DRAFT_CONVERSATION_KEY)
@@ -213,6 +245,7 @@ export function ChatPage() {
             {
               session_id: currentSessionId,
               question: content,
+              file,
             },
             { signal, timeoutMs: 600_000 },
           )
@@ -229,12 +262,13 @@ export function ChatPage() {
 
           const current = getOverlay(workingKey)
           const withoutTemp = current.messages.filter((m) => m.id !== tempUserMsg.id)
-          // Keep the user turn: replace temp with a stable local user message if server sync lags
           const userMsg: Message = {
             ...tempUserMsg,
             id: response.user_message_id || tempUserMsg.id,
             session_id: currentSessionId!,
+            localImageUrl: tempUserMsg.localImageUrl,
           }
+
           setOverlay(workingKey, {
             ...current,
             messages: [...withoutTemp.filter((m) => m.id !== userMsg.id), userMsg, assistantMsg],
@@ -265,14 +299,6 @@ export function ChatPage() {
         text = 'Response timed out. Please try again.'
       } else if (isCancelled) {
         text = 'Request was cancelled.'
-      } else {
-        const status = (err as { response?: { status?: number } })?.response?.status
-        if (status === 503) {
-          text =
-            'AI model unavailable. Please check that Ollama is running locally and model is loaded.'
-        } else {
-          text = getApiErrorMessage(err) || text
-        }
       }
 
       setOverlay(activeSessionId ?? keyAtStart, {
@@ -299,23 +325,30 @@ export function ChatPage() {
       />
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full relative z-0">
-        <div className="h-14 border-b flex items-center px-4 bg-background z-10 shrink-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="md:hidden mr-2"
-            onClick={() => setIsMobileSidebarOpen(true)}
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-lg font-semibold truncate">
+        <div className="h-14 border-b flex items-center justify-between px-4 bg-background z-10 shrink-0">
+          <div className="flex items-center min-w-0 flex-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden mr-2 shrink-0"
+              onClick={() => setIsMobileSidebarOpen(true)}
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <h1 className="text-base sm:text-lg font-semibold truncate">
               {activeConversation ? activeConversation.title : 'New Chat'}
             </h1>
           </div>
-          <div className="flex items-center text-xs text-muted-foreground ml-2 shrink-0 gap-1 bg-muted/50 px-2 py-1 rounded-md">
-            <Info className="w-3 h-3" />
-            <span className="hidden sm:inline">Local RAG mode</span>
+
+          <div className="flex items-center gap-2 shrink-0 ml-2">
+            <ModelSelector
+              selectedModel={selectedModel}
+              onSelectModel={setSelectedModel}
+            />
+            <div className="hidden sm:flex items-center text-xs text-muted-foreground gap-1 bg-muted/50 px-2 py-1 rounded-md">
+              <Info className="w-3 h-3" />
+              <span>Local RAG</span>
+            </div>
           </div>
         </div>
 
@@ -347,20 +380,26 @@ export function ChatPage() {
             isLoading={showGenerating || (!!activeSessionId && currentConversationLoading && localMessages.length === 0)}
             latestCitations={latestCitations}
             loadingLabel={showGenerating ? 'Generating response...' : undefined}
+            onEditMessage={handleEditUserMessage}
+            onRegenerateMessage={handleRegenerateAssistantMessage}
           />
         </div>
 
-        <div className="p-4 bg-background border-t shrink-0">
+        <div className="p-3 sm:p-4 bg-background border-t shrink-0">
           <div className="max-w-3xl mx-auto">
             <ChatInput
-              onSend={(msg) => {
-                void handleSend(msg)
+              onSend={(msg, file, preservedImageUrl) => {
+                void handleSend(msg, file, preservedImageUrl)
               }}
               sendDisabled={currentMessageSending}
               disabled={false}
+              selectedModel={selectedModel}
+              onSelectModel={setSelectedModel}
+              editingMessage={editingMessage}
+              onCancelEdit={() => setEditingMessage(null)}
             />
-            <p className="text-center text-xs text-muted-foreground mt-2">
-              Responses are generated by a local AI model and may contain inaccuracies.
+            <p className="text-center text-[11px] text-muted-foreground/70 mt-2">
+              Responses are generated by local AI models ({selectedModel}) and may contain inaccuracies.
             </p>
           </div>
         </div>

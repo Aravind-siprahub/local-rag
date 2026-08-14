@@ -33,13 +33,13 @@ class S3StorageService:
     `asyncio.to_thread` so the FastAPI event loop is never blocked.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, bucket_name: str | None = None) -> None:
         settings = get_settings()
         self.endpoint_url = settings.S3_ENDPOINT
         self.region = settings.S3_REGION
         self.access_key = settings.S3_ACCESS_KEY
         self.secret_key = settings.S3_SECRET_KEY
-        self.bucket_name = settings.SUPABASE_BUCKET
+        self.bucket_name = bucket_name or settings.SUPABASE_BUCKET
 
     @property
     def is_configured(self) -> bool:
@@ -136,6 +136,10 @@ class S3StorageService:
             size_bytes=len(content),
             checksum_sha256=checksum,
         )
+
+    async def save(self, *, content: bytes, original_filename: str) -> SavedFile:
+        """Satisfy FileStorage protocol by delegating to upload_file."""
+        return await self.upload_file(content=content, storage_path=original_filename)
 
     # ------------------------------------------------------------------
     # Download

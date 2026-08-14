@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +47,27 @@ _DIRECT_NUM_PREDICT = 512
 
 class RAGError(Exception):
     """Raised when RAG input is invalid."""
+
+
+def _is_image_rag_query(question: str, filters: SearchFilters | None) -> bool:
+    """Determine if a request with an image explicitly requires RAG document retrieval.
+
+    If explicit document filters are provided (e.g. document_id), or if the prompt explicitly
+    mentions documents, guides, manuals, policies, or files to compare/search against, returns True.
+    Otherwise, general image questions ("tell about this image", "what is in this image", "describe", etc.)
+    are pure image queries and should NOT retrieve document passages.
+    """
+    if filters and (filters.document_id or filters.document_version_id):
+        return True
+
+    text = question.lower()
+    doc_keywords = (
+        "document", "documents", "documentation", "file", "files",
+        "policy", "policies", "guide", "guides", "manual", "manuals",
+        "handbook", "handbooks", "sheet", "sheets", "prd", "specification",
+        "pdf", "docx", "txt", "knowledge base", "uploaded"
+    )
+    return any(kw in text for kw in doc_keywords)
 
 
 class RAGService:
@@ -89,10 +111,27 @@ class RAGService:
         top_k: int | None = None,
         similarity_threshold: float | None = None,
         request_id: str | None = None,
+        image: bytes | None = None,
+        image_name: str | None = None,
+        image_mime: str | None = None,
+        image_storage_path: str | None = None,
+        image_size: int | None = None,
     ) -> RAGResponse:
         """Run the full RAG flow for one user question in a chat session."""
         if not question or not question.strip():
-            raise RAGError("Question must not be empty.")
+            if image or image_storage_path:
+                question = "Describe this image."
+            else:
+                raise RAGError("Question must not be empty.")
+
+        if image or image_storage_path:
+            vision_model = get_settings().ollama_vision_model
+            supports_vision_fn = getattr(self.llm_client, "supports_vision", None)
+            logger.info('[VISION GATE] checking vision capability model=%s has_fn=%s', vision_model, supports_vision_fn is not None)
+            has_vision = await supports_vision_fn(model=vision_model) if supports_vision_fn else False
+            logger.info('[VISION GATE] vision_check_result=%s model=%s', has_vision, vision_model)
+            if not has_vision:
+                raise RAGError(f"Image analysis is unavailable because the configured vision model '{vision_model}' does not support vision.")
 
         top_sim = 0.0
         req_id = request_id or str(uuid.uuid4())
@@ -100,11 +139,44 @@ class RAGService:
         user_hash = hashlib.sha256(str(chat_session.user_id).encode()).hexdigest()[:12]
         start_mono = time.monotonic()
 
+        attachments = None
+        if image_storage_path:
+            attachments = [{
+                "storage_path": image_storage_path,
+                "bucket": get_settings().SUPABASE_STORAGE_BUCKET,
+                "mime_type": image_mime or "application/octet-stream",
+                "filename": image_name or "upload.png",
+                "size": image_size or 0,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }]
+        elif image:
+            attachments = [{
+                "id": str(uuid.uuid4()),
+                "mime_type": image_mime or "image/png",
+                "filename": image_name or "upload.png",
+                "size": len(image),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }]
+
         user_message = await self.messages.create_message(
             session_id=session_id,
             role=MessageRole.USER,
             content=question.strip(),
+            attachments=attachments,
         )
+
+        if image_storage_path and not image:
+            from app.storage import get_storage_service
+            storage = get_storage_service(bucket_name=get_settings().SUPABASE_STORAGE_BUCKET)
+            try:
+                image = await storage.download_file(storage_path=image_storage_path)
+                logger.info(
+                    '[IMAGE] image_bytes_loaded storage_path=%s size=%d',
+                    image_storage_path, len(image)
+                )
+            except Exception as e:
+                logger.error("[IMAGE] image_bytes_load_failed storage_path=%s error=%s", image_storage_path, e)
+                raise RAGError(f"Failed to download image from storage: {e}")
 
         from app.rag.query_normalizer import normalize_query
         orig_q, norm_q, ret_q = normalize_query(question.strip())
@@ -119,6 +191,14 @@ class RAGService:
             context_texts=context_texts,
             request_id=req_id,
         )
+
+        if image or image_storage_path:
+            if not _is_image_rag_query(question.strip(), filters):
+                route = Route.DIRECT
+            else:
+                route = Route.DOCUMENT_QA
+        elif filters and (filters.document_id or filters.document_version_id):
+            route = Route.DOCUMENT_QA
 
         logger.info(
             "[BACKEND REQUEST RECEIVED] request_id=%s question=%s session_id=%s user_id_hash=%s route=%s",
@@ -135,6 +215,7 @@ class RAGService:
                 request_id=req_id,
                 user_hash=user_hash,
                 norm_q=norm_q,
+                image=image,
             )
 
         logger.info("[AI ROUTER] DOCUMENT_QA selected, entering retrieval pipeline")
@@ -158,12 +239,6 @@ class RAGService:
                     .where(Document.user_id == chat_session.user_id)
                 )
                 all_docs = list((await self.session.execute(stmt_docs)).scalars().all())
-                if not all_docs:
-                    stmt_all_docs = (
-                        select(Document)
-                        .where(Document.deleted_at.is_(None))
-                    )
-                    all_docs = list((await self.session.execute(stmt_all_docs)).scalars().all())
 
                 q_lower = question.strip().lower()
                 for d in all_docs:
@@ -236,12 +311,12 @@ class RAGService:
 
         top_sim = deduped_chunks[0].similarity_score if deduped_chunks else 0.0
         # Relevance Gate: If zero chunks pass similarity threshold
-        if not deduped_chunks:
+        if not deduped_chunks and not image and not image_storage_path:
             total_ms = int((time.monotonic() - start_mono) * 1000)
-            fallback_answer = "I could not find this information in your uploaded documents."
+            fallback_answer = "I could not find this information in the uploaded documents."
             logger.warning("[NO RELEVANT DOCUMENTS FOUND] 0 chunks passed relevance gate. Returning fallback response.")
 
-            self._log_structured_trace(
+            await self._log_structured_trace(
                 request_id=req_id,
                 user_hash=user_hash,
                 session_id=session_id,
@@ -276,12 +351,37 @@ class RAGService:
                 assistant_message_id=assistant_message.id,
             )
 
-        # Fetch recent chat history only to enrich the retrieval question when needed.
-        # PromptBuilder currently accepts question + chunks (no chat_history kwarg).
+        # Vision-only path: image present but no document chunks retrieved.
+        # Skip the RAG prompt (which would instruct the model to say "not found") and
+        # call _ask_direct instead, which uses a plain general-knowledge system prompt
+        # with the image passed directly to the vision model.
+        if not deduped_chunks and (image or image_storage_path):
+            logger.info("[VISION ONLY] No document chunks found. Routing image-only request to _ask_direct.")
+            return await self._ask_direct(
+                session_id=session_id,
+                question=question.strip(),
+                user_message_id=user_message.id,
+                start_mono=start_mono,
+                norm_q=norm_q,
+                image=image,
+            )
+
+        # Fetch recent chat history to resolve follow-up context and pronouns
+        chat_history_dicts: list[dict[str, str]] = []
+        try:
+            recent_msgs = await self.messages.list_by_session(session_id, limit=6)
+            # Filter out the current user message just inserted
+            prior_msgs = [m for m in recent_msgs if m.id != user_message.id][-4:]
+            chat_history_dicts = [{"role": getattr(m.role, "value", str(m.role)), "content": m.content} for m in prior_msgs]
+        except Exception as h_exc:
+            logger.warning("[CHAT HISTORY CONTEXT ERROR] %s", h_exc)
+
         prompt_start = time.monotonic()
         prompt = self.prompt_builder.build(
             question.strip(),
-            retrieved_chunks,
+            deduped_chunks,
+            chat_history=chat_history_dicts if chat_history_dicts else None,
+            is_vision=bool(image or image_storage_path),
         )
         context_ms = int((time.monotonic() - prompt_start) * 1000)
 
@@ -302,15 +402,32 @@ class RAGService:
         num_predict = settings.OLLAMA_NUM_PREDICT
 
         llm_start = time.monotonic()
+        _selected_model = get_settings().ollama_vision_model if image else getattr(self.llm_client, "model", "ollama")
+        if image:
+            logger.info(
+                '[IMAGE] vision_model_selected model=%s image_size=%d num_predict=%d',
+                _selected_model, len(image), num_predict
+            )
         logger.info("[LLM GENERATION STARTED] model=%s num_predict=%d", getattr(self.llm_client, "model", "ollama"), num_predict)
-        llm_response = await self.llm_client.generate(prompt.system_prompt, prompt.user_prompt, num_predict=num_predict)
+        _images_payload = [image] if image else None
+        if image:
+            logger.info('[IMAGE] ollama_image_payload_created images_count=1 size=%d', len(image))
+        llm_response = await self.llm_client.generate(
+            prompt.system_prompt,
+            prompt.user_prompt,
+            num_predict=num_predict,
+            images=_images_payload,
+            model=get_settings().ollama_vision_model if image else None,
+        )
         llm_ms = int((time.monotonic() - llm_start) * 1000)
+        if image:
+            logger.info('[IMAGE] vision_response_received model=%s llm_ms=%d', _selected_model, llm_ms)
         logger.info("[LLM GENERATION FINISHED] llm_ms=%d", llm_ms)
 
         # Truncation check: only retry when the first pass produced no usable answer.
         if getattr(llm_response, "finish_reason", None) == "length":
             first_pass = sanitize_response(llm_response.answer)
-            if not first_pass or len(first_pass.strip()) < 20:
+            if not first_pass or len(first_pass.strip()) < 50 or first_pass.endswith("...") or first_pass.endswith("…") or first_pass.endswith(".."):
                 logger.warning(
                     "[LLM TRUNCATION DETECTED] finish_reason=length and answer unusable. "
                     "Retrying once with num_predict *= 2 (%d)",
@@ -321,23 +438,39 @@ class RAGService:
                     prompt.system_prompt,
                     prompt.user_prompt,
                     num_predict=num_predict,
+                    images=[image] if image else None,
+                    model=get_settings().ollama_vision_model if image else None,
                 )
             else:
                 logger.info(
                     "[LLM TRUNCATION DETECTED] finish_reason=length but usable answer present; skipping retry"
                 )
 
+        # Reasoning Leakage check: retry once if reasoning tags/monologue leak
+        if detect_reasoning_leakage(llm_response.answer):
+            logger.warning(
+                "[LLM LEAKAGE DETECTED] Reasoning leakage found in response. "
+                "Retrying once..."
+            )
+            llm_response = await self.llm_client.generate(
+                prompt.system_prompt,
+                prompt.user_prompt,
+                num_predict=num_predict,
+                images=[image] if image else None,
+                model=get_settings().ollama_vision_model if image else None,
+            )
+
         # Sanitize answer from thinking tags or monologue prefixes
         clean_ans = sanitize_response(llm_response.answer)
         clean_ans_lower = clean_ans.lower().strip()
         if not clean_ans or clean_ans_lower == "i could not find this information in the uploaded documents." or clean_ans_lower == "i could not find this information in your uploaded documents." or clean_ans_lower == "information not found in document excerpts." or clean_ans_lower == "information not found":
-            answer_text = "I could not find this information in your uploaded documents."
+            answer_text = "I could not find this information in the uploaded documents."
         else:
             answer_text = clean_ans
 
         # Citation Validation: Strict threshold enforcement & deduplication
         effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
-        if answer_text == "I could not find this information in your uploaded documents.":
+        if answer_text == "I could not find this information in the uploaded documents.":
             sources = []
         else:
             raw_sources = _sources_from_prompt(prompt)
@@ -349,7 +482,12 @@ class RAGService:
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
 
-        self._log_structured_trace(
+        chunk_ids = [str(c.chunk_id) for c in deduped_chunks]
+        doc_ids = [str(c.document_id) for c in deduped_chunks]
+        version_ids = [str(c.document_version_id) for c in deduped_chunks]
+        sim_scores = [round(c.similarity_score, 4) for c in deduped_chunks]
+
+        await self._log_structured_trace(
             request_id=req_id,
             user_hash=user_hash,
             session_id=session_id,
@@ -364,6 +502,10 @@ class RAGService:
             top_similarity=top_sim,
             status="SUCCESS",
             error_type=None,
+            retrieved_chunk_ids=chunk_ids,
+            retrieved_doc_ids=doc_ids,
+            doc_version_ids=version_ids,
+            similarity_scores=sim_scores,
         )
 
         token_usage = llm_response.token_usage
@@ -411,21 +553,71 @@ class RAGService:
         filters: SearchFilters | None = None,
         top_k: int | None = None,
         similarity_threshold: float | None = None,
+        image: bytes | None = None,
+        image_name: str | None = None,
+        image_mime: str | None = None,
+        image_storage_path: str | None = None,
+        image_size: int | None = None,
     ):
         """Run RAG pipeline and yield Server-Sent Events (SSE) formatting for real-time streaming."""
         import json
 
         if not question or not question.strip():
-            raise RAGError("Question must not be empty.")
+            if image or image_storage_path:
+                question = "Describe this image."
+            else:
+                raise RAGError("Question must not be empty.")
+
+        if image or image_storage_path:
+            vision_model = get_settings().ollama_vision_model
+            supports_vision_fn = getattr(self.llm_client, "supports_vision", None)
+            logger.info('[VISION GATE stream] checking vision capability model=%s has_fn=%s', vision_model, supports_vision_fn is not None)
+            has_vision = await supports_vision_fn(model=vision_model) if supports_vision_fn else False
+            logger.info('[VISION GATE stream] vision_check_result=%s model=%s', has_vision, vision_model)
+            if not has_vision:
+                raise RAGError(f"Image analysis is unavailable because the configured vision model '{vision_model}' does not support vision.")
 
         chat_session = await self.sessions.get(session_id)
         start_mono = time.monotonic()
+
+        attachments = None
+        if image_storage_path:
+            attachments = [{
+                "storage_path": image_storage_path,
+                "bucket": get_settings().SUPABASE_STORAGE_BUCKET,
+                "mime_type": image_mime or "application/octet-stream",
+                "filename": image_name or "upload.png",
+                "size": image_size or 0,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }]
+        elif image:
+            attachments = [{
+                "id": str(uuid.uuid4()),
+                "mime_type": image_mime or "image/png",
+                "filename": image_name or "upload.png",
+                "size": len(image),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }]
 
         user_message = await self.messages.create_message(
             session_id=session_id,
             role=MessageRole.USER,
             content=question.strip(),
+            attachments=attachments,
         )
+
+        if image_storage_path and not image:
+            from app.storage import get_storage_service
+            storage = get_storage_service(bucket_name=get_settings().SUPABASE_STORAGE_BUCKET)
+            try:
+                image = await storage.download_file(storage_path=image_storage_path)
+                logger.info(
+                    '[IMAGE] image_bytes_loaded (stream) storage_path=%s size=%d',
+                    image_storage_path, len(image)
+                )
+            except Exception as e:
+                logger.error("[IMAGE] image_bytes_load_failed (stream) storage_path=%s error=%s", image_storage_path, e)
+                raise RAGError(f"Failed to download image from storage: {e}")
 
         from app.rag.intent_router import Route, classify
         from app.rag.query_normalizer import normalize_query
@@ -442,6 +634,13 @@ class RAGService:
             context_texts=context_texts,
             request_id=req_id,
         )
+        if image or image_storage_path:
+            if not _is_image_rag_query(question.strip(), filters):
+                route = Route.DIRECT
+            else:
+                route = Route.DOCUMENT_QA
+        elif filters and (filters.document_id or filters.document_version_id):
+            route = Route.DOCUMENT_QA
 
         if route != Route.DOCUMENT_QA and route != Route.RAG:
             res = await self._ask_non_rag(
@@ -452,6 +651,7 @@ class RAGService:
                 start_mono=start_mono,
                 request_id=req_id,
                 norm_q=norm_q,
+                image=image,
             )
             yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
             yield f"data: {json.dumps({'type': 'token', 'content': res.answer})}\n\n"
@@ -513,8 +713,8 @@ class RAGService:
 
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
 
-        if not deduped_chunks:
-            fallback_ans = "I could not find this information in your uploaded documents."
+        if not deduped_chunks and not image and not image_storage_path:
+            fallback_ans = "I could not find this information in the uploaded documents."
             total_ms = int((time.monotonic() - start_mono) * 1000)
             assistant_msg = await self.messages.create_message(
                 session_id=session_id,
@@ -525,11 +725,24 @@ class RAGService:
             )
             yield f"data: {json.dumps({'type': 'token', 'content': fallback_ans})}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
+        if not deduped_chunks and (image or image_storage_path):
+            logger.info("[VISION ONLY STREAM] No document chunks found. Routing image-only stream to _ask_direct.")
+            res = await self._ask_direct(
+                session_id=session_id,
+                question=question.strip(),
+                user_message_id=user_message.id,
+                start_mono=start_mono,
+                norm_q=norm_q,
+                image=image,
+            )
+            yield f"data: {json.dumps({'type': 'token', 'content': res.answer})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(res.assistant_message_id), 'processing_time_ms': res.processing_time_ms})}\n\n"
             return
 
         prompt = self.prompt_builder.build(
             question.strip(),
-            retrieved_chunks,
+            deduped_chunks,
+            is_vision=bool(image or image_storage_path),
         )
 
         logger.info("=== RETRIEVED CHUNKS START ===")
@@ -551,17 +764,27 @@ class RAGService:
                 # Buffer ALL tokens first — do NOT stream raw tokens to client.
                 # The model may emit chain-of-thought ("Passage 1 mentions...",
                 # "Wait...") that must be sanitized before the user sees it.
-                async for token in self.llm_client.generate_stream(prompt.system_prompt, prompt.user_prompt):
+                async for token in self.llm_client.generate_stream(
+                    prompt.system_prompt,
+                    prompt.user_prompt,
+                    images=[image] if image else None,
+                    model=get_settings().ollama_vision_model if image else None,
+                ):
                     full_answer_chunks.append(token)
             else:
-                resp = await self.llm_client.generate(prompt.system_prompt, prompt.user_prompt)
+                resp = await self.llm_client.generate(
+                    prompt.system_prompt,
+                    prompt.user_prompt,
+                    images=[image] if image else None,
+                    model=get_settings().ollama_vision_model if image else None,
+                )
                 safe = sanitize_response(resp.answer)
                 full_answer_chunks.append(safe)
         except Exception as exc:
             logger.error("Streaming error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
 
-        full_answer = sanitize_response("".join(full_answer_chunks).strip()) or "I could not find this information in your uploaded documents."
+        full_answer = sanitize_response("".join(full_answer_chunks).strip()) or "I could not find this information in the uploaded documents."
 
         # Now emit the clean, sanitized answer as a single token
         yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
@@ -601,6 +824,7 @@ class RAGService:
         request_id: str | None = None,
         user_hash: str | None = None,
         norm_q: str | None = None,
+        image: bytes | None = None,
     ) -> RAGResponse:
         """Handle DOCUMENT_LIST / DOCUMENT_METADATA / WEB / CALCULATOR / DIRECT without vector retrieval."""
         res: RAGResponse
@@ -628,7 +852,7 @@ class RAGService:
                 user_message_id=user_message_id,
                 start_mono=start_mono,
             )
-        elif route == Route.GENERAL_KNOWLEDGE:
+        elif route == Route.WEB:
             res = await self._ask_web(
                 session_id=session_id,
                 question=question,
@@ -643,6 +867,7 @@ class RAGService:
                 user_message_id=user_message_id,
                 start_mono=start_mono,
                 norm_q=norm_q,
+                image=image,
             )
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
@@ -652,7 +877,7 @@ class RAGService:
             status = "ERROR"
             error_type = res.model.split(":", 2)[2]
             
-        self._log_structured_trace(
+        await self._log_structured_trace(
             request_id=request_id or str(uuid.uuid4()),
             user_hash=user_hash or "anonymous",
             session_id=session_id,
@@ -729,7 +954,7 @@ class RAGService:
             assistant_message_id=assistant_msg.id,
         )
 
-    def _log_structured_trace(
+    async def _log_structured_trace(
         self,
         *,
         request_id: str,
@@ -746,6 +971,10 @@ class RAGService:
         top_similarity: float,
         status: str,
         error_type: str | None = None,
+        retrieved_chunk_ids: list[str] | None = None,
+        retrieved_doc_ids: list[str] | None = None,
+        doc_version_ids: list[str] | None = None,
+        similarity_scores: list[float] | None = None,
     ) -> None:
         trace_payload = {
             "request_id": request_id,
@@ -767,6 +996,30 @@ class RAGService:
             "error_type": error_type,
         }
         logger.info("[ENTERPRISE RAG TRACE] %s", json.dumps(trace_payload))
+
+        if self.session:
+            try:
+                from app.services.trace_service import TraceStore
+                trace_store = TraceStore(self.session)
+                await trace_store.save_trace_safely(
+                    request_id=request_id,
+                    session_id=session_id,
+                    original_query=orig_q,
+                    normalized_query=norm_q,
+                    detected_intent=route.name,
+                    selected_route=route.value,
+                    retrieval_duration_ms=retrieval_ms,
+                    retrieved_chunk_ids=retrieved_chunk_ids or [],
+                    retrieved_document_ids=retrieved_doc_ids or [],
+                    document_version_ids=doc_version_ids or [],
+                    similarity_scores=similarity_scores or [top_similarity],
+                    llm_duration_ms=llm_ms,
+                    total_duration_ms=total_ms,
+                    error_type=error_type,
+                    status=status,
+                )
+            except Exception as exc:
+                logger.warning("[TRACE PERSISTENCE ERROR] request_id=%s: %s", request_id, exc)
 
     async def _ask_document_list(
         self,
@@ -928,7 +1181,7 @@ class RAGService:
 
         except Exception as exc:
             error_type = "unexpected_error"
-            logger.error("[WEB SEARCH FAILURE] request_id=%s provider=%s query=%r error_type=%s reason=%r", req_id, provider_name, question, str(exc), exc_info=True)
+            logger.error("[WEB SEARCH FAILURE] request_id=%s provider=%s query=%r error_type=%s reason=%r", req_id, provider_name, question, error_type, str(exc), exc_info=True)
             answer_text = "An unexpected error occurred during web search."
             model_name = f"web-search:error:{error_type}"
 
@@ -1000,14 +1253,23 @@ class RAGService:
         user_message_id: uuid.UUID,
         start_mono: float,
         norm_q: str | None = None,
+        image: bytes | None = None,
     ) -> RAGResponse:
         llm_start = time.monotonic()
         query_text = norm_q.strip() if (norm_q and norm_q.strip()) else question.strip()
+        if image and not query_text.startswith("Question:"):
+            query_text = f"Question:\n\n{query_text}"
+
+        direct_sys_prompt = get_settings().VISION_SYSTEM_PROMPT if image else _DIRECT_SYSTEM_PROMPT
+
+        num_pred = 1024 if image else _DIRECT_NUM_PREDICT
 
         llm_response = await self.llm_client.generate(
-            _DIRECT_SYSTEM_PROMPT,
+            direct_sys_prompt,
             query_text,
-            num_predict=_DIRECT_NUM_PREDICT,
+            num_predict=num_pred,
+            images=[image] if image else None,
+            model=get_settings().ollama_vision_model if image else None,
         )
         llm_ms = int((time.monotonic() - llm_start) * 1000)
         answer_text = sanitize_response(llm_response.answer).strip()
@@ -1017,13 +1279,15 @@ class RAGService:
             logger.warning("[DIRECT ANSWER REJECTED] invalid/truncated answer=%r. Retrying once.", answer_text)
             retry_start = time.monotonic()
             retry_prompt = (
-                "You are a concise general knowledge assistant. Answer the user's question directly and accurately in 1 or 2 sentences.\n\n"
-                "Return ONLY the final answer. Do not include internal thoughts, commentary, or greetings."
+                direct_sys_prompt + "\n\n"
+                "Return ONLY the final direct answer. Do not include internal thoughts, commentary, or greetings."
             )
             llm_response = await self.llm_client.generate(
                 retry_prompt,
                 query_text,
-                num_predict=_DIRECT_NUM_PREDICT,
+                num_predict=num_pred,
+                images=[image] if image else None,
+                model=get_settings().ollama_vision_model if image else None,
             )
             llm_ms += int((time.monotonic() - retry_start) * 1000)
             answer_text = sanitize_response(llm_response.answer).strip()
@@ -1066,15 +1330,14 @@ class RAGService:
         from sqlalchemy import select
 
         titles: list[str] = []
-        try:
-            stmt = (
-                select(Document.title)
-                .where(Document.deleted_at.is_(None))
-                .where(Document.user_id == user_id)
-            )
-            titles = [t for t in (await self.session.execute(stmt)).scalars().all() if t]
-        except Exception as exc:
-            logger.warning("[ROUTING HINTS] failed to load document titles: %s", exc)
+        if self.session is not None:
+            try:
+                from app.repositories.document_repository import DocumentRepository
+                repo = DocumentRepository(self.session)
+                docs = await repo.list_by_user(user_id)
+                titles = [d.title for d in docs if d.title]
+            except Exception as exc:
+                logger.warning("[ROUTING HINTS] failed to load document titles: %s", exc)
 
         context_texts: list[str] = []
         try:

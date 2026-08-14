@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.embeddings.client import EmbeddingClient, EmbeddingClientError
 from app.models.document_chunk import DocumentChunk
 from app.models.enums import VectorMetric
-from app.services.embedding import prepare_chunk_for_embedding
 from app.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -117,5 +116,6 @@ class EmbeddingGenerator:
             language=meta.get("language", "en"),
             text=chunk.content,
         )
+        from app.services.embedding import prepare_chunk_for_embedding
         prepared = prepare_chunk_for_embedding(semantic)
         return prepared or chunk.content

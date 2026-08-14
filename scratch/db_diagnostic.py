@@ -86,5 +86,5 @@ async def run():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore
     asyncio.run(run())

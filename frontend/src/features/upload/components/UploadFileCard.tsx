@@ -57,10 +57,16 @@ export function UploadFileCard({ item, onRetry, onCancel, onRemove }: UploadFile
             <Loader2Icon className="size-3 animate-spin mr-1 inline" /> Embedding
           </Badge>
         )
+      case 'Processing':
+        return (
+          <Badge variant="secondary" className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20">
+            <Loader2Icon className="size-3 animate-spin mr-1 inline" /> Processing
+          </Badge>
+        )
       case 'Ready':
         return (
           <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
-            <CheckCircle2Icon className="size-3 mr-1 inline" /> Ready
+            <CheckCircle2Icon className="size-3 mr-1 inline" /> Success
           </Badge>
         )
       case 'Failed':
@@ -149,7 +155,7 @@ export function UploadFileCard({ item, onRetry, onCancel, onRemove }: UploadFile
       </div>
 
       {/* Progress Bar */}
-      {isUploading || item.status === 'Parsing' || item.status === 'Chunking' || item.status === 'Embedding' ? (
+      {isUploading || item.status === 'Parsing' || item.status === 'Chunking' || item.status === 'Embedding' || item.status === 'Processing' ? (
         <div className="space-y-1">
           <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
             <div

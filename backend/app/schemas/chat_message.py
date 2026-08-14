@@ -5,11 +5,12 @@ No `ChatMessageUpdate`: messages are append-only (the ORM model has no
 editing history.
 """
 import uuid
-from typing import Annotated
+from typing import Any, Annotated
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import MessageRole
+from app.schemas.citation import CitationResponse
 from app.schemas.common import CreatedAtSchema, ORMModel, PaginatedResponse
 
 
@@ -21,6 +22,7 @@ class ChatMessageBase(BaseModel):
     completion_tokens: Annotated[int, Field(ge=0)] | None = None
     latency_ms: Annotated[int, Field(ge=0)] | None = None
     generation_time_ms: Annotated[int, Field(ge=0)] | None = None
+    attachments: list[dict[str, Any]] | None = None
 
     @field_validator("content")
     @classmethod
@@ -42,6 +44,7 @@ class ChatMessageResponse(ChatMessageBase, CreatedAtSchema, ORMModel):
     # accepted on Create.
     total_tokens: int | None = None
     error_message: str | None = None
+    citations: list[CitationResponse] = Field(default_factory=list)
 
 
 ChatMessageListResponse = PaginatedResponse[ChatMessageResponse]

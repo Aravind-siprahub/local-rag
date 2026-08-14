@@ -7,6 +7,7 @@ from fastapi import APIRouter
 
 from app.api.endpoints import (
     admin,
+    auth,
     chat,
     chat_messages,
     chat_sessions,
@@ -25,6 +26,7 @@ from app.schemas.upload import DocumentUploadResponse
 api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(metrics.router)
+api_router.include_router(auth.router)
 api_router.include_router(admin.router)
 api_router.include_router(debug.router)
 api_router.include_router(users.router)

@@ -7,13 +7,15 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import PaginationParams, get_db, get_document_service, get_document_upload_service
+from app.api.dependencies import PaginationParams, get_current_user, get_db, get_document_service, get_document_upload_service
 from app.api.file_utils import read_upload_within_limit
+from app.api.security import verify_ownership
 from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.models.document_chunk import DocumentChunk
 from app.models.embedding import Embedding
 from app.models.enums import DocumentStatus, ProcessingJobType
+from app.models.user import User
 from app.schemas.actions import SetCurrentVersionRequest
 from app.schemas.document import DocumentCreate, DocumentListResponse, DocumentResponse, DocumentUpdate
 from app.schemas.upload import DocumentUploadResponse
@@ -36,59 +38,19 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 
 async def _run_ingestion_background(document_id: uuid.UUID, parse_job_id: uuid.UUID | None = None) -> None:
     """Async wrapper for background execution of document ingestion."""
-    async with AsyncSessionLocal() as session:
-        try:
-            doc_service = DocumentService(session)
-            document = await doc_service.get(document_id)
-            if not document:
-                return
-            
-            version_id = document.current_version_id
-            if version_id is None:
-                logger.error("Document %s has no current version.", document_id)
-                return
-
-            if not parse_job_id:
-                job_service = ProcessingJobService(session)
-                all_jobs = await job_service.list_by_document_version(version_id)
-                active_jobs = [j for j in all_jobs if getattr(j.status, "value", str(j.status)) in ("pending", "running")]
-                job = active_jobs[-1] if active_jobs else (all_jobs[-1] if all_jobs else None)
-                if not job or getattr(job.job_type, "value", str(job.job_type)) != "parse":
-                    job = await job_service.create_job(document_version_id=version_id, job_type=ProcessingJobType.PARSE)
-                parse_job_id = job.id
-
-            processor = DocumentProcessor(session)
-            await processor.process_job(parse_job_id)
-
-            job_service = ProcessingJobService(session)
-            embed_job = await job_service.create_job(
-                document_version_id=version_id,
-                job_type=ProcessingJobType.EMBED
-            )
-
-            worker = EmbeddingWorker(session)
-            await worker.process_job(embed_job.id)
-
-            await doc_service.update(document_id, status=DocumentStatus.READY)
-            await session.commit()
-        except Exception:
-            logger.exception("Background ingestion failed for document %s", document_id)
-            try:
-                await session.rollback()
-                doc_service = DocumentService(session)
-                await doc_service.update(document_id, status=DocumentStatus.FAILED)
-                await session.commit()
-            except Exception:
-                logger.exception("Failed to commit failure state for document %s", document_id)
+    from app.processing.background_runner import BackgroundJobRunner
+    BackgroundJobRunner.enqueue_document(document_id)
 
 
 
 @router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED, summary="Create a document")
 async def create_document(
-    payload: DocumentCreate, service: DocumentService = Depends(get_document_service)
+    payload: DocumentCreate,
+    current_user: User = Depends(get_current_user),
+    service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
     document = await service.create_document(
-        user_id=payload.user_id, title=payload.title, description=payload.description, tags=payload.tags
+        user_id=current_user.id, title=payload.title, description=payload.description, tags=payload.tags
     )
     return DocumentResponse.model_validate(document)
 
@@ -105,12 +67,7 @@ async def create_document(
 )
 async def upload_document(
     background_tasks: BackgroundTasks,
-    user_id: uuid.UUID = Form(
-        ...,
-        description="Owner user id. Call GET /users to list existing users, "
-        "or POST /users to create one first.",
-        examples=["a2a5b0fa-85e9-4e4f-8ad1-6c87e57edebc"],
-    ),
+    current_user: User = Depends(get_current_user),
     title: str | None = Form(default=None, description="Defaults to the uploaded filename if omitted."),
     file: UploadFile = File(..., description="PDF, DOCX, TXT, or Markdown (.md/.markdown) file."),
     service: DocumentUploadService = Depends(get_document_upload_service),
@@ -119,7 +76,7 @@ async def upload_document(
     content = await read_upload_within_limit(file, settings.max_upload_size_bytes)
 
     result = await service.upload(
-        user_id=user_id,
+        user_id=current_user.id,
         filename=file.filename or "upload",
         content_type=file.content_type,
         content=content,
@@ -153,6 +110,7 @@ async def upload_document(
 )
 async def process_document(
     document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Manually trigger or retry full ingestion pipeline for a document."""
@@ -160,6 +118,7 @@ async def process_document(
     doc = await service.get(document_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+    verify_ownership(doc.user_id, current_user, "document")
 
     try:
         ingestion = IngestionService(session)
@@ -189,6 +148,7 @@ async def process_document(
 )
 async def debug_document_processing(
     document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Diagnostic endpoint to inspect text extraction, chunking, and embedding counts."""
@@ -197,6 +157,7 @@ async def debug_document_processing(
         doc = await service.get(document_id)
         if not doc:
             raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+        verify_ownership(doc.user_id, current_user, "document")
 
         version_service = DocumentVersionService(session)
         version = None
@@ -268,14 +229,18 @@ async def list_documents(
     background_tasks: BackgroundTasks,
     user_id: uuid.UUID | None = None,
     pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentListResponse:
-    if user_id is not None:
-        documents = await service.list_by_user(user_id, limit=pagination.limit, offset=pagination.offset)
-        total = len(documents)
-    else:
-        documents = await service.list(limit=pagination.limit, offset=pagination.offset)
-        total = await service.count()
+    if user_id is not None and str(user_id) != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot access documents belonging to another user.",
+        )
+
+    target_user_id = current_user.id
+    documents = await service.list_by_user(target_user_id, limit=pagination.limit, offset=pagination.offset)
+    total = len(documents)
 
     # Auto-heal: trigger ingestion for any documents stuck in UPLOADED or PROCESSING state
     for doc in documents:
@@ -295,11 +260,13 @@ async def list_documents(
 async def get_document(
     document_id: uuid.UUID,
     background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
     document = await service.get(document_id)
     if not document:
         raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+    verify_ownership(document.user_id, current_user, "document")
 
     # Auto-heal: If document is still in UPLOADED status, trigger background ingestion
     if document.status == DocumentStatus.UPLOADED:
@@ -310,11 +277,19 @@ async def get_document(
 
 @router.patch("/{document_id}", response_model=DocumentResponse, summary="Update a document")
 async def update_document(
-    document_id: uuid.UUID, payload: DocumentUpdate, service: DocumentService = Depends(get_document_service)
+    document_id: uuid.UUID,
+    payload: DocumentUpdate,
+    current_user: User = Depends(get_current_user),
+    service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
+    document = await service.get(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+    verify_ownership(document.user_id, current_user, "document")
+
     updates = payload.model_dump(exclude_unset=True)
-    document = await service.update(document_id, **updates)
-    return DocumentResponse.model_validate(document)
+    updated_document = await service.update(document_id, **updates)
+    return DocumentResponse.model_validate(updated_document)
 
 
 @router.post(
@@ -325,10 +300,16 @@ async def update_document(
 async def set_current_version(
     document_id: uuid.UUID,
     payload: SetCurrentVersionRequest,
+    current_user: User = Depends(get_current_user),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
-    document = await service.set_current_version(document_id, payload.version_id)
-    return DocumentResponse.model_validate(document)
+    document = await service.get(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+    verify_ownership(document.user_id, current_user, "document")
+
+    updated_document = await service.set_current_version(document_id, payload.version_id)
+    return DocumentResponse.model_validate(updated_document)
 
 
 @router.delete(
@@ -339,12 +320,14 @@ async def set_current_version(
 )
 async def delete_document(
     document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> None:
     service = DocumentService(session)
     document = await service.get(document_id)
     if not document:
         return
+    verify_ownership(document.user_id, current_user, "document")
 
     # Delete remote objects from storage (S3 > REST > skip)
     version_service = DocumentVersionService(session)

@@ -1,11 +1,13 @@
 """Unified chat API — RAG Q&A and session transcript access."""
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status, Request
 
-from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_rag_service
+from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_current_user, get_rag_service
+from app.api.security import verify_ownership
 from app.core.swagger_constants import OPENAPI_PLACEHOLDER_UUID
 from app.llm.client import LLMClientError, LLMTimeoutError, LLMUnavailableError
+from app.models.user import User
 from app.rag.response import RAGResponse
 from app.rag.service import RAGError, RAGService
 from app.repositories.chat_session_repository import ChatSessionRepository
@@ -41,9 +43,10 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
     ),
 )
 async def ask_chat(
-    payload: ChatRequest,
+    request: Request,
     response: Response,
     x_request_id: str | None = Header(None, alias="X-Request-ID"),
+    current_user: User = Depends(get_current_user),
     rag: RAGService = Depends(get_rag_service),
     session_service: ChatSessionService = Depends(get_chat_session_service),
 ) -> ChatResponse:
@@ -59,14 +62,125 @@ async def ask_chat(
     start_time = time.monotonic()
     provider_module = sys.modules.get(DuckDuckGoWebSearchProvider.__module__)
     module_file = getattr(provider_module, "__file__", "unknown")
-    logger.info('[CHAT START] request_id=%s query="%s" module_file="%s"', request_id, payload.question, module_file)
 
-    filters = SearchFilters(
-        document_id=payload.document_id,
-        document_version_id=payload.document_version_id,
+    # Determine dynamic content parameters
+    content_type = request.headers.get("content-type", "")
+    question = ""
+    session_id: uuid.UUID | None = None
+    document_id: uuid.UUID | None = None
+    document_version_id: uuid.UUID | None = None
+    top_k: int | None = None
+    similarity_threshold: float | None = None
+    image_bytes: bytes | None = None
+    image_name: str | None = None
+    image_mime: str | None = None
+    image_size: int | None = None
+    image_storage_path: str | None = None
+
+    logger.info(
+        '[CHAT REQUEST] request_id=%s content_type=%r content_length=%s is_multipart=%s',
+        request_id,
+        content_type[:80],
+        request.headers.get('content-length', 'unknown'),
+        'multipart/form-data' in content_type,
     )
 
-    session_id = payload.session_id
+    from pydantic import ValidationError
+    from fastapi.exceptions import RequestValidationError
+    from fastapi import UploadFile
+
+    try:
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            form_keys = list(form.keys())
+            logger.info('[CHAT REQUEST] form_keys=%s file_present=%s', form_keys, 'file' in form_keys)
+            question = str(form.get("question", "")).strip()
+            
+            session_id_str = form.get("session_id")
+            if session_id_str and isinstance(session_id_str, str):
+                session_id = uuid.UUID(session_id_str)
+                
+            doc_id_str = form.get("document_id")
+            if doc_id_str and isinstance(doc_id_str, str):
+                document_id = uuid.UUID(doc_id_str)
+                
+            doc_ver_str = form.get("document_version_id")
+            if doc_ver_str and isinstance(doc_ver_str, str):
+                document_version_id = uuid.UUID(doc_ver_str)
+                
+            top_k_str = form.get("top_k")
+            if top_k_str is not None and isinstance(top_k_str, str):
+                top_k = int(top_k_str)
+                
+            sim_threshold_str = form.get("similarity_threshold")
+            if sim_threshold_str is not None and isinstance(sim_threshold_str, str):
+                similarity_threshold = float(sim_threshold_str)
+                
+            file_val = form.get("file")
+            has_file = hasattr(file_val, "filename") and bool(getattr(file_val, "filename", None))
+            
+            # Validate input using ChatRequest schema rules
+            validate_question = question if (question or has_file) else ""
+            
+            params = {
+                "question": validate_question,
+                "session_id": session_id_str if isinstance(session_id_str, str) else None,
+                "document_id": doc_id_str if isinstance(doc_id_str, str) else None,
+                "document_version_id": doc_ver_str if isinstance(doc_ver_str, str) else None,
+                "top_k": top_k_str if isinstance(top_k_str, str) else None,
+                "similarity_threshold": sim_threshold_str if isinstance(sim_threshold_str, str) else None,
+            }
+            params = {k: v for k, v in params.items() if v is not None}
+            ChatRequest.model_validate(params)
+
+            if has_file and file_val is not None:
+                from app.api.file_utils import validate_image_bytes, resize_image
+                from app.services.exceptions import ValidationError as ServiceValidationError
+                
+                upload_file_obj: Any = file_val
+                image_bytes = await upload_file_obj.read()
+                filename_str = str(getattr(upload_file_obj, "filename", ""))
+                content_type_str = str(getattr(upload_file_obj, "content_type", ""))
+                logger.info(
+                    '[IMAGE] image_received request_id=%s filename=%s mime=%s size=%d',
+                    request_id, filename_str, content_type_str, len(image_bytes)
+                )
+                if len(image_bytes) == 0:
+                    raise HTTPException(status_code=400, detail="Image upload was not received by the server.")
+                if len(image_bytes) > 10 * 1024 * 1024:
+                    raise HTTPException(status_code=400, detail="Image exceeds the maximum allowed size of 10 MB.")
+                
+                ext = ""
+                if filename_str:
+                    ext = filename_str.split(".")[-1].lower()
+                if ext not in ["png", "jpg", "jpeg", "webp"]:
+                    raise HTTPException(status_code=400, detail="Unsupported file extension. Only PNG, JPEG, and WEBP are supported.")
+                    
+                try:
+                    image_mime = validate_image_bytes(image_bytes)
+                except ServiceValidationError as ve:
+                    raise HTTPException(status_code=400, detail=str(ve))
+
+                logger.info('[IMAGE] image_validated request_id=%s mime=%s', request_id, image_mime)
+                image_bytes = resize_image(image_bytes)
+                image_name = filename_str
+                image_size = len(image_bytes)
+            else:
+                logger.debug('[IMAGE] no file found in multipart form request_id=%s form_keys=%s', request_id, list(form.keys()))
+        else:
+            body = await request.json()
+            payload = ChatRequest.model_validate(body)
+            question = payload.question
+            session_id = payload.session_id
+            document_id = payload.document_id
+            document_version_id = payload.document_version_id
+            top_k = payload.top_k
+            similarity_threshold = payload.similarity_threshold
+    except ValidationError as err:
+        raise RequestValidationError(err.errors())
+
+    logger.info('[CHAT START] request_id=%s query="%s" module_file="%s"', request_id, question, module_file)
+
     if session_id is None or session_id == OPENAPI_PLACEHOLDER_UUID:
         session_id = await get_or_create_swagger_demo_session(
             users=UserRepository(session_service.session),
@@ -74,14 +188,57 @@ async def ask_chat(
             session_service=session_service,
         )
 
+    chat_session = await session_service.get(session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail=f"Chat session {session_id} not found.")
+    verify_ownership(chat_session.user_id, current_user, "chat session")
+
+    if image_bytes is not None:
+        from app.storage import get_storage_service
+        from app.core.config import get_settings
+        
+        storage = get_storage_service(bucket_name=get_settings().SUPABASE_STORAGE_BUCKET)
+        unique_name = f"{uuid.uuid4()}_{image_name or 'upload.png'}"
+        storage_path = f"{current_user.id}/{session_id}/{unique_name}"
+        
+        logger.info(
+            '[IMAGE] supabase_upload_started request_id=%s bucket=%s path=%s size=%d mime=%s',
+            request_id, get_settings().SUPABASE_STORAGE_BUCKET, storage_path, image_size or 0, image_mime
+        )
+        try:
+            await storage.upload_file(
+                content=image_bytes,
+                storage_path=storage_path,
+                mime_type=image_mime or "application/octet-stream"
+            )
+            image_storage_path = storage_path
+            logger.info(
+                '[IMAGE] supabase_upload_success request_id=%s path=%s',
+                request_id, image_storage_path
+            )
+        except Exception as e:
+            logger.error("[IMAGE] supabase_upload_failed request_id=%s error=%s", request_id, e)
+            raise HTTPException(status_code=500, detail="Image upload failed. Please try again.")
+
+    filters = SearchFilters(
+        user_id=current_user.id,
+        document_id=document_id,
+        document_version_id=document_version_id,
+    )
+
     try:
         result = await rag.ask(
             session_id,
-            payload.question,
+            question,
             filters=filters,
-            top_k=payload.top_k,
-            similarity_threshold=payload.similarity_threshold,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
             request_id=request_id,
+            image=image_bytes,
+            image_storage_path=image_storage_path,
+            image_name=image_name,
+            image_mime=image_mime,
+            image_size=image_size,
         )
         total_ms = int((time.monotonic() - start_time) * 1000)
         logger.info('[CHAT END] request_id=%s status=200 total_ms=%d', request_id, total_ms)
@@ -89,27 +246,10 @@ async def ask_chat(
         total_ms = int((time.monotonic() - start_time) * 1000)
         logger.error("[CHAT END] request_id=%s status=400 total_ms=%d error=%s", request_id, total_ms, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except LLMTimeoutError as exc:
-        total_ms = int((time.monotonic() - start_time) * 1000)
-        logger.error("[CHAT END] request_id=%s status=504 total_ms=%d error=%s", request_id, total_ms, exc)
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="The AI model took too long to generate a response. Please try asking again.",
-        ) from exc
-    except LLMUnavailableError as exc:
-        total_ms = int((time.monotonic() - start_time) * 1000)
-        logger.error("[CHAT END] request_id=%s status=503 total_ms=%d error=%s", request_id, total_ms, exc)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Ollama model service unavailable: {exc.reason}",
-        ) from exc
     except LLMClientError as exc:
         total_ms = int((time.monotonic() - start_time) * 1000)
-        logger.error("[CHAT END] request_id=%s status=502 total_ms=%d error=%s", request_id, total_ms, exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"AI generation failed: {exc}",
-        ) from exc
+        logger.error("[CHAT END] request_id=%s total_ms=%d error=%s", request_id, total_ms, exc)
+        raise exc
 
     return _to_chat_response(result)
 
@@ -120,18 +260,121 @@ async def ask_chat(
     description="Streams RAG tokens and citations in real time via Server-Sent Events (SSE).",
 )
 async def ask_chat_stream(
-    payload: ChatRequest,
+    request: Request,
     rag: RAGService = Depends(get_rag_service),
     session_service: ChatSessionService = Depends(get_chat_session_service),
 ):
     from fastapi.responses import StreamingResponse
 
-    filters = SearchFilters(
-        document_id=payload.document_id,
-        document_version_id=payload.document_version_id,
-    )
+    # Determine dynamic content parameters
+    content_type = request.headers.get("content-type", "")
+    question = ""
+    session_id: uuid.UUID | None = None
+    document_id: uuid.UUID | None = None
+    document_version_id: uuid.UUID | None = None
+    top_k: int | None = None
+    similarity_threshold: float | None = None
+    image_bytes: bytes | None = None
+    image_name: str | None = None
+    image_mime: str | None = None
+    image_size: int | None = None
+    image_storage_path: str | None = None
 
-    session_id = payload.session_id
+    from pydantic import ValidationError
+    from fastapi.exceptions import RequestValidationError
+    from fastapi import UploadFile
+
+    try:
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            question = str(form.get("question", "")).strip()
+            
+            session_id_str = form.get("session_id")
+            if session_id_str and isinstance(session_id_str, str):
+                session_id = uuid.UUID(session_id_str)
+                
+            doc_id_str = form.get("document_id")
+            if doc_id_str and isinstance(doc_id_str, str):
+                document_id = uuid.UUID(doc_id_str)
+                
+            doc_ver_str = form.get("document_version_id")
+            if doc_ver_str and isinstance(doc_ver_str, str):
+                document_version_id = uuid.UUID(doc_ver_str)
+                
+            top_k_str = form.get("top_k")
+            if top_k_str is not None and isinstance(top_k_str, str):
+                top_k = int(top_k_str)
+                
+            sim_threshold_str = form.get("similarity_threshold")
+            if sim_threshold_str is not None and isinstance(sim_threshold_str, str):
+                similarity_threshold = float(sim_threshold_str)
+                
+            file_val = form.get("file")
+            has_file = hasattr(file_val, "filename") and bool(getattr(file_val, "filename", None))
+            
+            # Validate input using ChatRequest schema rules
+            validate_question = question if (question or has_file) else ""
+            
+            params = {
+                "question": validate_question,
+                "session_id": session_id_str if isinstance(session_id_str, str) else None,
+                "document_id": doc_id_str if isinstance(doc_id_str, str) else None,
+                "document_version_id": doc_ver_str if isinstance(doc_ver_str, str) else None,
+                "top_k": top_k_str if isinstance(top_k_str, str) else None,
+                "similarity_threshold": sim_threshold_str if isinstance(sim_threshold_str, str) else None,
+            }
+            params = {k: v for k, v in params.items() if v is not None}
+            ChatRequest.model_validate(params)
+
+            if has_file and file_val is not None:
+                from app.api.file_utils import validate_image_bytes, resize_image
+                from app.services.exceptions import ValidationError as ServiceValidationError
+                import logging as _logging
+                _logger = _logging.getLogger(__name__)
+                
+                upload_file_obj: Any = file_val
+                image_bytes = await upload_file_obj.read()
+                filename_str = str(getattr(upload_file_obj, "filename", ""))
+                content_type_str = str(getattr(upload_file_obj, "content_type", ""))
+                _logger.info(
+                    '[IMAGE] image_received (stream) filename=%s mime=%s size=%d',
+                    filename_str, content_type_str, len(image_bytes)
+                )
+                if len(image_bytes) == 0:
+                    raise HTTPException(status_code=400, detail="Image upload was not received by the server.")
+                if len(image_bytes) > 10 * 1024 * 1024:
+                    raise HTTPException(status_code=400, detail="Image exceeds the maximum allowed size of 10 MB.")
+                
+                ext = ""
+                if filename_str:
+                    ext = filename_str.split(".")[-1].lower()
+                if ext not in ["png", "jpg", "jpeg", "webp"]:
+                    raise HTTPException(status_code=400, detail="Unsupported file extension. Only PNG, JPEG, and WEBP are supported.")
+                    
+                try:
+                    image_mime = validate_image_bytes(image_bytes)
+                except ServiceValidationError as ve:
+                    raise HTTPException(status_code=400, detail=str(ve))
+
+                _logger.info('[IMAGE] image_validated (stream) mime=%s', image_mime)
+                image_bytes = resize_image(image_bytes)
+                image_name = filename
+                image_size = len(image_bytes)
+            else:
+                import logging as _logging
+                _logging.getLogger(__name__).debug('[IMAGE] no file in stream multipart form form_keys=%s', list(form.keys()))
+        else:
+            body = await request.json()
+            payload = ChatRequest.model_validate(body)
+            question = payload.question
+            session_id = payload.session_id
+            document_id = payload.document_id
+            document_version_id = payload.document_version_id
+            top_k = payload.top_k
+            similarity_threshold = payload.similarity_threshold
+    except ValidationError as err:
+        raise RequestValidationError(err.errors())
+
     if session_id is None or session_id == OPENAPI_PLACEHOLDER_UUID:
         session_id = await get_or_create_swagger_demo_session(
             users=UserRepository(session_service.session),
@@ -139,12 +382,54 @@ async def ask_chat_stream(
             session_service=session_service,
         )
 
+    chat_session = await session_service.get(session_id)
+    if not chat_session:
+        raise HTTPException(status_code=404, detail=f"Chat session {session_id} not found.")
+    
+    # In stream we might not have current_user if it's SSE without auth header easily,
+    # but verify_ownership isn't used here currently. We will just use chat_session.user_id for path.
+    if image_bytes is not None:
+        import logging as _logging
+        from app.storage import get_storage_service
+        from app.core.config import get_settings
+        
+        _stream_logger = _logging.getLogger(__name__)
+        storage = get_storage_service(bucket_name=get_settings().SUPABASE_STORAGE_BUCKET)
+        unique_name = f"{uuid.uuid4()}_{image_name or 'upload.png'}"
+        storage_path = f"{chat_session.user_id}/{session_id}/{unique_name}"
+        
+        _stream_logger.info(
+            '[IMAGE] supabase_upload_started (stream) bucket=%s path=%s size=%d mime=%s',
+            get_settings().SUPABASE_STORAGE_BUCKET, storage_path, image_size or 0, image_mime
+        )
+        try:
+            await storage.upload_file(
+                content=image_bytes,
+                storage_path=storage_path,
+                mime_type=image_mime or "application/octet-stream"
+            )
+            image_storage_path = storage_path
+            _stream_logger.info('[IMAGE] supabase_upload_success (stream) path=%s', image_storage_path)
+        except Exception as e:
+            _stream_logger.error("[IMAGE] supabase_upload_failed (stream) error=%s", e)
+            raise HTTPException(status_code=500, detail="Image upload failed. Please try again.")
+
+    filters = SearchFilters(
+        document_id=document_id,
+        document_version_id=document_version_id,
+    )
+
     generator = rag.ask_stream(
         session_id,
-        payload.question,
+        question,
         filters=filters,
-        top_k=payload.top_k,
-        similarity_threshold=payload.similarity_threshold,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        image=image_bytes,
+        image_storage_path=image_storage_path,
+        image_name=image_name,
+        image_mime=image_mime,
+        image_size=image_size,
     )
 
     return StreamingResponse(

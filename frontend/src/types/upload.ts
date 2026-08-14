@@ -4,6 +4,7 @@ export type UploadQueueStatus =
   | 'Parsing'
   | 'Chunking'
   | 'Embedding'
+  | 'Processing'
   | 'Ready'
   | 'Failed'
 

@@ -17,6 +17,8 @@ import uuid
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import get_settings
 from app.llm.client import LLMUnavailableError, LLMTimeoutError
 from app.llm.response import LLMResponse, TokenUsage
@@ -33,7 +35,7 @@ from app.tools.web_search import StubWebSearchProvider
 @pytest.mark.asyncio
 async def test_no_documents_found_early_exit():
     """Verify that when 0 chunks are found, LLM is NOT called and fallback answer is returned immediately."""
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     retriever = AsyncMock()
     retriever.retrieve.return_value = []
 
@@ -145,7 +147,7 @@ async def test_reasoning_leakage_detection():
 @pytest.mark.asyncio
 async def test_reasoning_leakage_discard_and_retry():
     """Verify that if LLM emits reasoning tags, response is discarded and retried ONCE."""
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     retriever = AsyncMock()
     chunk_id = uuid.uuid4()
     retriever.retrieve.return_value = [
@@ -208,7 +210,7 @@ async def test_reasoning_leakage_discard_and_retry():
 @pytest.mark.asyncio
 async def test_truncation_done_reason_length_retry():
     """Verify that finish_reason == 'length' triggers automatic num_predict doubling retry."""
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     retriever = AsyncMock()
     retriever.retrieve.return_value = [
         RankedResult(
@@ -287,16 +289,16 @@ async def test_citations_formatting():
     formatted = format_chunk(
         index=1,
         chunk_text=chunk.chunk_text,
-        title=chunk.document_title,
-        section=chunk.section_title,
-        page=str(chunk.page_number),
-        chunk_id=str(chunk.chunk_id),
+        title=chunk.document_title or "Unknown",
+        section=chunk.section_title or "N/A",
+        page=chunk.page_number or "N/A",
+        chunk_id=chunk.chunk_id,
     )
 
-    assert "Document:\nSafety Manual.pdf" in formatted
-    assert "Section:\nGeneral Safety" in formatted
-    assert "Page:\n12" in formatted
-    assert f"Passage ID:\n{chunk_id}" in formatted
+    assert "Document: Safety Manual.pdf" in formatted
+    assert "Section: General Safety" in formatted
+    assert "Page: 12" in formatted
+    # Passage ID is tracked via RetrievedChunkContext metadata, not rendered in the LLM prompt
 
 
 @pytest.mark.asyncio
@@ -331,7 +333,7 @@ async def test_regression_query_problem_statement_in_talk_to_my_data():
     query = "what is problem statement in my talk to my data"
     assert classify(query) == Route.RAG
 
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     retriever = AsyncMock()
     doc_id = uuid.uuid4()
     retriever.retrieve.return_value = [
@@ -399,7 +401,7 @@ async def test_regression_query_percent_routes_calculator():
 @pytest.mark.asyncio
 async def test_regression_unknown_document_question_fallback_message():
     """Test E: Unknown document question returns exact required fallback message when 0 chunks retrieved."""
-    session = AsyncMock()
+    session = AsyncMock(spec=AsyncSession)
     retriever = AsyncMock()
     retriever.retrieve.return_value = []
 

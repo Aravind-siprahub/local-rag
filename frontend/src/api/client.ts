@@ -1,5 +1,6 @@
 import axios, { type AxiosError } from 'axios'
 
+import { AUTH_KEYS } from '@/features/auth/utils/constants'
 import type { ApiErrorBody } from '@/types'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? '/api'
@@ -14,6 +15,12 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use(
   (config) => {
+    // Attach JWT access token to every request
+    const token = localStorage.getItem(AUTH_KEYS.ACCESS_TOKEN)
+    if (token && config.headers) {
+      config.headers['Authorization'] = `Bearer ${token}`
+    }
+
     if (!config.headers['X-Request-ID']) {
       const requestId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
       config.headers['X-Request-ID'] = requestId
@@ -35,6 +42,12 @@ apiClient.interceptors.response.use(
   },
   (error) => {
     console.error("[14] AXIOS ERROR", error);
+    // Clear stale token and signal the app to re-authenticate
+    if ((error as AxiosError)?.response?.status === 401) {
+      localStorage.removeItem(AUTH_KEYS.ACCESS_TOKEN)
+      localStorage.removeItem(AUTH_KEYS.USER_DATA)
+      window.dispatchEvent(new Event('auth:unauthorized'))
+    }
     return Promise.reject(error);
   }
 );

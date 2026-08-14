@@ -7,6 +7,25 @@ import pytest
 
 from app.retrieval.retriever import RetrievalError, Retriever
 from app.retrieval.search import SearchFilters, SearchHit
+from app.retrieval.ranking import RankedResult
+
+
+def mock_rerank_cross_encoder(query, candidates, final_top_k=5):
+    return [
+        RankedResult(
+            chunk_id=cand.chunk_id,
+            chunk_text=cand.chunk_text,
+            document_id=cand.document_id,
+            document_version_id=cand.document_version_id,
+            document_title=cand.document_title,
+            similarity_score=1.0 - idx * 0.1,
+            rank=idx + 1,
+            section_title=cand.section_title,
+            page_number=cand.page_number,
+            metadata_=cand.metadata_,
+        )
+        for idx, cand in enumerate(candidates[:final_top_k])
+    ]
 
 
 @dataclass
@@ -48,7 +67,9 @@ class TestRetriever:
         hits = _make_hits(2)
         search_mock = AsyncMock(return_value=hits)
 
-        with patch("app.retrieval.retriever.search_similar", search_mock):
+        with patch("app.retrieval.retriever.search_similar", search_mock), \
+             patch("app.retrieval.retriever.search_fulltext", AsyncMock(return_value=[])), \
+             patch("app.retrieval.retriever.rerank_cross_encoder", side_effect=mock_rerank_cross_encoder):
             retriever = Retriever(session=None, client=client, top_k=5, similarity_threshold=0.0)
             results = await retriever.retrieve("What is revenue?")
 
@@ -68,7 +89,9 @@ class TestRetriever:
         version_id = uuid.uuid4()
         filters = SearchFilters(user_id=user_id, document_id=document_id, document_version_id=version_id)
 
-        with patch("app.retrieval.retriever.search_similar", search_mock):
+        with patch("app.retrieval.retriever.search_similar", search_mock), \
+             patch("app.retrieval.retriever.search_fulltext", AsyncMock(return_value=[])), \
+             patch("app.retrieval.retriever.rerank_cross_encoder", side_effect=mock_rerank_cross_encoder):
             retriever = Retriever(session=None, client=client)
             await retriever.retrieve("question", filters=filters, top_k=3)
 
@@ -97,7 +120,9 @@ class TestRetriever:
         ]
         search_mock = AsyncMock(return_value=hits)
 
-        with patch("app.retrieval.retriever.search_similar", search_mock):
+        with patch("app.retrieval.retriever.search_similar", search_mock), \
+             patch("app.retrieval.retriever.search_fulltext", AsyncMock(return_value=[])), \
+             patch("app.retrieval.retriever.rerank_cross_encoder", side_effect=mock_rerank_cross_encoder):
             retriever = Retriever(session=None, client=client)
             results = await retriever.retrieve("question", similarity_threshold=0.5)
 
@@ -109,7 +134,9 @@ class TestRetriever:
         client = FakeEmbeddingClient()
         search_mock = AsyncMock(return_value=[])
 
-        with patch("app.retrieval.retriever.search_similar", search_mock):
+        with patch("app.retrieval.retriever.search_similar", search_mock), \
+             patch("app.retrieval.retriever.search_fulltext", AsyncMock(return_value=[])), \
+             patch("app.retrieval.retriever.rerank_cross_encoder", side_effect=mock_rerank_cross_encoder):
             retriever = Retriever(session=None, client=client)
             results = await retriever.retrieve("no matches")
 

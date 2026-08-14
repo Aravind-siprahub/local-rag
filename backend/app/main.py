@@ -18,7 +18,7 @@ if sys.platform == "win32":
     # (raises psycopg.InterfaceError at the first async connection attempt).
     # This must be set before uvicorn's asyncio.run() creates the event loop,
     # i.e. at import time of this module, not inside an async function.
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore
     try:
         loop = asyncio.get_running_loop()
         if isinstance(loop, asyncio.ProactorEventLoop):
@@ -58,6 +58,12 @@ async def lifespan(app: FastAPI):
     keep restarting into the same error.
     """
     logger.info("DATABASE_URL (masked): %s", settings.masked_database_url)
+    logger.info(
+        "JWT Authentication: algorithm=%s expire_minutes=%d secret_configured=%s",
+        settings.JWT_ALGORITHM,
+        settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+        "configured (masked)" if settings.JWT_SECRET_KEY else "NO",
+    )
     logger.info(
         "Embedding config: model=%s dimensions=%d",
         settings.EMBEDDING_MODEL,
@@ -185,8 +191,11 @@ async def lifespan(app: FastAPI):
                 else:
                     logger.warning("Startup pending document check error: %s", exc)
 
+        from app.processing.background_runner import start_background_runner
+
         asyncio.create_task(_warmup_ollama())
         asyncio.create_task(_ingest_pending_documents())
+        start_background_runner()
 
 
         # Force OpenAPI rebuild after startup examples are known, so the first

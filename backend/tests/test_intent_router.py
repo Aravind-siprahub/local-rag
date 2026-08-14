@@ -45,3 +45,23 @@ class TestIntentRouter:
     def test_arithmetic_beats_document_cue(self) -> None:
         assert classify("What is 10 + 5 according to my documents?") == Route.CALCULATOR
 
+    def test_corpus_aware_routing_with_sipraone(self) -> None:
+        titles = ["SipraOne deployment.docx"]
+        # Examples that MUST route to DOCUMENT_QA
+        assert classify("Tell me about SipraOne deployment", document_titles=titles) == Route.DOCUMENT_QA
+        assert classify("Explain SipraOne deployment", document_titles=titles) == Route.DOCUMENT_QA
+        assert classify("What is the SipraOne deployment process?", document_titles=titles) == Route.DOCUMENT_QA
+        assert classify("How is SipraOne deployed?", document_titles=titles) == Route.DOCUMENT_QA
+        assert classify("Tell me about SipraOne", document_titles=titles) == Route.DOCUMENT_QA
+        
+        # Test VM setup in project
+        vm_titles = ["VM Setup.docx"]
+        assert classify("Explain the VM setup in my project", document_titles=vm_titles) == Route.DOCUMENT_QA
+        
+        # Without corpus evidence (empty titles), it falls back to GENERAL_KNOWLEDGE
+        assert classify("Tell me about SipraOne", document_titles=[]) == Route.GENERAL_KNOWLEDGE
+
+        # Generic question stays GENERAL_KNOWLEDGE even with corpus
+        assert classify("what is SipraOne?", document_titles=titles) == Route.GENERAL_KNOWLEDGE
+
+

@@ -29,16 +29,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/debug", tags=["Debug"])
 
 
+from app.api.dependencies import get_current_user
+from app.models.user import User
+
 @router.get("/rag", summary="Debug RAG pipeline state and retrieval")
 async def debug_rag(
     q: str = Query(default="hi", description="Sample question to test retrieval against vector store"),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Diagnostic endpoint to inspect RAG pipeline: documents, chunks, vectors, retrieval hits, and prompt construction."""
     settings = get_settings()
 
     # 1. Count active documents
-    doc_stmt = select(func.count(Document.id)).where(Document.deleted_at.is_(None))
+    doc_stmt = (
+        select(func.count(Document.id))
+        .where(Document.deleted_at.is_(None))
+        .where(Document.user_id == current_user.id)
+    )
     doc_count = (await session.execute(doc_stmt)).scalar_one()
 
     # 2. Count parsed document versions
@@ -55,15 +63,14 @@ async def debug_rag(
     emb_stmt = select(func.count(Embedding.id))
     emb_count = (await session.execute(emb_stmt)).scalar_one()
 
-    # 5. Run test retrieval for `q` without user scoping to check raw vector DB matches
+    # 5. Run test retrieval for `q` scoped to authenticated user
     retrieved_count = 0
     top_k_results = []
     prompt_preview = ""
 
     try:
         retriever = Retriever(session)
-        # Search across all documents (no user_id filter) to see if vectors match
-        ranked_hits = await retriever.retrieve(q, filters=SearchFilters(), top_k=settings.TOP_K)
+        ranked_hits = await retriever.retrieve(q, filters=SearchFilters(user_id=current_user.id), top_k=settings.TOP_K)
         retrieved_count = len(ranked_hits)
 
         for hit in ranked_hits:
@@ -212,7 +219,7 @@ async def get_reranker_status() -> dict[str, Any]:
 async def evaluate_reranker_v2(
     q: str = Query(default="What is Talk to My Data?"),
     session: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> Any:
     """Execute neural reranking evaluation and return full trace as clean JSON."""
     import sys
     import time
@@ -248,7 +255,7 @@ async def evaluate_reranker_v2(
                 "rank": cand.rank,
                 "chunk_id": cid,
                 "section": cand.section_title or "",
-                "rrf_score": float(cand.similarity_score),
+                "rrf_score": cand.similarity_score,
                 "preview": cand.chunk_text[:100],
             })
 
@@ -267,13 +274,13 @@ async def evaluate_reranker_v2(
             cid = str(cand.chunk_id)
             if cid == target_chunk_id:
                 target_after_rank = cand.rank
-                target_after_score = float(cand.similarity_score)
+                target_after_score = cand.similarity_score
                 target_in_final_context = True
             after_rerank.append({
                 "rank": cand.rank,
                 "chunk_id": cid,
                 "section": cand.section_title or "",
-                "reranker_score": float(cand.similarity_score),
+                "reranker_score": cand.similarity_score,
                 "preview": cand.chunk_text[:100],
             })
 
@@ -457,7 +464,7 @@ async def _run_bg_eval_impl(status_path: str, output_path: str):
             # 2. Verbatim copy check
             verbatim_overlap = 0.0
             for c in citations:
-                snippet = c.get("chunk_text", "")
+                snippet = str(c.get("chunk_text", ""))
                 if snippet:
                     overlap = compute_ngram_overlap(actual_answer, snippet, 5)
                     if overlap > verbatim_overlap:
@@ -479,7 +486,7 @@ async def _run_bg_eval_impl(status_path: str, output_path: str):
 
             # 5. Citation Accuracy
             if exp_docs:
-                cited_docs = [c.get("document_title", "") for c in citations]
+                cited_docs = [str(c.get("document_title", "")) for c in citations]
                 doc_matches = [doc for doc in exp_docs if any(doc.lower() in cd.lower() for cd in cited_docs)]
                 citation_score = round((len(doc_matches) / len(exp_docs)) * 100.0, 1)
             else:
@@ -584,13 +591,33 @@ async def _run_bg_eval_impl(status_path: str, output_path: str):
 
 
 @router.get("/restart-server", summary="Restart backend process")
-async def restart_server() -> dict[str, str]:
+async def restart_server(background_tasks: BackgroundTasks) -> dict[str, str]:
     """Force backend process restart to reload modules."""
     import os
-    import sys
-    os._exit(0)
+    import time
+    def _restart():
+        time.sleep(0.5)
+        os._exit(0)
+    background_tasks.add_task(_restart)
     return {"status": "restarting"}
 
+@router.get("/jobs", summary="Debug processing jobs")
+async def debug_jobs(
+    session: AsyncSession = Depends(get_db),
+) -> Any:
+    from app.models.processing_job import ProcessingJob
+    stmt = select(ProcessingJob).order_by(ProcessingJob.created_at.desc()).limit(20)
+    jobs = list((await session.execute(stmt)).scalars().all())
+    return [
+        {
+            "id": str(j.id),
+            "document_version_id": str(j.document_version_id),
+            "job_type": str(j.job_type),
+            "status": str(j.status),
+            "error_message": j.error_message,
+        }
+        for j in jobs
+    ]
 
 @router.get("/eval-status", summary="Check eval benchmark status")
 async def check_eval_status() -> dict[str, Any]:

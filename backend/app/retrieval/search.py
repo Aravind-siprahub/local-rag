@@ -47,8 +47,8 @@ class SearchHit:
     chunk_text: str
     document_id: uuid.UUID
     document_version_id: uuid.UUID
-    document_title: str
     distance: float
+    document_title: str = ""
     section_title: str | None = None
     page_number: int | None = None
     metadata_: dict | None = None
@@ -97,6 +97,10 @@ async def search_fulltext(
         stmt = stmt.where(Document.user_id == filters.user_id)
     if filters.document_id is not None:
         stmt = stmt.where(Document.id == filters.document_id)
+    if filters.document_version_id is not None:
+        stmt = stmt.where(DocumentVersion.id == filters.document_version_id)
+    else:
+        stmt = stmt.where(DocumentChunk.document_version_id == Document.current_version_id)
     if filters.filename is not None:
         stmt = stmt.where(Document.title.ilike(f"%{filters.filename}%"))
     if filters.date_from is not None:
@@ -173,6 +177,8 @@ async def search_similar(
         stmt = stmt.where(Document.id == filters.document_id)
     if filters.document_version_id is not None:
         stmt = stmt.where(DocumentVersion.id == filters.document_version_id)
+    else:
+        stmt = stmt.where(DocumentChunk.document_version_id == Document.current_version_id)
 
     stmt = stmt.order_by(distance_expr).limit(top_k)
 

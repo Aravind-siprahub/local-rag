@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useState } from 'react'
 
 import { getApiErrorMessage } from '@/api/client'
-import { listUsers, uploadDocument } from '@/services'
+import { useCurrentUser } from '@/hooks'
+import { getDocument, getHealth, uploadDocument } from '@/services'
 import type { RejectedFile, UploadQueueItem } from '@/types'
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024 // 25 MB
@@ -129,24 +130,49 @@ export function useUploadQueue() {
           processingJobId: response.processing_job_id,
         })
 
-        // Poll document status instead of setTimeout
-        const pollInterval = setInterval(async () => {
+        // Poll document status instead of setInterval to avoid race conditions
+        let isPolling = true
+        
+        const poll = async () => {
+          if (!isPolling) return
+          
           try {
             const doc = await getDocument(response.document_id)
-            const docStatus = typeof doc.status === 'string' ? doc.status : String(doc.status)
-            if (docStatus.toLowerCase() === 'ready' || docStatus.toLowerCase() === 'failed') {
-              clearInterval(pollInterval)
-              updateItemStatus(item.id, {
-                status: (docStatus.toLowerCase() === 'ready' ? 'Ready' : 'Failed') as any,
-                error: docStatus.toLowerCase() === 'failed' ? 'Processing failed' : undefined,
+            const docStatus = typeof doc.status === 'string' ? doc.status.toLowerCase() : String(doc.status).toLowerCase()
+            
+            if (docStatus === 'ready' || docStatus === 'failed') {
+              isPolling = false
+              
+              setQueue((prev) => {
+                const currentItem = prev.find(i => i.id === item.id)
+                // Do not overwrite a successful state with a stale failure
+                if (currentItem?.status === 'Ready' && docStatus === 'failed') {
+                  return prev
+                }
+                
+                return prev.map(i => i.id === item.id ? {
+                  ...i,
+                  status: docStatus === 'ready' ? 'Ready' : 'Failed',
+                  error: docStatus === 'failed' ? 'Processing failed' : undefined
+                } : i)
               })
+              
               void queryClient.invalidateQueries({ queryKey: ['documents'] })
+            } else if (docStatus === 'processing' || docStatus === 'pending') {
+              updateItemStatus(item.id, { status: 'Processing' })
             }
           } catch (e) {
-            clearInterval(pollInterval)
+            isPolling = false
             updateItemStatus(item.id, { status: 'Failed', error: 'Failed to poll status' })
           }
-        }, 2000)
+
+          if (isPolling) {
+            setTimeout(poll, 2000)
+          }
+        }
+        
+        // Start polling
+        setTimeout(poll, 2000)
 
       } catch (err: unknown) {
         const errorMsg = getApiErrorMessage(err)
