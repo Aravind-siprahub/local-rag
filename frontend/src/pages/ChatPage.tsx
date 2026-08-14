@@ -344,6 +344,7 @@ export function ChatPage() {
             <ModelSelector
               selectedModel={selectedModel}
               onSelectModel={setSelectedModel}
+              placement="bottom"
             />
             <div className="hidden sm:flex items-center text-xs text-muted-foreground gap-1 bg-muted/50 px-2 py-1 rounded-md">
               <Info className="w-3 h-3" />
