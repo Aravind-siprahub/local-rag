@@ -15,11 +15,12 @@ import {
   useSettings,
 } from '@/features/settings'
 import type { SettingsSectionId } from '@/types'
+import { settingsStore, applyTheme } from '@/store/settings.store'
 
 export function SettingsPage() {
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('general')
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
-    return (localStorage.getItem('theme') as 'dark' | 'light' | 'system') || 'system'
+    return settingsStore.get().theme || 'system'
   })
 
   const { health, isHealthLoading, isHealthError, activeUser, settingsMap, updateSetting, refetchAll } = useSettings()
@@ -105,20 +106,8 @@ export function SettingsPage() {
   }, [settingsMap])
 
   useEffect(() => {
-    const root = window.document.documentElement
-    if (theme === 'dark') {
-      root.classList.add('dark')
-    } else if (theme === 'light') {
-      root.classList.remove('dark')
-    } else {
-      const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      if (systemDark) {
-        root.classList.add('dark')
-      } else {
-        root.classList.remove('dark')
-      }
-    }
-    localStorage.setItem('theme', theme)
+    settingsStore.set({ theme })
+    applyTheme(theme)
   }, [theme])
 
   const backendUrl = import.meta.env.VITE_API_BASE_URL ?? '/api'
@@ -708,11 +697,11 @@ export function SettingsPage() {
                     type="button"
                     onClick={() => setTheme('light')}
                     className={`
-                      p-4 rounded-lg border flex flex-col items-center gap-2 text-xs font-medium transition-all
+                      p-4 rounded-lg border flex flex-col items-center gap-2 text-xs font-medium transition-all duration-200
                       ${
                         theme === 'light'
-                          ? 'border-primary bg-primary/5 text-primary ring-2 ring-primary/20'
-                          : 'border-border/60 bg-card hover:bg-accent/40 text-muted-foreground'
+                          ? 'border-primary bg-primary/10 text-primary font-semibold ring-1 ring-primary/30 shadow-xs'
+                          : 'border-border bg-card hover:bg-muted text-muted-foreground/80 hover:text-foreground'
                       }
                     `}
                   >
@@ -724,11 +713,11 @@ export function SettingsPage() {
                     type="button"
                     onClick={() => setTheme('dark')}
                     className={`
-                      p-4 rounded-lg border flex flex-col items-center gap-2 text-xs font-medium transition-all
+                      p-4 rounded-lg border flex flex-col items-center gap-2 text-xs font-medium transition-all duration-200
                       ${
                         theme === 'dark'
-                          ? 'border-primary bg-primary/5 text-primary ring-2 ring-primary/20'
-                          : 'border-border/60 bg-card hover:bg-accent/40 text-muted-foreground'
+                          ? 'border-primary bg-primary/10 text-primary font-semibold ring-1 ring-primary/30 shadow-xs'
+                          : 'border-border bg-card hover:bg-muted text-muted-foreground/80 hover:text-foreground'
                       }
                     `}
                   >
@@ -740,11 +729,11 @@ export function SettingsPage() {
                     type="button"
                     onClick={() => setTheme('system')}
                     className={`
-                      p-4 rounded-lg border flex flex-col items-center gap-2 text-xs font-medium transition-all
+                      p-4 rounded-lg border flex flex-col items-center gap-2 text-xs font-medium transition-all duration-200
                       ${
                         theme === 'system'
-                          ? 'border-primary bg-primary/5 text-primary ring-2 ring-primary/20'
-                          : 'border-border/60 bg-card hover:bg-accent/40 text-muted-foreground'
+                          ? 'border-primary bg-primary/10 text-primary font-semibold ring-1 ring-primary/30 shadow-xs'
+                          : 'border-border bg-card hover:bg-muted text-muted-foreground/80 hover:text-foreground'
                       }
                     `}
                   >

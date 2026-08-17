@@ -1133,18 +1133,46 @@ class RAGService:
                     # Robust JSON extraction
                     start_idx = raw_text.find("{")
                     end_idx = raw_text.rfind("}")
+                    
                     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                        # Attempt JSON parsing
                         json_str = raw_text[start_idx:end_idx + 1]
+                        try:
+                            parsed = json.loads(json_str)
+                            # Validate the parsed structure
+                            if not isinstance(parsed, dict) or "answer" not in parsed:
+                                logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s JSON missing 'answer' key, falling back to safe representation", req_id)
+                                answer_text = result.concise_answer()
+                            else:
+                                ans = parsed.get("answer", "")
+                                if ans is not None:
+                                    ans = str(ans).strip()
+                                else:
+                                    ans = ""
+                                if not ans:
+                                    logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s JSON 'answer' key is empty, falling back to safe representation", req_id)
+                                    answer_text = result.concise_answer()
+                                else:
+                                    answer_text = sanitize_response(ans).strip()
+                        except (json.JSONDecodeError, ValueError) as json_err:
+                            logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s Could not parse JSON response, falling back to safe representation: %s", req_id, json_err)
+                            answer_text = result.concise_answer()
                     else:
-                        json_str = raw_text
-
-                    try:
-                        parsed = json.loads(json_str)
-                        ans = parsed.get("answer", "").strip()
-                        answer_text = sanitize_response(ans).strip()
-                    except (json.JSONDecodeError, ValueError) as json_err:
-                        logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s Could not parse JSON response, falling back to sanitization: %s", req_id, json_err)
+                        # Provider legitimately returned plain text. Support explicitly instead of pretending it is JSON.
+                        import re
                         answer_text = sanitize_response(raw_text).strip()
+                        
+                        # Validate that it is not an unrelated default answer (e.g. from a test fixture or hallucination)
+                        # We ensure the text has some overlap with the web result or query
+                        query_lower = question.lower()
+                        result_lower = result.concise_answer().lower()
+                        
+                        words_in_answer = {w for w in re.findall(r'\b\w{4,}\b', answer_text.lower())}
+                        words_in_context = {w for w in re.findall(r'\b\w{4,}\b', query_lower + " " + result_lower)}
+                        
+                        if words_in_answer and not words_in_answer.intersection(words_in_context):
+                            logger.warning("[WEB SEARCH UNRELATED TEXT] request_id=%s Response seems unrelated to query/results, falling back to safe representation", req_id)
+                            answer_text = result.concise_answer()
                         
                     if not answer_text:
                         answer_text = result.concise_answer()

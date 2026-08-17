@@ -1,5 +1,6 @@
 """Unified chat API — RAG Q&A and session transcript access."""
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status, Request
 
@@ -32,7 +33,6 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
     "",
     response_model=ChatResponse,
     status_code=status.HTTP_200_OK,
-    operation_id="chat_ask",
     summary="Ask a question using RAG",
     description=(
         "Runs retrieval -> prompt building -> LLM generation, persists the user "
@@ -358,7 +358,7 @@ async def ask_chat_stream(
 
                 _logger.info('[IMAGE] image_validated (stream) mime=%s', image_mime)
                 image_bytes = resize_image(image_bytes)
-                image_name = filename
+                image_name = filename_str
                 image_size = len(image_bytes)
             else:
                 import logging as _logging
@@ -446,7 +446,6 @@ async def ask_chat_stream(
 @router.get(
     "/sessions/{session_id}",
     response_model=ChatSessionResponse,
-    operation_id="chat_get_session",
     summary="Get a chat session by id",
 )
 async def get_chat_session(
@@ -460,7 +459,6 @@ async def get_chat_session(
 @router.get(
     "/sessions/{session_id}/messages",
     response_model=ChatMessageListResponse,
-    operation_id="chat_list_session_messages",
     summary="List messages in a chat session",
 )
 async def list_chat_session_messages(

@@ -217,12 +217,19 @@ def create_app() -> FastAPI:
     and keeps configuration/wiring in one place.
     """
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.routing import APIRoute
+
+    def custom_generate_unique_id(route: APIRoute) -> str:
+        # The api_router is mounted twice (at / and /api), so we must include
+        # the path in the operation ID to prevent duplicates in OpenAPI generation.
+        return f"{route.tags[0] if route.tags else 'api'}-{route.name}-{route.path_format.strip('/').replace('/', '_')}"
 
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
         debug=settings.DEBUG,
         lifespan=lifespan,
+        generate_unique_id_function=custom_generate_unique_id,
     )
 
     # CORS must be registered before routers/handlers so preflight and error

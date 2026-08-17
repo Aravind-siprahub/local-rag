@@ -471,6 +471,29 @@ class OllamaLLMClient:
         return self._client
 
 
+import re
+
+def _normalize_final_answer(answer: str) -> str:
+    """Safely remove reasoning wrappers and 'Final answer:' prefixes without destroying facts."""
+    if not answer or not isinstance(answer, str):
+        return ""
+    
+    cleaned = answer.strip()
+    
+    # 1. Strip structural thinking blocks via existing sanitizer
+    from app.llm.sanitize import sanitize_response
+    cleaned = sanitize_response(cleaned)
+    
+    # 2. Extract everything after literal "Final answer:" or "Therefore, the answer is:"
+    # This handles Qwen3:4b models that leak meta-commentary into the content chunk.
+    final_answer_match = re.search(r"(?i)(?:final\s*answer|therefore,? the answer is)[:\s]*\n*(.*)", cleaned, flags=re.DOTALL)
+    if final_answer_match:
+        extracted = final_answer_match.group(1).strip()
+        if extracted:
+            cleaned = extracted
+            
+    return cleaned.strip()
+
 def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMResponse:
     if not isinstance(data, dict):
         raise LLMAPIError("Ollama response is not a JSON object.")
@@ -482,10 +505,10 @@ def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMRespon
     content = message.get("content")
     thinking = message.get("thinking")
 
-    from app.llm.sanitize import sanitize_response, is_reasoning_model
+    from app.llm.sanitize import is_reasoning_model
 
     if isinstance(content, str):
-        content = sanitize_response(content)
+        content = _normalize_final_answer(content)
 
     model_name = data.get("model") if isinstance(data.get("model"), str) else fallback_model
 

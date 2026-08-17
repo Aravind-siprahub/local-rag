@@ -168,6 +168,12 @@ export function ModelSelector({
               )
             })}
           </div>
+          
+          {hasImageAttached && (
+            <div className="mt-1.5 pt-1.5 border-t border-border/40 text-[10px] text-muted-foreground/80 leading-tight">
+              Backend automatically routes to the vision model when an image is present.
+            </div>
+          )}
         </div>
       )}
     </div>

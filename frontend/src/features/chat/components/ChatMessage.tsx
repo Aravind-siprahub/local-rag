@@ -73,10 +73,10 @@ export function ChatMessage({
         >
           <div
             className={cn(
-              'rounded-2xl px-4 py-3 shadow-xs space-y-3 transition-all duration-150',
+              'space-y-3 transition-all duration-150',
               isUser
-                ? 'bg-primary/10 border border-primary/20 text-foreground rounded-tr-xs'
-                : 'bg-card/70 border border-border/60 text-card-foreground rounded-tl-xs w-full',
+                ? 'bg-primary/8 border border-primary/20 text-foreground rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs max-w-fit'
+                : 'bg-transparent border-0 text-card-foreground px-0 py-1 w-full',
             )}
           >
             {/* User or Assistant message content */}
@@ -94,45 +94,54 @@ export function ChatMessage({
                     remarkPlugins={[remarkGfm]}
                     components={{
                       p: ({ children }) => (
-                        <p className="mb-2.5 last:mb-0 leading-relaxed text-foreground/90">
+                        <p className="mb-3 last:mb-0 leading-relaxed text-sm text-foreground/90 font-sans">
                           {children}
                         </p>
                       ),
                       ul: ({ children }) => (
-                        <ul className="list-disc list-inside space-y-1 my-2 text-foreground/90 pl-1">
+                        <ul className="list-disc pl-5 space-y-1.5 my-3 text-sm text-foreground/90">
                           {children}
                         </ul>
                       ),
                       ol: ({ children }) => (
-                        <ol className="list-decimal list-inside space-y-1 my-2 text-foreground/90 pl-1">
+                        <ol className="list-decimal pl-5 space-y-1.5 my-3 text-sm text-foreground/90">
                           {children}
                         </ol>
                       ),
                       li: ({ children }) => (
-                        <li className="text-foreground/90 leading-snug">{children}</li>
+                        <li className="text-foreground/90 leading-relaxed pl-0.5">{children}</li>
                       ),
                       h1: ({ children }) => (
-                        <h1 className="text-base font-semibold text-foreground mt-3 mb-1.5">
+                        <h1 className="text-base font-bold text-foreground mt-4 mb-2 font-display">
                           {children}
                         </h1>
                       ),
                       h2: ({ children }) => (
-                        <h2 className="text-sm font-semibold text-foreground mt-2.5 mb-1">
+                        <h2 className="text-sm font-semibold text-foreground mt-3.5 mb-1.5 font-display">
                           {children}
                         </h2>
                       ),
                       h3: ({ children }) => (
-                        <h3 className="text-xs font-semibold text-foreground mt-2 mb-1 uppercase tracking-wider">
+                        <h3 className="text-xs font-semibold text-foreground mt-3 mb-1 uppercase tracking-wider font-display">
                           {children}
                         </h3>
                       ),
-                      code: ({ children }) => (
-                        <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono border border-border/40 text-primary">
-                          {children}
-                        </code>
-                      ),
+                      code: ({ className, children, ...props }) => {
+                        const match = /language-(\w+)/.exec(className || '')
+                        return match ? (
+                          <pre className="bg-muted/40 border border-border/30 rounded-lg p-3 my-3 overflow-x-auto text-xs font-mono leading-relaxed text-foreground scrollbar-thin">
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          </pre>
+                        ) : (
+                          <code className="bg-muted/70 px-1.5 py-0.5 rounded text-xs font-mono border border-border/20 text-primary" {...props}>
+                            {children}
+                          </code>
+                        )
+                      },
                       blockquote: ({ children }) => (
-                        <blockquote className="border-l-2 border-primary/40 pl-3 italic text-muted-foreground my-2">
+                        <blockquote className="border-l-2 border-primary/30 pl-3 italic text-muted-foreground/80 my-3">
                           {children}
                         </blockquote>
                       ),
@@ -227,8 +236,8 @@ export function ChatMessage({
           {/* Action Bar & Model Used Badge */}
           <div
             className={cn(
-              'flex items-center gap-1.5 mt-1.5 transition-opacity duration-150',
-              isUser ? 'flex-row-reverse opacity-90 sm:opacity-0 group-hover:opacity-100' : 'flex-row opacity-90 sm:opacity-0 group-hover:opacity-100',
+              'flex items-center gap-1 mt-1.5 transition-opacity duration-200',
+              isUser ? 'flex-row-reverse opacity-100 sm:opacity-0 focus-within:opacity-100 group-hover:opacity-100' : 'flex-row opacity-100 sm:opacity-0 focus-within:opacity-100 group-hover:opacity-100',
             )}
           >
             {/* User Actions */}
@@ -236,7 +245,7 @@ export function ChatMessage({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground rounded-lg gap-1 border border-transparent hover:border-border/40"
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md gap-1.5 transition-colors"
                 onClick={() => onEdit(message)}
                 disabled={isSending}
                 title="Edit message"
@@ -252,7 +261,7 @@ export function ChatMessage({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground rounded-lg gap-1 border border-transparent hover:border-border/40"
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md gap-1.5 transition-colors"
                 onClick={() => onRegenerate(message)}
                 disabled={isSending}
                 title="Regenerate response"
@@ -268,7 +277,7 @@ export function ChatMessage({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-foreground rounded-lg"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
                 onClick={handleCopy}
                 title="Copy text"
                 aria-label="Copy text"

@@ -156,9 +156,15 @@ export function ChatInput({
         </div>
       )}
 
+      {editingMessage && preservedImageUrl && !selectedFile && (
+        <div className="text-[11px] text-amber-500 px-3 py-1 bg-amber-500/10 rounded-lg border border-amber-500/20 max-w-fit self-start animate-in fade-in-0">
+          <strong>Note:</strong> To include the original image in your resubmission, you must re-attach it.
+        </div>
+      )}
+
       <div
         className={cn(
-          'relative flex flex-col w-full rounded-2xl border border-input bg-card/90 p-2 shadow-xs transition-all duration-200 focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/30',
+          'relative flex flex-col w-full rounded-xl border border-border/40 bg-card/50 p-2 shadow-xs transition-all duration-200 focus-within:border-primary/40 focus-within:ring-1 focus-within:ring-primary/30',
           cannotSend && 'opacity-80',
         )}
       >
@@ -174,10 +180,14 @@ export function ChatInput({
             </div>
             <div className="flex flex-col min-w-0 pr-1">
               <span className="text-xs font-medium text-foreground truncate max-w-44">
-                {selectedFile?.name || 'Attached Image'}
+                {selectedFile?.name || 'Original Image'}
               </span>
               <span className="text-[10px] text-muted-foreground">
-                {selectedFile ? `${(selectedFile.size / 1024).toFixed(1)} KB` : 'Preserved image'}
+                {selectedFile ? (
+                  `${(selectedFile.size / 1024).toFixed(1)} KB`
+                ) : (
+                  <span className="text-amber-500 font-medium">Re-attach required</span>
+                )}
               </span>
             </div>
             <button
@@ -209,13 +219,13 @@ export function ChatInput({
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled}
             className={cn(
-              'h-9 w-9 mr-1 mb-0.5 shrink-0 rounded-xl text-muted-foreground hover:text-foreground transition-colors',
+              'h-8 w-8 mr-1 mb-0.5 shrink-0 rounded-lg text-muted-foreground/60 hover:text-foreground transition-colors',
               hasActiveImage && 'text-primary bg-primary/10 hover:bg-primary/20',
             )}
             title="Attach image (PNG, JPEG, WEBP)"
             aria-label="Attach image"
           >
-            {hasActiveImage ? <ImageIcon className="h-4 w-4" /> : <Paperclip className="h-4 w-4" />}
+            {hasActiveImage ? <ImageIcon className="h-3.5 w-3.5" /> : <Paperclip className="h-3.5 w-3.5" />}
           </Button>
 
           <textarea
@@ -235,7 +245,7 @@ export function ChatInput({
             }
             disabled={disabled}
             className={cn(
-              'flex-1 min-h-10 max-h-44 w-full resize-none bg-transparent px-2.5 py-2 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/70',
+              'flex-1 min-h-8 max-h-44 w-full resize-none bg-transparent px-2 py-1.5 text-xs focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/40',
               'scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent',
             )}
             rows={1}
@@ -255,7 +265,7 @@ export function ChatInput({
             size="icon"
             onClick={handleSend}
             disabled={(!input.trim() && !hasActiveImage) || cannotSend}
-            className="ml-1 mb-0.5 h-9 w-9 shrink-0 rounded-xl shadow-xs transition-transform active:scale-95"
+            className="ml-1 mb-0.5 h-8 w-8 shrink-0 rounded-lg shadow-xs transition-all active:scale-95 bg-primary hover:bg-primary/90 text-primary-foreground disabled:bg-muted/40 disabled:text-muted-foreground/30 border border-transparent disabled:border-border/10"
             title={
               sendDisabled
                 ? 'Wait for the current response'
@@ -265,7 +275,7 @@ export function ChatInput({
             }
             aria-label={editingMessage ? 'Resubmit edited message' : 'Send message'}
           >
-            <SendHorizontal className="h-4 w-4" />
+            <SendHorizontal className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
