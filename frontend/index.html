@@ -1,10 +1,41 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Local RAG · Knowledge Studio</title>
+    <script>
+      (function() {
+        let theme = 'system';
+        try {
+          const cachedSettings = localStorage.getItem('local-rag-settings');
+          if (cachedSettings) {
+            const parsed = JSON.parse(cachedSettings);
+            if (parsed.theme) theme = parsed.theme;
+          }
+        } catch (e) {}
+        
+        const oldTheme = localStorage.getItem('theme');
+        if (oldTheme) {
+          theme = oldTheme;
+        }
+        
+        const root = document.documentElement;
+        let isDark = theme === 'dark';
+        if (theme === 'system') {
+          isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
+        
+        if (isDark) {
+          root.classList.add('dark');
+          root.classList.remove('light');
+        } else {
+          root.classList.remove('dark');
+          root.classList.add('light');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

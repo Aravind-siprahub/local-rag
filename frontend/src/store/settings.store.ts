@@ -1,4 +1,4 @@
-export type ThemeMode = 'dark' | 'light'
+export type ThemeMode = 'dark' | 'light' | 'system'
 
 export interface AppSettings {
   userId: string | null
@@ -15,7 +15,7 @@ const defaultSettings: AppSettings = {
   ollamaBaseUrl: 'http://localhost:11434',
   chatModel: 'qwen3:8b',
   embeddingModel: 'nomic-embed-text',
-  theme: 'dark',
+  theme: 'system',
 }
 
 function readSettings(): AppSettings {
@@ -69,9 +69,15 @@ export const settingsStore = {
 }
 
 export function applyTheme(theme: ThemeMode): void {
+  if (typeof window === 'undefined') return
   const root = document.documentElement
-  root.classList.toggle('light', theme === 'light')
-  root.classList.toggle('dark', theme === 'dark')
+  let isDark = theme === 'dark'
+  if (theme === 'system') {
+    isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  }
+  root.classList.toggle('light', !isDark)
+  root.classList.toggle('dark', isDark)
+  window.localStorage.setItem('theme', theme)
 }
 
 applyTheme(cachedSettings.theme)

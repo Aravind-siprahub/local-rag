@@ -61,10 +61,12 @@ export interface Message {
   prompt_tokens?: number
   completion_tokens?: number
   latency_ms?: number
+  ttft_ms?: number
   generation_time_ms?: number
   total_tokens?: number
   error_message?: string
   created_at: string
   attachments?: Attachment[]
+  citations?: Citation[]
   localImageUrl?: string
 }

@@ -112,7 +112,7 @@ _DOC_QA_CUE_WORDS = (
     "document", "documents", "documentation", "file", "files", "policy", "policies",
     "doc", "docs", "guide", "guides", "manual", "manuals",
     "handbook", "handbooks", "sheet", "sheets", "prd", "specification",
-    "problem statement", "problem statements",
+    "problem", "statement", "architecture", "requirements",
 )
 
 _DOC_QA_ACTION_WORDS = (
@@ -153,6 +153,13 @@ _PROJECT_INFO_CUES = (
     "virtual machine",
     "server",
     "process",
+    "process manager",
+    "reverse proxy",
+    "proxy",
+    "port",
+    "ports",
+    "pm2",
+    "nginx",
     "install",
     "installation",
 )
@@ -279,7 +286,8 @@ def _is_document_qa(text: str, lower: str) -> bool:
         return True
     if any(phrase in lower for phrase in _DOC_QA_PHRASES):
         return True
-    if any(noun in lower for noun in _DOC_QA_CUE_WORDS) and any(action in lower for action in _DOC_QA_ACTION_WORDS):
+    word_tokens = set(re.findall(r"\b\w+\b", lower))
+    if any(noun in word_tokens for noun in _DOC_QA_CUE_WORDS) and any(action in word_tokens for action in _DOC_QA_ACTION_WORDS):
         return True
     return False
 
@@ -387,11 +395,21 @@ def _is_calculator(text: str, lower: str) -> bool:
 
 
 def _is_web_query(text: str, lower: str) -> bool:
+    # Explicit web search intent phrases
+    web_phrases = (
+        "search the web", "search web", "web search", "search online",
+        "find online", "look up online", "search for", "google", "browse",
+        "latest news", "current version", "what is the latest", "who is the current",
+        "latest python", "latest react", "latest version", "current react"
+    )
+    if any(phrase in lower for phrase in web_phrases):
+        return True
+
     # Look for keywords indicating real-time info or search queries
     web_keywords = {
         "weather", "today", "tomorrow", "yesterday", "current",
         "news", "stock", "price", "good friday", "time", "date",
-        "forecast", "temperature", "temp"
+        "forecast", "temperature", "temp", "latest", "recent", "who won"
     }
     if any(kw in lower for kw in web_keywords):
         return True
@@ -447,7 +465,7 @@ def classify(
     elif _is_web_query(text, lower):
         route = Route.WEB
     else:
-        # Default fallback for general questions
+        # Default fallback for general questions without document cues
         route = Route.GENERAL_KNOWLEDGE
 
     logger.info(
@@ -459,3 +477,65 @@ def classify(
         route.value,
     )
     return route
+
+
+# ---------------------------------------------------------------------------
+# OpenJarvis Query Complexity & Dynamic Token Allocation
+# ---------------------------------------------------------------------------
+
+_COMPLEXITY_CODE_PATTERNS = re.compile(
+    r"```|`[^`]+`|\bdef\s|\bclass\s|\bimport\s|\bfunction\s|\bconst\s|\bvar\s|\blet\s|"
+    r"\bif\s*\(|->|=>|\{\s*\}|\bfor\s+\w+\s+in\s|#include|System\.out",
+    re.IGNORECASE,
+)
+_COMPLEXITY_MATH_PATTERNS = re.compile(
+    r"\bsolve\b|\bintegral\b|\bequation\b|\bproof\b|\bderivative\b|\bmatrix\b|"
+    r"\btheorem\b|\bcalculate\b|\bcompute\b|\bsigma\b|\bsum\b|\blimit\b|\bprobability\b",
+    re.IGNORECASE,
+)
+_COMPLEXITY_REASONING_PATTERNS = re.compile(
+    r"\bexplain\b|\banalyze\b|\bcompare\b|\bwhy\b"
+    r"|\bstep[- ]by[- ]step\b|\breason\b|\bthink\b"
+    r"|\bpros\s+and\s+cons\b|\btrade-?\s*offs?\b|\bevaluate\b",
+    re.IGNORECASE,
+)
+_COMPLEXITY_MULTI_STEP_PATTERNS = re.compile(
+    r"\bthen\b.*\bthen\b|\bfirst\b.*\bnext\b|\bstep\s*\d"
+    r"|\b(?:and\s+also|additionally|furthermore)\b"
+    r"|\b\d+\.\s",
+    re.IGNORECASE | re.DOTALL,
+)
+_THINKING_MODEL_PATTERNS = re.compile(
+    r"qwen3|qwq|deepseek-r1|o1-|o3-|o4-", re.IGNORECASE
+)
+
+_TOKEN_TIERS = {
+    "trivial": 256,
+    "simple": 512,
+    "moderate": 768,
+    "complex": 1024,
+    "very_complex": 2048,
+}
+
+
+def analyze_complexity(query: str, model_name: str | None = None) -> int:
+    """Analyze query complexity and return the recommended max_tokens generation budget.
+    
+    Ported from OpenJarvis learning/routing/complexity.py.
+    """
+    text = (query or "").strip()
+    if not text or len(text.split()) <= 3:
+        tier = "trivial"
+    elif _COMPLEXITY_CODE_PATTERNS.search(text) or _COMPLEXITY_MULTI_STEP_PATTERNS.search(text):
+        tier = "complex"
+    elif _COMPLEXITY_MATH_PATTERNS.search(text) or _COMPLEXITY_REASONING_PATTERNS.search(text):
+        tier = "moderate"
+    elif len(text.split()) > 30:
+        tier = "moderate"
+    else:
+        tier = "simple"
+
+    base_tokens = _TOKEN_TIERS[tier]
+    logger.info("[QUERY COMPLEXITY] query_len=%d tier=%s max_tokens=%d model=%s", len(text), tier, base_tokens, model_name or "default")
+    return base_tokens
+

@@ -73,7 +73,7 @@ class ChatCitationResponse(BaseModel):
     chunk_id: uuid.UUID
     chunk_text: str
     document_id: uuid.UUID
-    document_version_id: uuid.UUID
+    document_version_id: uuid.UUID | None = None
     document_title: str | None = None
     section_title: str | None = None
     page_number: int | None = None

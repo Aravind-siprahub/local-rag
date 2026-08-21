@@ -48,7 +48,7 @@ function PasswordStrength({ password }: { password: string }) {
           <div
             key={i}
             className={`h-1 flex-1 rounded-full transition-all duration-300 ${
-              i < strength ? STRENGTH_COLORS[strength] : 'bg-slate-700'
+              i < strength ? STRENGTH_COLORS[strength] : 'bg-muted'
             }`}
           />
         ))}
@@ -63,9 +63,9 @@ function PasswordStrength({ password }: { password: string }) {
           return (
             <li key={rule.label} className="flex items-center gap-1.5 text-[11px]">
               {ok
-                ? <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                : <XCircle className="w-3 h-3 text-slate-600 shrink-0" />}
-              <span className={ok ? 'text-slate-300' : 'text-slate-500'}>{rule.label}</span>
+                ? <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
+                : <XCircle className="w-3 h-3 text-muted-foreground/30 shrink-0" />}
+              <span className={ok ? 'text-foreground/90' : 'text-muted-foreground/60'}>{rule.label}</span>
             </li>
           )
         })}
@@ -94,9 +94,9 @@ function Field({
 }: FieldProps) {
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={id} className="text-sm font-medium text-slate-300">{label}</Label>
+      <Label htmlFor={id} className="text-sm font-medium text-muted-foreground">{label}</Label>
       <div className="relative group">
-        <Icon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
+        <Icon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60 group-focus-within:text-primary transition-colors" />
         <Input
           id={id}
           name={name}
@@ -105,10 +105,10 @@ function Field({
           value={value}
           onChange={onChange}
           disabled={disabled}
-          className={`pl-10 ${rightSlot ? 'pr-10' : ''} bg-slate-900/60 border-slate-700/60 text-white placeholder:text-slate-500
-            focus-visible:border-indigo-500 focus-visible:ring-1 focus-visible:ring-indigo-500/50
-            hover:border-slate-600 transition-colors
-            ${error ? 'border-red-500/70 focus-visible:border-red-500 focus-visible:ring-red-500/30' : ''}`}
+          className={`pl-10 h-10 ${rightSlot ? 'pr-10' : ''} bg-muted/10 border-border/80 text-foreground placeholder:text-muted-foreground/45
+            focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30
+            hover:border-border transition-colors
+            ${error ? 'border-destructive/65 focus-visible:border-destructive focus-visible:ring-destructive/30' : ''}`}
         />
         {rightSlot}
       </div>
@@ -230,18 +230,18 @@ export const Signup: React.FC = () => {
 
       {/* ── Heading ── */}
       <div className="mb-8">
-        <h1 className="text-3xl font-extrabold text-white tracking-tight font-display leading-tight">
+        <h1 className="text-3xl font-extrabold text-foreground tracking-tight font-display leading-tight">
           Create your account
         </h1>
-        <p className="mt-1.5 text-sm text-slate-400">
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Start querying your documents with local AI in minutes
         </p>
       </div>
 
-      {/* ── Glass Card ── */}
-      <div className="relative rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-2xl shadow-black/40 p-8 space-y-5">
+      {/* ── Theme Card ── */}
+      <div className="relative rounded-2xl border border-border bg-card shadow-lg p-8 space-y-5">
         {/* top highlight */}
-        <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-violet-500/50 to-transparent rounded-t-2xl" />
+        <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-primary/50 to-transparent rounded-t-2xl" />
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           {/* Full Name */}

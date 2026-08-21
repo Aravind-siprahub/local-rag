@@ -1,12 +1,10 @@
 import {
   AlertTriangleIcon,
-  ArchiveIcon,
   CheckCircle2Icon,
   FileStackIcon,
   LoaderCircleIcon,
 } from 'lucide-react'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { DocumentStats } from '@/types'
 
@@ -15,69 +13,64 @@ interface DashboardStatsProps {
   isLoading: boolean
 }
 
-const statCards = [
-  {
-    key: 'total' as const,
-    label: 'Total documents',
-    icon: FileStackIcon,
-    accent: 'from-primary/20 to-primary/5 text-primary',
-  },
-  {
-    key: 'ready' as const,
-    label: 'Ready for RAG',
-    icon: CheckCircle2Icon,
-    accent: 'from-[hsl(var(--success)/0.2)] to-[hsl(var(--success)/0.05)] text-[hsl(var(--success))]',
-  },
-  {
-    key: 'processing' as const,
-    label: 'Processing',
-    icon: LoaderCircleIcon,
-    accent: 'from-[hsl(var(--warning)/0.2)] to-[hsl(var(--warning)/0.05)] text-[hsl(var(--warning))]',
-  },
-  {
-    key: 'failed' as const,
-    label: 'Failed',
-    icon: AlertTriangleIcon,
-    accent: 'from-destructive/20 to-destructive/5 text-destructive',
-  },
-  {
-    key: 'archived' as const,
-    label: 'Archived',
-    icon: ArchiveIcon,
-    accent: 'from-muted/80 to-muted/30 text-muted-foreground',
-  },
-]
-
 export function DashboardStats({ stats, isLoading }: DashboardStatsProps) {
   if (isLoading) {
-    return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {statCards.map((card) => (
-          <Skeleton key={card.key} className="h-32 rounded-xl" />
-        ))}
-      </div>
-    )
+    return <Skeleton className="h-24 w-full rounded-xl" />
   }
 
+  const total = stats?.total ?? 0
+  const ready = stats?.ready ?? 0
+  const processing = stats?.processing ?? 0
+  const failed = stats?.failed ?? 0
+  const archived = stats?.archived ?? 0
+
+  const readyPercentage = total > 0 ? Math.round((ready / total) * 100) : 0
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-      {statCards.map(({ key, label, icon: Icon, accent }) => (
-        <Card key={key} className="glass-panel glass-panel-hover border-border/60">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-              <div
-                className={`flex size-9 items-center justify-center rounded-lg bg-gradient-to-br ${accent}`}
-              >
-                <Icon className="size-4" />
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-semibold tracking-tight">{stats?.[key] ?? 0}</p>
-          </CardContent>
-        </Card>
-      ))}
+    <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-border/50 rounded-xl border border-border/50 bg-card shadow-sm">
+      <div className="flex-1 p-5 flex flex-col gap-1">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <FileStackIcon className="size-4 text-primary" />
+          Documents
+        </div>
+        <div className="text-3xl font-semibold tracking-tight">{total}</div>
+        <div className="text-xs text-muted-foreground">
+          {archived > 0 ? `${archived} archived` : 'Total in knowledge base'}
+        </div>
+      </div>
+
+      <div className="flex-1 p-5 flex flex-col gap-1">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <CheckCircle2Icon className="size-4 text-[hsl(var(--success))]" />
+          Ready
+        </div>
+        <div className="text-3xl font-semibold tracking-tight">{ready}</div>
+        <div className="text-xs text-muted-foreground">
+          {total > 0 ? `${readyPercentage}% ready for RAG` : 'No documents yet'}
+        </div>
+      </div>
+
+      <div className="flex-1 p-5 flex flex-col gap-1">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <LoaderCircleIcon className="size-4 text-[hsl(var(--warning))]" />
+          Processing
+        </div>
+        <div className="text-3xl font-semibold tracking-tight">{processing}</div>
+        <div className="text-xs text-muted-foreground">
+          {processing > 0 ? 'Currently ingesting...' : 'All clear'}
+        </div>
+      </div>
+
+      <div className="flex-1 p-5 flex flex-col gap-1">
+        <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <AlertTriangleIcon className="size-4 text-destructive" />
+          Failed
+        </div>
+        <div className="text-3xl font-semibold tracking-tight">{failed}</div>
+        <div className="text-xs text-muted-foreground">
+          {failed > 0 ? 'Requires attention' : 'No errors'}
+        </div>
+      </div>
     </div>
   )
 }

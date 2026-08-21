@@ -87,27 +87,27 @@ export const Login: React.FC = () => {
 
       {/* ── Heading ── */}
       <div className="mb-8">
-        <h1 className="text-3xl font-extrabold text-white tracking-tight font-display leading-tight">
+        <h1 className="text-3xl font-extrabold text-foreground tracking-tight font-display leading-tight">
           Welcome back
         </h1>
-        <p className="mt-1.5 text-sm text-slate-400">
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Sign in to continue to your knowledge base
         </p>
       </div>
 
-      {/* ── Glass Card ── */}
-      <div className="relative rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-2xl shadow-black/40 p-8 space-y-5">
+      {/* ── Theme Card ── */}
+      <div className="relative rounded-2xl border border-border bg-card shadow-lg p-8 space-y-5">
         {/* subtle top highlight */}
-        <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-indigo-500/50 to-transparent rounded-t-2xl" />
+        <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-primary/50 to-transparent rounded-t-2xl" />
 
         <form onSubmit={handleSubmit} className="space-y-5" noValidate>
           {/* Email */}
           <div className="space-y-1.5">
-            <Label htmlFor="email" className="text-sm font-medium text-slate-300">
+            <Label htmlFor="email" className="text-sm font-medium text-muted-foreground">
               Email address
             </Label>
             <div className="relative group">
-              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
+              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60 group-focus-within:text-primary transition-colors" />
               <Input
                 id="email"
                 name="email"
@@ -116,10 +116,10 @@ export const Login: React.FC = () => {
                 placeholder="name@example.com"
                 value={formData.email}
                 onChange={handleChange}
-                className={`pl-10 bg-slate-900/60 border-slate-700/60 text-white placeholder:text-slate-500
-                  focus-visible:border-indigo-500 focus-visible:ring-1 focus-visible:ring-indigo-500/50
-                  hover:border-slate-600 transition-colors
-                  ${errors.email ? 'border-red-500/70 focus-visible:border-red-500 focus-visible:ring-red-500/30' : ''}`}
+                className={`pl-10 h-10 bg-muted/10 border-border/80 text-foreground placeholder:text-muted-foreground/45
+                  focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30
+                  hover:border-border transition-colors
+                  ${errors.email ? 'border-destructive/65 focus-visible:border-destructive focus-visible:ring-destructive/30' : ''}`}
                 disabled={isSubmitting}
               />
             </div>
@@ -129,19 +129,19 @@ export const Login: React.FC = () => {
           {/* Password */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <Label htmlFor="password" className="text-sm font-medium text-slate-300">
+              <Label htmlFor="password" className="text-sm font-medium text-muted-foreground">
                 Password
               </Label>
               <Link
                 to="/forgot-password"
                 tabIndex={-1}
-                className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                className="text-xs text-primary hover:text-primary/80 transition-colors"
               >
                 Forgot password?
               </Link>
             </div>
             <div className="relative group">
-              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
+              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60 group-focus-within:text-primary transition-colors" />
               <Input
                 id="password"
                 name="password"
@@ -150,10 +150,10 @@ export const Login: React.FC = () => {
                 placeholder="••••••••"
                 value={formData.password}
                 onChange={handleChange}
-                className={`pl-10 pr-10 bg-slate-900/60 border-slate-700/60 text-white placeholder:text-slate-500
-                  focus-visible:border-indigo-500 focus-visible:ring-1 focus-visible:ring-indigo-500/50
-                  hover:border-slate-600 transition-colors
-                  ${errors.password ? 'border-red-500/70 focus-visible:border-red-500 focus-visible:ring-red-500/30' : ''}`}
+                className={`pl-10 pr-10 h-10 bg-muted/10 border-border/80 text-foreground placeholder:text-muted-foreground/45
+                  focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30
+                  hover:border-border transition-colors
+                  ${errors.password ? 'border-destructive/65 focus-visible:border-destructive focus-visible:ring-destructive/30' : ''}`}
                 disabled={isSubmitting}
               />
               <button
@@ -161,7 +161,7 @@ export const Login: React.FC = () => {
                 onClick={() => setShowPassword((v) => !v)}
                 tabIndex={-1}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground transition-colors focus:outline-none"
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>

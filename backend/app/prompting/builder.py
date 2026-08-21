@@ -20,10 +20,10 @@ class RetrievedChunkContext:
     chunk_id: uuid.UUID
     chunk_text: str
     document_id: uuid.UUID
-    document_version_id: uuid.UUID
     similarity_score: float
     rank: int
     context_index: int
+    document_version_id: uuid.UUID | None = None
     document_title: str | None = None
     section_title: str | None = None
     page_number: int | None = None
@@ -61,6 +61,7 @@ class PromptBuilder:
         question: str,
         retrieved_chunks: list[RankedResult],
         chat_history: list[dict[str, str]] | None = None,
+        working_memory_summary: str | None = None,
         *,
         is_vision: bool = False,
     ) -> Prompt:
@@ -71,7 +72,12 @@ class PromptBuilder:
             raise PromptBuilderError("max_context_chars must be greater than 0.")
 
         included_chunks, context_text = _build_context(retrieved_chunks, self.max_context_chars, question=question.strip())
-        user_prompt = format_user_prompt(context_text, question.strip(), chat_history=chat_history)
+        user_prompt = format_user_prompt(
+            context_text,
+            question.strip(),
+            chat_history=chat_history,
+            working_memory_summary=working_memory_summary,
+        )
 
         system_prompt = self.system_prompt
         if is_vision and not self._custom_system_prompt:

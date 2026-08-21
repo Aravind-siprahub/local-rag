@@ -14,6 +14,7 @@ class ChatSessionBase(BaseModel):
         str,
         Field(min_length=1, max_length=500, default="New chat", examples=["Research session"]),
     ]
+    working_memory_summary: str | None = None
 
     @field_validator("title")
     @classmethod

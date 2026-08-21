@@ -134,7 +134,8 @@ def get_system_setting_service(session: AsyncSession = Depends(get_db)) -> Syste
 
 
 def get_rag_service(session: AsyncSession = Depends(get_db)) -> RAGService:
-    return RAGService(session)
+    from app.llm.ollama_client import get_global_ollama_client
+    return RAGService(session, llm_client=get_global_ollama_client())
 
 
 class PaginationParams:

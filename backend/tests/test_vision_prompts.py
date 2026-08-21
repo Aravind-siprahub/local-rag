@@ -109,7 +109,7 @@ class TestVisionServiceRouting:
         call_user_prompt = llm.calls[0][1]
 
         # Must use combined vision + RAG system prompt
-        assert "analyzing both an uploaded image and document passages" in call_sys_prompt
+        assert "visual assistant" in call_sys_prompt.lower()
         assert "deployment_guide.md" in call_user_prompt
         assert "Deployment backend runs on port 8000." in call_user_prompt
         assert llm.calls[0][2] == [b"architecture_diagram_bytes"]

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { AVAILABLE_MODELS } from '../components/ModelSelector'
+import { AVAILABLE_MODELS } from '../constants/models.js'
 
 interface TestMessage {
   id: string
@@ -28,8 +28,8 @@ describe('Chat Features & Model Selection Rules', () => {
     }
 
     handleEdit(originalMessage)
-    assert.equal(editingMessage?.id, 'msg-1')
-    assert.equal(editingMessage?.content, 'Explain this chart')
+    assert.equal((editingMessage as TestMessage | null)?.id, 'msg-1')
+    assert.equal((editingMessage as TestMessage | null)?.content, 'Explain this chart')
   })
 
   it('2. Cancel Edit: clears editing state', () => {
@@ -97,14 +97,14 @@ describe('Chat Features & Model Selection Rules', () => {
   })
 
   it('6. Model Selector: exposes qwen3:4b and qwen3-vl:4b', () => {
-    const modelIds = AVAILABLE_MODELS.map((m) => m.id)
+    const modelIds = AVAILABLE_MODELS.map((m: any) => m.id)
     assert.ok(modelIds.includes('qwen3:4b'))
     assert.ok(modelIds.includes('qwen3-vl:4b'))
   })
 
   it('7. Available Models display text vs vision badges', () => {
-    const textModel = AVAILABLE_MODELS.find((m) => m.id === 'qwen3:4b')
-    const visionModel = AVAILABLE_MODELS.find((m) => m.id === 'qwen3-vl:4b')
+    const textModel = AVAILABLE_MODELS.find((m: any) => m.id === 'qwen3:4b')
+    const visionModel = AVAILABLE_MODELS.find((m: any) => m.id === 'qwen3-vl:4b')
 
     assert.equal(textModel?.type, 'text')
     assert.equal(visionModel?.type, 'vision')

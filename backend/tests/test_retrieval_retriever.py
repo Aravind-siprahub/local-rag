@@ -40,11 +40,13 @@ class FakeEmbeddingClient:
             self.calls = []
 
     async def embed(self, text: str) -> list[float]:
-        self.calls.append(text)
-        return self.vector
+        if self.calls is not None:
+            self.calls.append(text)
+        return self.vector if self.vector is not None else [0.1] * 768
 
     async def close(self) -> None:
         return None
+
 
 
 def _make_hits(count: int = 2) -> list[SearchHit]:
@@ -95,6 +97,7 @@ class TestRetriever:
             retriever = Retriever(session=None, client=client)
             await retriever.retrieve("question", filters=filters, top_k=3)
 
+        assert search_mock.await_args is not None
         call_kwargs = search_mock.await_args.kwargs
         assert call_kwargs["top_k"] == 3
         assert call_kwargs["filters"] == filters

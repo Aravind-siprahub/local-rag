@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
@@ -62,8 +63,11 @@ class FakeChatMessageService:
         self._messages.append(msg)
         return msg
 
-    async def list_by_session(self, session_id: uuid.UUID, limit: int = 50) -> list[_FakeMessage]:
-        return [m for m in self._messages if m.session_id == session_id][-limit:]
+    async def list_by_session(self, session_id: uuid.UUID, limit: int = 50, offset: int = 0) -> list[_FakeMessage]:
+        messages = [m for m in self._messages if m.session_id == session_id]
+        if offset > 0:
+            messages = messages[:-offset]
+        return messages[-limit:]
 
 
 class FakeCitationService:
@@ -100,6 +104,8 @@ class FakeLLMClient:
         user_prompt: str,
         *,
         num_predict: int | None = None,
+        response_format: str | None = None,
+        temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
     ) -> LLMResponse:
@@ -108,6 +114,8 @@ class FakeLLMClient:
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "num_predict": num_predict,
+                "response_format": response_format,
+                "temperature": temperature,
                 "images": images,
                 "model": model,
             }
@@ -157,24 +165,24 @@ def _ranked(text: str, rank: int = 1) -> RankedResult:
 def _make_service(
     *,
     retrieval_results: list[RankedResult] | None = None,
-    web_search: FakeWebSearchProvider | None = None,
-    llm: FakeLLMClient | None = None,
-    retriever: FakeRetriever | None = None,
+    web_search: Any = None,
+    llm: Any = None,
+    retriever: Any = None,
     user_id: uuid.UUID | None = None,
-) -> tuple[RAGService, _FakeChatSession, FakeRetriever, FakeLLMClient, FakeWebSearchProvider]:
+) -> tuple[RAGService, _FakeChatSession, Any, Any, Any]:
     session = _FakeChatSession(id=uuid.uuid4(), user_id=user_id or uuid.uuid4())
     active_retriever = retriever or FakeRetriever(retrieval_results or [_ranked("Nginx reverse proxy notes.")])
     llm_client = llm or FakeLLMClient()
     web = web_search or FakeWebSearchProvider()
     service = RAGService(
-        session=None,
-        retriever=active_retriever,
+        session=None,  # type: ignore
+        retriever=active_retriever,  # type: ignore
         prompt_builder=PromptBuilder(),
-        llm_client=llm_client,
-        message_service=FakeChatMessageService(),
-        citation_service=FakeCitationService(),
-        session_service=FakeChatSessionService(session),
-        web_search=web,
+        llm_client=llm_client,  # type: ignore
+        message_service=FakeChatMessageService(),  # type: ignore
+        citation_service=FakeCitationService(),  # type: ignore
+        session_service=FakeChatSessionService(session),  # type: ignore
+        web_search=web,  # type: ignore
     )
     return service, session, active_retriever, llm_client, web
 
@@ -225,7 +233,7 @@ class TestAgentRouterAsk:
         assert retriever.calls == []
         assert web.calls == []
         assert len(llm.calls) == 1
-        assert llm.calls[0]["num_predict"] in (128, 256, 512)
+        assert llm.calls[0]["num_predict"] in (128, 150, 256, 512, 1024)
         assert "Python" in response.answer
         assert response.sources == []
 

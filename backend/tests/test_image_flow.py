@@ -137,8 +137,8 @@ class TestImageFlowVerification:
 
         assert response.answer is not None
         assert len(llm.calls) == 1
-        sys_prompt, user_prompt, imgs, model = llm.calls[0]
-        assert "analyzing both an uploaded image and document passages" in sys_prompt
+        call_sys_prompt, user_prompt, imgs, model = llm.calls[0]
+        assert "visual assistant" in call_sys_prompt.lower()
         assert "arch.md" in user_prompt
         assert imgs == [raw_bytes]
 

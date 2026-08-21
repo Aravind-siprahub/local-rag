@@ -32,6 +32,7 @@ class ChatSession(TimestampMixin, Base):
     is_archived: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     last_message_at: Mapped[datetime | None]
     deleted_at: Mapped[datetime | None]
+    working_memory_summary: Mapped[str | None] = mapped_column(nullable=True)
 
     owner: Mapped[User] = relationship(back_populates="chat_sessions")
     messages: Mapped[list[ChatMessage]] = relationship(

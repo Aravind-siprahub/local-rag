@@ -9,12 +9,14 @@ CHUNK_TEMPLATE = (
 )
 
 USER_PROMPT_WITH_CONTEXT = (
-    "Use the document passages below to answer the question. "
-    "Combine all relevant facts and return only the final answer.\n\n"
-    "{context_header}\n\n"
+    "{context_header}:\n\n"
     "{context}\n\n"
-    "{question_header}\n"
-    "{question}"
+    "{question_header} {question}\n\n"
+    "CRITICAL RULES FOR YOUR RESPONSE:\n"
+    "1. Give ONLY the direct factual answer immediately (e.g. \"Frontend: React, Backend: FastAPI\").\n"
+    "2. Do NOT list documents, section numbers, or page numbers.\n"
+    "3. Do NOT output self-talk, reasoning, or phrases like 'Let's write', 'We are to be', 'Note that', or 'The key is'.\n"
+    "4. If information is not found in the context, reply ONLY: \"The requested information is not found in the documents.\"\n"
 )
 
 USER_PROMPT_WITHOUT_CONTEXT = (
@@ -45,12 +47,16 @@ def format_user_prompt(
     context: str,
     question: str,
     chat_history: list[dict[str, str]] | None = None,
+    working_memory_summary: str | None = None,
     max_history_chars: int = 1000,
 ) -> str:
-    """Compose the user message from context blocks, rolling chat history summary, and the question."""
+    """Compose the user message from context blocks, working memory summary, and the question."""
     question = question.strip()
     history_text = ""
-    if chat_history:
+
+    if working_memory_summary and working_memory_summary.strip():
+        history_text = f"Working Memory Context:\n<working_memory_summary>\n{working_memory_summary.strip()}\n</working_memory_summary>\n\n---------------------------------\n\n"
+    elif chat_history:
         recent = chat_history[-6:]
         total_chars = sum(len(m.get("content", "")) for m in recent)
 

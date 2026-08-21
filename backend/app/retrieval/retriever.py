@@ -28,7 +28,7 @@ class Retriever:
 
     def __init__(
         self,
-        session: AsyncSession,
+        session: AsyncSession | None = None,
         *,
         client: EmbeddingClient | None = None,
         model_name: str | None = None,
@@ -86,34 +86,14 @@ class Retriever:
         filters_obj = filters or SearchFilters()
         mode = getattr(filters_obj, "search_mode", "hybrid")
 
-        # Detect compound query and expand to sub-queries
-        import re
+        # Generate sub-queries for multi-aspect questions (e.g. queries containing "and")
         sub_queries = [question.strip()]
-        q_lower = question.lower()
-        
-        compound_pairs = [
-            ("frontend", "backend"),
-            ("technology", "architecture"),
-            ("nginx", "ssl"),
-            ("tech", "architecture"),
-        ]
-        
-        for entity1, entity2 in compound_pairs:
-            if entity1 in q_lower and entity2 in q_lower:
-                sq1 = re.sub(rf"\b{entity2}\b", "", question, flags=re.IGNORECASE)
-                sq1 = re.sub(r"\b(and|or|\&)\b", "", sq1, flags=re.IGNORECASE)
-                sq1 = re.sub(r"\s+", " ", sq1).strip()
-                
-                sq2 = re.sub(rf"\b{entity1}\b", "", question, flags=re.IGNORECASE)
-                sq2 = re.sub(r"\b(and|or|\&)\b", "", sq2, flags=re.IGNORECASE)
-                sq2 = re.sub(r"\s+", " ", sq2).strip()
-                
-                if sq1 and sq1 != question.strip():
-                    sub_queries.append(sq1)
-                if sq2 and sq2 != question.strip():
-                    sub_queries.append(sq2)
-                logger.info("[RETRIEVER COMPOUND DETECTED] Expanded query %r into sub-queries: %r", question, sub_queries)
-                break
+        q_clean = question.strip().lower()
+        if " and " in q_clean:
+            parts = [p.strip() for p in q_clean.split(" and ") if len(p.strip()) >= 3]
+            for p in parts:
+                if p and p not in sub_queries and len(p.split()) >= 3:
+                    sub_queries.append(p)
 
         embed_start = time.monotonic()
         embed_tasks = [self.client.embed(sq) for sq in sub_queries]
@@ -246,23 +226,28 @@ class Retriever:
         from app.models.document_chunk import DocumentChunk
         from app.models.document_version import DocumentVersion
         from app.models.embedding import Embedding
+        from app.models.enums import DocumentStatus
 
         filters = filters or SearchFilters()
         scoped_count: int | None = None
         global_count: int | None = None
 
+        if self.session is None:
+            return
+
         try:
             stmt = (
                 select(func.count())
                 .select_from(Embedding)
-                .join(DocumentChunk, Embedding.chunk_id == DocumentChunk.id)
+                .join(DocumentChunk, DocumentChunk.id == Embedding.chunk_id)
                 .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
                 .join(Document, DocumentVersion.document_id == Document.id)
+                .where(Document.deleted_at.is_(None))
+                .where(Document.status == DocumentStatus.READY)
                 .where(
                     (Embedding.model_name == self.model_name)
                     | (Embedding.model_name.ilike(f"{self.model_name.split(':')[0]}%"))
                 )
-                .where(Document.deleted_at.is_(None))
             )
             if filters.user_id is not None:
                 stmt = stmt.where(Document.user_id == filters.user_id)
@@ -270,6 +255,14 @@ class Retriever:
                 stmt = stmt.where(Document.id == filters.document_id)
             if filters.document_version_id is not None:
                 stmt = stmt.where(DocumentVersion.id == filters.document_version_id)
+            else:
+                stmt = stmt.where(DocumentChunk.document_version_id == Document.current_version_id)
+            if filters.filename is not None:
+                stmt = stmt.where(Document.title.ilike(f"%{filters.filename}%"))
+            if filters.date_from is not None:
+                stmt = stmt.where(Document.created_at >= filters.date_from)
+            if filters.date_to is not None:
+                stmt = stmt.where(Document.created_at <= filters.date_to)
 
             scoped_count = (await self.session.execute(stmt)).scalar_one()
             global_count = (

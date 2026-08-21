@@ -5,7 +5,7 @@ import {
   DRAFT_CONVERSATION_KEY,
   chatRequestStore,
   type ConversationRequestState,
-} from './chatRequest.store'
+} from './chatRequest.store.js'
 
 function getState(id: string): ConversationRequestState {
   return chatRequestStore.getConversation(id)
@@ -96,7 +96,7 @@ describe('chatRequestStore', () => {
   })
 
   it('runRequest rekey moves loading state and still clears on completion', async () => {
-    await chatRequestStore.runRequest(DRAFT_CONVERSATION_KEY, async (_signal, ctx) => {
+    await chatRequestStore.runRequest(DRAFT_CONVERSATION_KEY, async (_signal: any, ctx: any) => {
       ctx.rekeyTo('session-xyz')
       assert.equal(chatRequestStore.isSending(DRAFT_CONVERSATION_KEY), false)
       assert.equal(chatRequestStore.isSending('session-xyz'), true)
@@ -111,7 +111,7 @@ describe('chatRequestStore', () => {
       () =>
         chatRequestStore.runRequest(
           'A',
-          async (signal) => {
+          async (signal: any) => {
             await new Promise<void>((resolve, reject) => {
               const timer = setTimeout(() => resolve(), 5_000)
               signal.addEventListener('abort', () => {

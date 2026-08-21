@@ -32,12 +32,14 @@ export function AppSidebar() {
   }
 
   return (
-    <aside className="glass-panel flex h-full w-full flex-col gap-6 p-4 lg:w-64">
-      <div className="px-2 pt-2">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+    <aside className="glass-panel flex h-full w-full flex-col gap-5 p-4 lg:w-56">
+      <div className="px-2 pt-1">
+        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-primary/80">
           Local RAG
         </p>
-        <h1 className="mt-2 text-xl font-semibold gradient-text">Knowledge Studio</h1>
+        <h1 className="mt-1 text-lg font-bold tracking-tight text-foreground font-display">
+          Knowledge Studio
+        </h1>
       </div>
 
       <nav className="flex flex-1 flex-col gap-1">
@@ -48,29 +50,29 @@ export function AppSidebar() {
             end={to === ROUTES.dashboard}
             className={({ isActive }) =>
               cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
+                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 ease-in-out',
                 isActive
-                  ? 'bg-primary/15 text-primary shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]'
-                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground',
               )
             }
           >
-            <Icon className="size-4 shrink-0" />
+            <Icon className="size-4 shrink-0 transition-transform duration-200 group-hover:scale-105" />
             {label}
           </NavLink>
         ))}
       </nav>
 
       {/* User Profile & Sign Out Section */}
-      <div className="space-y-3 pt-2 border-t border-border/40">
+      <div className="space-y-3 pt-3 border-t border-border/30">
         <div className="flex items-center justify-between gap-2 px-1">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-xs shrink-0 border border-primary/30">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center font-bold text-xs shrink-0 border border-primary/20">
               {user?.fullName ? user.fullName[0].toUpperCase() : <UserIcon className="w-4 h-4" />}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-foreground truncate">{user?.fullName || 'User'}</p>
-              <p className="text-[10px] text-muted-foreground truncate">{user?.email || 'Authenticated'}</p>
+              <p className="text-xs font-semibold text-foreground/90 truncate leading-snug">{user?.fullName || 'User'}</p>
+              <p className="text-[10px] text-muted-foreground/60 truncate leading-none mt-0.5">{user?.email || 'Authenticated'}</p>
             </div>
           </div>
         </div>
@@ -79,14 +81,14 @@ export function AppSidebar() {
           variant="ghost"
           size="sm"
           onClick={handleLogout}
-          className="w-full justify-start text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 gap-2 font-medium h-9"
+          className="w-full justify-start text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 gap-2 font-medium h-8 rounded-md transition-colors"
         >
           <LogOutIcon className="w-3.5 h-3.5" />
           Sign Out
         </Button>
       </div>
 
-      <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-[11px] text-muted-foreground">
+      <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[10px] text-muted-foreground/50 leading-relaxed font-mono">
         Connected to local RAG backend via API proxy.
       </div>
     </aside>

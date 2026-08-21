@@ -4,13 +4,13 @@ interface TypingIndicatorProps {
 
 export function TypingIndicator({ label = 'Generating response...' }: TypingIndicatorProps) {
   return (
-    <div className="flex flex-col gap-2 p-4 bg-muted/50 rounded-lg max-w-xs mb-4">
-      <div className="flex items-center space-x-1">
-        <div className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-        <div className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-        <div className="w-2 h-2 bg-primary/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+    <div className="flex items-center gap-3 p-1.5 text-muted-foreground/60 select-none animate-in fade-in-0 duration-200">
+      <div className="flex items-center gap-1 bg-muted/40 border border-border/20 px-2.5 py-1.5 rounded-xl shadow-xs">
+        <div className="w-1.5 h-1.5 bg-primary/70 rounded-full animate-bounce" style={{ animationDelay: '0ms', animationDuration: '1s' }} />
+        <div className="w-1.5 h-1.5 bg-primary/70 rounded-full animate-bounce" style={{ animationDelay: '150ms', animationDuration: '1s' }} />
+        <div className="w-1.5 h-1.5 bg-primary/70 rounded-full animate-bounce" style={{ animationDelay: '300ms', animationDuration: '1s' }} />
       </div>
-      <p className="text-xs text-muted-foreground">{label}</p>
+      <span className="text-[11px] font-medium animate-pulse">{label}</span>
     </div>
   )
 }

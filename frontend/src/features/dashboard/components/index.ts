@@ -1,3 +1,5 @@
 export { DashboardStats } from './DashboardStats'
 export { RecentChats } from './RecentChats'
 export { RecentUploads } from './RecentUploads'
+export { KnowledgeHealth } from './KnowledgeHealth'
+export { QuickActions } from './QuickActions'
