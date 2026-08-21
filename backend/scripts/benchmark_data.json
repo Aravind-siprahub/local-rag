@@ -1,0 +1,14 @@
+[
+  {
+    "question": "What port does the frontend use?",
+    "expected": "3000"
+  },
+  {
+    "question": "What is the meaning of life?",
+    "expected": "could not find this information"
+  },
+  {
+    "question": "What Python version is required?",
+    "expected": "3.11"
+  }
+]

@@ -60,11 +60,12 @@ tests = [
     ('First, note that Talk to My Data is a platform with three key features.', 'First, note that Talk to My Data is a platform with three key features.')
 ]
 
-failed = False
-for t, expected in tests:
-    res = sanitize_response(t)
-    print(f'Input: {t}\nResult: {res}\nExpected: {expected}\nMatch: {res == expected}\n')
-    if res != expected:
-        failed = True
-        
-sys.exit(1 if failed else 0)
+if __name__ == "__main__":
+    failed = False
+    for t, expected in tests:
+        res = sanitize_response(t)
+        print(f'Input: {t}\nResult: {res}\nExpected: {expected}\nMatch: {res == expected}\n')
+        if res != expected:
+            failed = True
+            
+    sys.exit(1 if failed else 0)

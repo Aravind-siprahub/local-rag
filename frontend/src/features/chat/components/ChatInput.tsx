@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { SendHorizontal, Paperclip, X, Image as ImageIcon, Pencil } from 'lucide-react'
+import { SendHorizontal, Paperclip, X, Image as ImageIcon, Pencil, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ModelSelector } from './ModelSelector'
@@ -14,6 +14,7 @@ interface ChatInputProps {
   onSelectModel: (modelId: string) => void
   editingMessage?: Message | null
   onCancelEdit?: () => void
+  onStop?: () => void
 }
 
 export function ChatInput({
@@ -25,6 +26,7 @@ export function ChatInput({
   onSelectModel,
   editingMessage,
   onCancelEdit,
+  onStop,
 }: ChatInputProps) {
   const [input, setInput] = useState('')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -120,6 +122,11 @@ export function ChatInput({
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    } else if (e.key === 'Escape' && editingMessage) {
+      e.preventDefault()
+      setInput('')
+      clearFile()
+      if (onCancelEdit) onCancelEdit()
     }
   }
 
@@ -202,7 +209,7 @@ export function ChatInput({
           </div>
         )}
 
-        <div className="relative flex items-end w-full">
+        <div className="relative flex flex-col w-full">
           <input
             type="file"
             ref={fileInputRef}
@@ -211,22 +218,6 @@ export function ChatInput({
             className="hidden"
             id="chat-image-input"
           />
-
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={disabled}
-            className={cn(
-              'h-8 w-8 mr-1 mb-0.5 shrink-0 rounded-lg text-muted-foreground/60 hover:text-foreground transition-colors',
-              hasActiveImage && 'text-primary bg-primary/10 hover:bg-primary/20',
-            )}
-            title="Attach image (PNG, JPEG, WEBP)"
-            aria-label="Attach image"
-          >
-            {hasActiveImage ? <ImageIcon className="h-3.5 w-3.5" /> : <Paperclip className="h-3.5 w-3.5" />}
-          </Button>
 
           <textarea
             id="chat-input"
@@ -245,38 +236,60 @@ export function ChatInput({
             }
             disabled={disabled}
             className={cn(
-              'flex-1 min-h-8 max-h-44 w-full resize-none bg-transparent px-2 py-1.5 text-xs focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/40',
+              'flex-1 min-h-[44px] max-h-56 w-full resize-none bg-transparent px-3 py-3 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/50',
               'scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent',
             )}
             rows={1}
           />
 
-          {/* Embedded Model Selector */}
-          <div className="mb-1 mr-1 shrink-0">
-            <ModelSelector
-              selectedModel={selectedModel}
-              onSelectModel={onSelectModel}
-              hasImageAttached={hasActiveImage}
-              disabled={cannotSend}
-            />
-          </div>
+          <div className="flex items-center justify-between pt-1 px-1">
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled}
+                className={cn(
+                  'h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground transition-colors',
+                  hasActiveImage && 'text-primary bg-primary/10 hover:bg-primary/20',
+                )}
+                title="Attach image (PNG, JPEG, WEBP)"
+                aria-label="Attach image"
+              >
+                {hasActiveImage ? <ImageIcon className="h-4 w-4" /> : <Paperclip className="h-4 w-4" />}
+              </Button>
 
-          <Button
-            size="icon"
-            onClick={handleSend}
-            disabled={(!input.trim() && !hasActiveImage) || cannotSend}
-            className="ml-1 mb-0.5 h-8 w-8 shrink-0 rounded-lg shadow-xs transition-all active:scale-95 bg-primary hover:bg-primary/90 text-primary-foreground disabled:bg-muted/40 disabled:text-muted-foreground/30 border border-transparent disabled:border-border/10"
-            title={
-              sendDisabled
-                ? 'Wait for the current response'
-                : editingMessage
-                ? 'Resubmit edited message'
-                : 'Send message'
-            }
-            aria-label={editingMessage ? 'Resubmit edited message' : 'Send message'}
-          >
-            <SendHorizontal className="h-3.5 w-3.5" />
-          </Button>
+              <ModelSelector
+                selectedModel={selectedModel}
+                onSelectModel={onSelectModel}
+                hasImageAttached={hasActiveImage}
+                disabled={cannotSend}
+              />
+            </div>
+
+            <Button
+              size="icon"
+              onClick={sendDisabled && onStop ? onStop : handleSend}
+              disabled={sendDisabled ? false : ((!input.trim() && !hasActiveImage) || cannotSend)}
+              className={cn(
+                'h-8 w-8 shrink-0 rounded-lg shadow-xs transition-all active:scale-95 border border-transparent',
+                sendDisabled
+                  ? 'bg-destructive/10 text-destructive hover:bg-destructive/20 border-destructive/20'
+                  : 'bg-primary hover:bg-primary/90 text-primary-foreground disabled:bg-muted/40 disabled:text-muted-foreground/30 disabled:border-border/10'
+              )}
+              title={
+                sendDisabled
+                  ? 'Stop generating'
+                  : editingMessage
+                  ? 'Resubmit edited message'
+                  : 'Send message'
+              }
+              aria-label={sendDisabled ? 'Stop generating' : editingMessage ? 'Resubmit edited message' : 'Send message'}
+            >
+              {sendDisabled ? <Square className="h-3 w-3 fill-current" /> : <SendHorizontal className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

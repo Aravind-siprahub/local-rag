@@ -288,14 +288,14 @@ async def evaluate_reranker_v2(
         prompt_builder = PromptBuilder()
         built_prompt = prompt_builder.build(q, final_top_4)
 
-        llm_client = OllamaLLMClient(
-            model=settings.OLLAMA_MODEL or settings.CHAT_MODEL,
-            temperature=0.1,
-        )
+        from app.llm.ollama_client import get_global_ollama_client
+        llm_client = get_global_ollama_client()
         llm_start = time.monotonic()
         llm_resp = await llm_client.generate(
             system_prompt=built_prompt.system_prompt,
             user_prompt=built_prompt.user_prompt,
+            model=settings.OLLAMA_MODEL or settings.CHAT_MODEL,
+            temperature=0.1,
         )
         llm_time_ms = int((time.monotonic() - llm_start) * 1000)
         total_time_ms = int((time.monotonic() - start_time) * 1000)

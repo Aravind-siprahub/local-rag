@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import typing
 from unittest.mock import MagicMock
 
 import pytest
@@ -76,7 +77,7 @@ class TestChatAPIErrorResponses:
         return TestClient(app)
 
     @pytest.fixture(autouse=True)
-    def setup_overrides(self) -> None:
+    def setup_overrides(self) -> typing.Generator[None, None, None]:
         from app.api.dependencies import get_current_user, get_chat_session_service
         from app.models.user import User
         

@@ -4,7 +4,6 @@ import remarkGfm from 'remark-gfm'
 import { Bot, User, Copy, Check, X, Maximize2, FileText, Pencil, RefreshCw, Cpu } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Message, Citation } from '../types/chat'
-import { CitationCard } from './CitationCard'
 import { Button } from '@/components/ui/button'
 
 interface ChatMessageProps {
@@ -13,14 +12,16 @@ interface ChatMessageProps {
   onEdit?: (message: Message) => void
   onRegenerate?: (message: Message) => void
   isSending?: boolean
+  disableRegenerate?: boolean
 }
 
 export function ChatMessage({
   message,
-  citations,
+  citations: _citations,
   onEdit,
   onRegenerate,
   isSending,
+  disableRegenerate,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
@@ -215,29 +216,14 @@ export function ChatMessage({
                 </div>
               )}
 
-            {/* Citations section for Assistant responses */}
-            {citations && citations.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-border/50 space-y-2">
-                <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                  <span>Sources</span>
-                  <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded-full font-mono">
-                    {citations.length}
-                  </span>
-                </p>
-                <div className="grid gap-2 grid-cols-1 md:grid-cols-2">
-                  {citations.map((citation, index) => (
-                    <CitationCard key={`${citation.chunk_id}-${index}`} citation={citation} />
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Citations section hidden per user preference */}
           </div>
 
           {/* Action Bar & Model Used Badge */}
           <div
             className={cn(
-              'flex items-center gap-1 mt-1.5 transition-opacity duration-200',
-              isUser ? 'flex-row-reverse opacity-100 sm:opacity-0 focus-within:opacity-100 group-hover:opacity-100' : 'flex-row opacity-100 sm:opacity-0 focus-within:opacity-100 group-hover:opacity-100',
+              'flex items-center gap-1 mt-2 transition-all duration-200',
+              isUser ? 'flex-row-reverse opacity-100 sm:opacity-0 focus-within:opacity-100 group-hover:opacity-100 -mr-2' : 'flex-row opacity-100 sm:opacity-0 focus-within:opacity-100 group-hover:opacity-100 -ml-2',
             )}
           >
             {/* User Actions */}
@@ -245,13 +231,13 @@ export function ChatMessage({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md gap-1.5 transition-colors"
+                className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 rounded-lg gap-2 transition-colors"
                 onClick={() => onEdit(message)}
                 disabled={isSending}
                 title="Edit message"
                 aria-label="Edit message"
               >
-                <Pencil className="h-3 w-3" />
+                <Pencil className="h-3.5 w-3.5" />
                 <span>Edit</span>
               </Button>
             )}
@@ -261,14 +247,14 @@ export function ChatMessage({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md gap-1.5 transition-colors"
+                className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 rounded-lg gap-2 transition-colors"
                 onClick={() => onRegenerate(message)}
                 disabled={isSending}
-                title="Regenerate response"
+                title={disableRegenerate ? "Cannot regenerate queries containing images" : "Regenerate response"}
                 aria-label="Regenerate response"
               >
-                <RefreshCw className={cn("h-3 w-3", isSending && "animate-spin")} />
-                <span>Regenerate</span>
+                <RefreshCw className={cn("h-3.5 w-3.5", isSending && "animate-spin", disableRegenerate && "opacity-50")} />
+                <span className={cn(disableRegenerate && "opacity-50 line-through")}>Regenerate</span>
               </Button>
             )}
 
@@ -276,28 +262,51 @@ export function ChatMessage({
             {message.content && (
               <Button
                 variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                size="sm"
+                className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 rounded-lg gap-2 transition-colors"
                 onClick={handleCopy}
                 title="Copy text"
                 aria-label="Copy text"
               >
                 {copied ? (
-                  <Check className="h-3.5 w-3.5 text-green-500" />
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-500" />
+                    <span className="text-emerald-500">Copied</span>
+                  </>
                 ) : (
-                  <Copy className="h-3.5 w-3.5" />
+                  <>
+                    <Copy className="h-3.5 w-3.5" />
+                    <span>Copy</span>
+                  </>
                 )}
               </Button>
             )}
 
-            {/* Per-message Model Information Badge (Assistant only) */}
+            {/* Per-message Model Information & Telemetry (Assistant only) */}
             {!isUser && message.model_used && (
               <span
-                className="text-[10px] font-mono text-muted-foreground/70 bg-muted/30 px-1.5 py-0.5 rounded border border-border/30 ml-1 inline-flex items-center gap-1"
-                title={`Model used: ${message.model_used}`}
+                className="text-[10px] font-mono text-muted-foreground/60 bg-muted/40 px-2 py-1 rounded-md border border-border/40 ml-1 inline-flex items-center gap-2 cursor-default transition-colors hover:bg-muted/60 hover:text-muted-foreground"
+                title={`Generated with ${message.model_used}`}
               >
-                <Cpu className="h-2.5 w-2.5 shrink-0 opacity-60" />
-                {message.model_used}
+                <span className="flex items-center gap-1.5 border-r border-border/40 pr-2">
+                  <Cpu className="h-3 w-3 shrink-0 opacity-70" />
+                  {message.model_used}
+                </span>
+                
+                {message.latency_ms ? (
+                  <span className="flex items-center gap-2">
+                    <span title="Total latency">{(message.latency_ms / 1000).toFixed(1)}s</span>
+                    
+                    {message.total_tokens ? (
+                      <>
+                        <span title="Total tokens">{message.total_tokens}t</span>
+                        <span className="opacity-75" title="Tokens per second">
+                          {((message.total_tokens / message.latency_ms) * 1000).toFixed(1)} t/s
+                        </span>
+                      </>
+                    ) : null}
+                  </span>
+                ) : null}
               </span>
             )}
           </div>

@@ -23,9 +23,9 @@ class RankedResult:
     chunk_id: uuid.UUID
     chunk_text: str
     document_id: uuid.UUID
-    document_version_id: uuid.UUID
     similarity_score: float
     rank: int
+    document_version_id: uuid.UUID | None = None
     document_title: str = ""
     section_title: str | None = None
     page_number: int | None = None
@@ -78,6 +78,7 @@ def rank_hybrid_rrf(
     """Combine vector semantic hits and full-text keyword hits using Reciprocal Rank Fusion (RRF)."""
     scores: dict[uuid.UUID, float] = {}
     hit_map: dict[uuid.UUID, SearchHit] = {}
+    semantic_ids: set[uuid.UUID] = {hit.chunk_id for hit in semantic_hits}
 
     for pos, hit in enumerate(semantic_hits, 1):
         hit_map[hit.chunk_id] = hit
@@ -95,7 +96,7 @@ def rank_hybrid_rrf(
     for chunk_id in sorted_chunk_ids:
         hit = hit_map[chunk_id]
         sim = cosine_distance_to_similarity(hit.distance)
-        if sim < similarity_threshold:
+        if chunk_id in semantic_ids and sim < similarity_threshold:
             continue
         ranked.append(
             RankedResult(
@@ -128,7 +129,20 @@ def _get_neural_reranker() -> tuple[Any, str | None]:
 
     errors = []
 
-    # Attempt 1: Direct FlashRank import
+    # Attempt 1: sentence-transformers (Primary)
+    try:
+        import importlib
+        st_module = importlib.import_module("sentence_transformers")
+        CrossEncoder = getattr(st_module, "CrossEncoder")
+        st_model_name = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+        _reranker_instance = CrossEncoder(st_model_name)
+        _reranker_model_name = f"sentence-transformers CrossEncoder ({st_model_name})"
+        logger.info("[RERANKER INIT] Successfully loaded sentence-transformers model %r", st_model_name)
+        return _reranker_instance, _reranker_model_name
+    except Exception as exc:
+        errors.append(f"sentence-transformers error: {type(exc).__name__}: {exc}")
+
+    # Attempt 2: FlashRank (Fallback)
     try:
         from flashrank import Ranker
         _reranker_instance = Ranker()
@@ -137,19 +151,6 @@ def _get_neural_reranker() -> tuple[Any, str | None]:
         return _reranker_instance, _reranker_model_name
     except Exception as exc:
         errors.append(f"FlashRank not available: {type(exc).__name__}: {exc}")
-
-    # Attempt 2: Optional sentence-transformers fallback
-    try:
-        import importlib
-        st_module = importlib.import_module("sentence_transformers")
-        CrossEncoder = getattr(st_module, "CrossEncoder")
-        st_model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-        _reranker_instance = CrossEncoder(st_model_name)
-        _reranker_model_name = f"sentence-transformers CrossEncoder ({st_model_name})"
-        logger.info("[RERANKER INIT] Successfully loaded sentence-transformers model %r", st_model_name)
-        return _reranker_instance, _reranker_model_name
-    except Exception as exc:
-        errors.append(f"sentence-transformers error: {type(exc).__name__}: {exc}")
 
     return None, f"heuristic-fallback ({' | '.join(errors)})"
 
@@ -256,12 +257,24 @@ def rerank_cross_encoder(
     return reranked
 
 
+_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can", "could",
+    "did", "do", "does", "for", "from", "had", "has", "have", "in", "is", "it", "its",
+    "my", "of", "on", "or", "should", "that", "the", "this", "to", "what", "which",
+    "will", "with", "would", "you", "your", "using", "use", "used",
+}
+
+
 def _fallback_heuristic_rerank(
     query: str,
     candidates: list[RankedResult],
 ) -> list[tuple[float, RankedResult]]:
     """Explicit fallback scoring function when neural model is unavailable."""
-    query_tokens = set(query.lower().split())
+    raw_tokens = query.lower().split()
+    content_tokens = set(t for t in raw_tokens if t not in _STOP_WORDS and len(t) > 1)
+    if not content_tokens:
+        content_tokens = set(raw_tokens)
+
     scored_candidates: list[tuple[float, RankedResult]] = []
 
     for candidate in candidates:
@@ -269,15 +282,36 @@ def _fallback_heuristic_rerank(
         title = (candidate.document_title or "").lower()
         section = (candidate.section_title or "").lower()
 
-        matching_tokens = sum(1 for token in query_tokens if token in text or token in section or token in title)
-        token_score = matching_tokens / max(len(query_tokens), 1)
+        # Count match on key content tokens (excluding stop-words and generic corpus words)
+        matching_tokens = sum(1 for token in content_tokens if token in text or token in section or token in title)
+        token_score = matching_tokens / max(len(content_tokens), 1)
 
-        section_boost = 0.25 if any(t in section for t in query_tokens if len(t) > 3) else 0.0
-        title_boost = 0.15 if any(t in title for t in query_tokens if len(t) > 3) else 0.0
-        phrase_boost = 0.3 if query.lower().strip() in text else 0.0
+        # Attribute-specific ranking scoring boost/penalty via QueryIntent
+        from app.rag.query_understanding import extract_query_intent, AttributeCategory
+        intent = extract_query_intent(query)
+
+        attr_boost = 0.0
+        if intent.category == AttributeCategory.TECHNOLOGY:
+            has_framework = any(tech in text for tech in ("react", "fastapi", "vite", "express", "next.js", "node.js", "nodejs", "python", "postgres", "vue", "angular", "django"))
+            has_pure_port = any(port_kw in text for port_kw in ("port 4173", "port 5000", "port 8000", "port 8001", "pm2", "nginx")) and not has_framework
+            if has_framework:
+                attr_boost = 0.50
+            elif has_pure_port:
+                attr_boost = -0.35
+        elif intent.category == AttributeCategory.CONFIGURATION:
+            has_port = any(p in text for p in ("port", "4173", "5000", "8000", "8001", "80", "443", "listening"))
+            if has_port:
+                attr_boost = 0.50
+            else:
+                attr_boost = -0.35
+
+        query_low = query.lower()
+        section_boost = 0.15 if any(t in section for t in content_tokens if len(t) > 3) else 0.0
+        title_boost = 0.10 if any(t in title for t in content_tokens if len(t) > 3) else 0.0
+        phrase_boost = 0.25 if query_low.strip() in text else 0.0
         base_score = candidate.similarity_score
 
-        composite_score = (base_score * 0.4) + (token_score * 0.35) + section_boost + title_boost + phrase_boost
+        composite_score = (base_score * 0.25) + (token_score * 0.35) + attr_boost + section_boost + title_boost + phrase_boost
         scored_candidates.append((composite_score, candidate))
 
     scored_candidates.sort(key=lambda item: item[0], reverse=True)

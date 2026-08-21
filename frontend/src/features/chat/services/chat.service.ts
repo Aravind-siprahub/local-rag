@@ -105,4 +105,122 @@ export const chatService = {
     }
   },
 
+  /**
+   * SSE Streaming alternative to sendMessage.
+   * Parses backend data: {} events dynamically.
+   */
+  async streamMessage(
+    payload: ChatRequest & { file?: File },
+    callbacks: {
+      onStatus?: (message: string) => void
+      onToken?: (text: string) => void
+      onMeta?: (sources: any[], userMessageId: string) => void
+      onDone?: (data: any) => void
+      onError?: (error: Error) => void
+    },
+    options?: { signal?: AbortSignal }
+  ): Promise<void> {
+    const baseURL = import.meta.env.VITE_API_BASE_URL ?? '/api'
+    const url = `${baseURL}/chat/stream`
+    const token = localStorage.getItem('ACCESS_TOKEN') // AUTH_KEYS.ACCESS_TOKEN
+
+    const headers: Record<string, string> = {}
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
+    const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+    headers['X-Request-ID'] = requestId
+
+    let body: FormData | string
+    if (payload.file) {
+      const formData = new FormData()
+      formData.append('question', payload.question)
+      if (payload.session_id) formData.append('session_id', payload.session_id)
+      if (payload.document_id) formData.append('document_id', payload.document_id)
+      if (payload.document_version_id) formData.append('document_version_id', payload.document_version_id)
+      if (payload.top_k) formData.append('top_k', String(payload.top_k))
+      if (payload.similarity_threshold) formData.append('similarity_threshold', String(payload.similarity_threshold))
+      formData.append('file', payload.file)
+      body = formData
+    } else {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify(payload)
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: options?.signal,
+      })
+
+      if (!response.ok) {
+        let errorMsg = `Server error: ${response.statusText}`
+        try {
+          const errBody = await response.json()
+          if (errBody?.detail) {
+            errorMsg = typeof errBody.detail === 'string' ? errBody.detail : JSON.stringify(errBody.detail)
+          }
+        } catch {
+          // ignore
+        }
+        throw new Error(errorMsg)
+      }
+
+      if (!response.body) {
+        throw new Error('ReadableStream not supported by the browser.')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        let boundaryIndex
+        while ((boundaryIndex = buffer.indexOf('\n\n')) >= 0) {
+          const chunk = buffer.slice(0, boundaryIndex).trim()
+          buffer = buffer.slice(boundaryIndex + 2)
+
+          if (!chunk) continue
+
+          // Handle multi-line data: events
+          const lines = chunk.split('\n')
+          const dataLines = lines
+            .filter((l) => l.startsWith('data: '))
+            .map((l) => l.substring(6))
+
+          if (dataLines.length > 0) {
+            const jsonStr = dataLines.join('')
+            try {
+              const event = JSON.parse(jsonStr)
+              if (event.type === 'status') {
+                callbacks.onStatus?.(event.message)
+              } else if (event.type === 'meta') {
+                callbacks.onMeta?.(event.sources, event.user_message_id)
+              } else if (event.type === 'token') {
+                callbacks.onToken?.(event.content)
+              } else if (event.type === 'done') {
+                callbacks.onDone?.(event)
+              } else if (event.type === 'error') {
+                throw new Error(event.error || event.message || 'Stream error')
+              }
+            } catch (err) {
+              console.warn('[SSE PARSE ERROR] Skipping malformed chunk:', chunk, err)
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        throw Object.assign(new Error('Response cancelled. Please try again.'), { code: 'TIMEOUT' })
+      }
+      callbacks.onError?.(err instanceof Error ? err : new Error(String(err)))
+      throw err
+    }
+  },
 }

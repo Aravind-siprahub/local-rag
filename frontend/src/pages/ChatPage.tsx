@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Menu, Info } from 'lucide-react'
+import { Menu } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { ChatSidebar } from '@/features/chat/components/ChatSidebar'
 import { ChatHistory } from '@/features/chat/components/ChatHistory'
 import { ChatInput } from '@/features/chat/components/ChatInput'
-import { ModelSelector } from '@/features/chat/components/ModelSelector'
+
 import { useChat, useConversationMessages, chatKeys } from '@/features/chat/hooks/useChat'
 import {
   chatRequestStore,
@@ -20,6 +20,7 @@ interface ConversationOverlayState {
   messages: Message[]
   latestCitations?: Citation[]
   errorMessage?: { text: string; lastContent?: string } | null
+  streamingStatus?: string
 }
 
 const conversationOverlays = new Map<string, ConversationOverlayState>()
@@ -141,6 +142,10 @@ export function ChatPage() {
     setEditingMessage(null)
   }
 
+  const handleStop = () => {
+    chatRequestStore.abortRequest(activeSessionId ?? DRAFT_CONVERSATION_KEY)
+  }
+
   const handleDeleteChat = async (id: string) => {
     await deleteConversation.mutateAsync(id)
     conversationOverlays.delete(id)
@@ -243,45 +248,81 @@ export function ChatPage() {
             workingKey = currentSessionId
           }
 
-          const response = await chatService.sendMessage(
+          let assistantMsg: Message = {
+            id: `temp-assistant-${Date.now()}`,
+            session_id: currentSessionId!,
+            role: 'assistant',
+            content: '',
+            created_at: new Date().toISOString(),
+          }
+
+          const currentForStart = getOverlay(workingKey)
+          const withoutTempForStart = currentForStart.messages.filter((m) => m.id !== tempUserMsg.id)
+          setOverlay(workingKey, {
+            ...currentForStart,
+            messages: [...withoutTempForStart, tempUserMsg, assistantMsg],
+            streamingStatus: 'Starting...',
+          })
+
+          await chatService.streamMessage(
             {
               session_id: currentSessionId,
               question: content,
               file,
             },
-            { signal, timeoutMs: 600_000 },
+            {
+              onStatus: (message) => {
+                const current = getOverlay(workingKey)
+                setOverlay(workingKey, { ...current, streamingStatus: message })
+              },
+              onMeta: (sources, userMessageId) => {
+                const current = getOverlay(workingKey)
+                const mappedMessages = current.messages.map((m) => {
+                  if (m.id === tempUserMsg.id) return { ...m, id: userMessageId }
+                  return m
+                })
+                setOverlay(workingKey, {
+                  ...current,
+                  messages: mappedMessages,
+                  latestCitations: sources,
+                })
+              },
+              onToken: (text) => {
+                assistantMsg = { ...assistantMsg, content: assistantMsg.content + text }
+                const current = getOverlay(workingKey)
+                const mappedMessages = current.messages.map((m) =>
+                  m.id === assistantMsg.id ? assistantMsg : m
+                )
+                setOverlay(workingKey, { ...current, messages: mappedMessages })
+              },
+              onDone: (data) => {
+                assistantMsg = {
+                  ...assistantMsg,
+                  id: data.assistant_message_id || assistantMsg.id,
+                  latency_ms: data.processing_time_ms,
+                  ttft_ms: data.ttft_ms,
+                  total_tokens: data.token_count,
+                  model_used: data.model || 'ollama',
+                }
+                const current = getOverlay(workingKey)
+                const mappedMessages = current.messages.map((m) =>
+                  m.id === `temp-assistant-${Date.now()}` || m.role === 'assistant' && m.id === assistantMsg.id ? assistantMsg : m
+                )
+                setOverlay(workingKey, {
+                  ...current,
+                  messages: mappedMessages,
+                  streamingStatus: undefined,
+                })
+              },
+              onError: () => {
+                // error handled by throw and catch in chatRequestStore/UI wrapper below
+              }
+            },
+            { signal }
           )
-
-          const assistantMsg: Message = {
-            id: response.assistant_message_id,
-            session_id: currentSessionId!,
-            role: 'assistant',
-            content: response.answer,
-            model_used: response.model,
-            total_tokens: response.token_usage?.total_tokens,
-            created_at: new Date().toISOString(),
-          }
-
-          const current = getOverlay(workingKey)
-          const withoutTemp = current.messages.filter((m) => m.id !== tempUserMsg.id)
-          const userMsg: Message = {
-            ...tempUserMsg,
-            id: response.user_message_id || tempUserMsg.id,
-            session_id: currentSessionId!,
-            localImageUrl: tempUserMsg.localImageUrl,
-          }
-
-          setOverlay(workingKey, {
-            ...current,
-            messages: [...withoutTemp.filter((m) => m.id !== userMsg.id), userMsg, assistantMsg],
-            latestCitations: response.citations,
-            errorMessage: null,
-          })
 
           void queryClient.invalidateQueries({ queryKey: chatKeys.messages(currentSessionId!) })
           void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() })
-
-          return response
         },
         { timeoutMs: 600_000 },
       )
@@ -294,7 +335,8 @@ export function ChatPage() {
         (axios.isAxiosError(err) && err.code === 'ECONNABORTED')
 
       const isCancelled =
-        axios.isAxiosError(err) && (err.code === 'ERR_CANCELED' || err.name === 'CanceledError')
+        (err instanceof Error && err.name === 'AbortError') ||
+        (axios.isAxiosError(err) && (err.code === 'ERR_CANCELED' || err.name === 'CanceledError'))
 
       let text = 'Failed to generate answer. Please try again.'
       if (isTimeout) {
@@ -377,18 +419,20 @@ export function ChatPage() {
             messages={localMessages}
             isLoading={showGenerating || (!!activeSessionId && currentConversationLoading && localMessages.length === 0)}
             latestCitations={latestCitations}
-            loadingLabel={showGenerating ? 'Generating response...' : undefined}
+            loadingLabel={overlay.streamingStatus || (showGenerating ? 'Generating response...' : undefined)}
             onEditMessage={handleEditUserMessage}
             onRegenerateMessage={handleRegenerateAssistantMessage}
+            onSuggestedClick={(text) => handleSend(text)}
           />
         </div>
 
         <div className="p-3 sm:p-4 bg-background/50 border-t border-border/30 shrink-0">
-          <div className="max-w-3xl mx-auto">
+          <div className="max-w-4xl mx-auto">
             <ChatInput
               onSend={(msg, file, preservedImageUrl) => {
                 void handleSend(msg, file, preservedImageUrl)
               }}
+              onStop={handleStop}
               sendDisabled={currentMessageSending}
               disabled={false}
               selectedModel={selectedModel}

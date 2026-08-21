@@ -47,6 +47,16 @@ def _get_concurrency_semaphore() -> asyncio.Semaphore:
     return _OLLAMA_CONCURRENCY_SEMAPHORE
 
 
+_GLOBAL_OLLAMA_CLIENT = None
+
+def get_global_ollama_client() -> "OllamaLLMClient":
+    """Return a global singleton of OllamaLLMClient to reuse HTTP connections."""
+    global _GLOBAL_OLLAMA_CLIENT
+    if _GLOBAL_OLLAMA_CLIENT is None:
+        _GLOBAL_OLLAMA_CLIENT = OllamaLLMClient()
+    return _GLOBAL_OLLAMA_CLIENT
+
+
 def _parse_user_prompt(user_prompt: str) -> tuple[list[dict[str, str]], str]:
     """Extract chat history messages from the user_prompt prefix.
 
@@ -120,15 +130,13 @@ class OllamaLLMClient:
 
     def _build_options(self, *, num_predict: int | None = None) -> dict[str, Any]:
         settings = get_settings()
-        predict = (
-            num_predict
-            if num_predict is not None
-            else getattr(settings, "OLLAMA_NUM_PREDICT", 512)
-        )
+        default_predict = getattr(settings, "OLLAMA_NUM_PREDICT", 128)
+        predict = num_predict if num_predict is not None else default_predict
         options: dict[str, Any] = {
             "temperature": self.temperature,
             "num_ctx": self.num_ctx,
             "num_predict": predict,
+            "think": False,
         }
         if not self.use_gpu:
             options["num_gpu"] = 0
@@ -294,9 +302,8 @@ class OllamaLLMClient:
         }
         if response_format is not None:
             payload["format"] = response_format
-        # qwen3 / thinking models often put the entire answer in `message.thinking`
-        # and leave `content` empty on long RAG prompts. Force non-thinking output.
-        if supports_think_parameter(self.model):
+        target_model = model or self.model
+        if supports_think_parameter(target_model):
             payload["think"] = False
         return payload
 
@@ -305,6 +312,7 @@ class OllamaLLMClient:
         system_prompt: str,
         user_prompt: str,
         *,
+        num_predict: int | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
     ):
@@ -314,7 +322,7 @@ class OllamaLLMClient:
         if not system_prompt or not system_prompt.strip():
             raise LLMClientError("system_prompt must not be empty.")
 
-        payload = self._build_payload(system_prompt, user_prompt, stream=True, images=images, model=model)
+        payload = self._build_payload(system_prompt, user_prompt, stream=True, num_predict=num_predict, images=images, model=model)
 
         url = f"{self.base_url}/api/chat"
         client = await self._get_client()

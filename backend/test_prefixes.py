@@ -23,13 +23,14 @@ tests = [
     ("Wait, I need to check something. The answer is 5.", "The answer is 5.")
 ]
 
-failed = False
-for t, expected in tests:
-    res = t
-    for pat in _MONOLOGUE_PREFIX_PATTERNS:
-        res = pat.sub("", res)
-    print(f"Input: {t}\nResult: {res}\nExpected: {expected}\nMatch: {res == expected}\n")
-    if res != expected:
-        failed = True
-        
-sys.exit(1 if failed else 0)
+if __name__ == "__main__":
+    failed = False
+    for t, expected in tests:
+        res = t
+        for pat in _MONOLOGUE_PREFIX_PATTERNS:
+            res = pat.sub("", res)
+        print(f"Input: {t}\nResult: {res}\nExpected: {expected}\nMatch: {res == expected}\n")
+        if res != expected:
+            failed = True
+            
+    sys.exit(1 if failed else 0)

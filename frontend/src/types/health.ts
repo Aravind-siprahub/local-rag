@@ -1,4 +1,7 @@
 export interface HealthResponse {
-  status: 'ok'
-  database: 'connected'
+  status: 'ok' | 'error'
+  database: string
+  pgvector?: string
+  ollama?: string
+  models?: string[]
 }

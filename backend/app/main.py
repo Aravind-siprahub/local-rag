@@ -101,6 +101,17 @@ async def lifespan(app: FastAPI):
         )
     else:
         logger.info("Startup check passed: database connection OK")
+
+        # Auto-ensure missing database columns exist safely
+        try:
+            async with AsyncSessionLocal() as db_sess:
+                from sqlalchemy import text
+                await db_sess.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS working_memory_summary TEXT;"))
+                await db_sess.commit()
+                logger.info("[DB MIGRATION] Column chat_sessions.working_memory_summary verified OK.")
+        except Exception as mig_exc:
+            logger.warning("[DB MIGRATION WARNING] %s", mig_exc)
+
         app.state.swagger_example_user_email = (
             f"swagger-{uuid_lib.uuid4().hex[:8]}@example.com"
         )
@@ -148,10 +159,10 @@ async def lifespan(app: FastAPI):
         # Warm up Ollama chat model in background so first user request completes in <5s
         async def _warmup_ollama() -> None:
             try:
-                from app.llm.ollama_client import OllamaLLMClient
-                client = OllamaLLMClient()
+                from app.llm.ollama_client import get_global_ollama_client
+                client = get_global_ollama_client()
                 await client.warmup()
-                await client.close()
+                # DO NOT close the client here to preserve HTTP Keep-Alive across the application lifespan.
             except Exception as exc:
                 logger.warning("Ollama background warmup error: %s", exc)
 
@@ -205,6 +216,14 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Application shutting down")
+    
+    # Clean up the global persistent LLM client
+    try:
+        from app.llm.ollama_client import get_global_ollama_client
+        client = get_global_ollama_client()
+        await client.close()
+    except Exception as exc:
+        logger.warning("Error closing global OllamaLLMClient: %s", exc)
 
 
 from fastapi.middleware.cors import CORSMiddleware

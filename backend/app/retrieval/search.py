@@ -7,6 +7,7 @@ the existing `EmbeddingRepository`.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -31,6 +32,7 @@ class SearchFilters:
 
     user_id: uuid.UUID | None = None
     document_id: uuid.UUID | None = None
+    document_ids: tuple[uuid.UUID, ...] | None = None
     document_version_id: uuid.UUID | None = None
     filename: str | None = None
     file_type: str | None = None
@@ -55,7 +57,7 @@ class SearchHit:
 
 
 async def search_fulltext(
-    session: AsyncSession,
+    session: AsyncSession | None,
     query_text: str,
     *,
     top_k: int = 20,
@@ -64,13 +66,12 @@ async def search_fulltext(
     """Full-text search using PostgreSQL tsvector over document_chunks content."""
     from sqlalchemy import func
 
-    filters = filters or SearchFilters()
-    words = [w.strip() for w in query_text.split() if w.strip()]
-    if not words:
+    if session is None or not query_text or not query_text.strip():
         return []
 
-    ts_query_str = " & ".join(words)
-    ts_query = func.to_tsquery('english', ts_query_str)
+    filters = filters or SearchFilters()
+
+    ts_query = func.plainto_tsquery('english', query_text.strip())
     ts_vector = func.to_tsvector('english', DocumentChunk.content)
     rank_expr = func.ts_rank(ts_vector, ts_query)
 
@@ -95,7 +96,9 @@ async def search_fulltext(
 
     if filters.user_id is not None:
         stmt = stmt.where(Document.user_id == filters.user_id)
-    if filters.document_id is not None:
+    if filters.document_ids:
+        stmt = stmt.where(Document.id.in_(filters.document_ids))
+    elif filters.document_id is not None:
         stmt = stmt.where(Document.id == filters.document_id)
     if filters.document_version_id is not None:
         stmt = stmt.where(DocumentVersion.id == filters.document_version_id)
@@ -127,11 +130,68 @@ async def search_fulltext(
                 metadata_=row.metadata_ if isinstance(row.metadata_, dict) else {},
             )
         )
+
+    # Fallback to OR-based tsquery if strict AND query returns 0 hits
+    if not hits:
+        stop_words = {"what", "and", "are", "using", "talk", "to", "my", "data", "is", "in", "for", "the", "a", "an"}
+        terms = [t for t in re.findall(r"\w+", query_text.lower()) if t not in stop_words and len(t) > 2]
+        if terms:
+            or_expr = " | ".join(terms)
+            or_ts_query = func.to_tsquery('english', or_expr)
+            or_rank = func.ts_rank(ts_vector, or_ts_query)
+            or_stmt = (
+                select(
+                    DocumentChunk.id.label("chunk_id"),
+                    DocumentChunk.content,
+                    DocumentVersion.document_id,
+                    DocumentChunk.document_version_id,
+                    Document.title,
+                    DocumentChunk.section_title,
+                    DocumentChunk.page_number,
+                    DocumentChunk.metadata_,
+                    or_rank.label("rank_score"),
+                )
+                .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
+                .join(Document, DocumentVersion.document_id == Document.id)
+                .where(Document.deleted_at.is_(None))
+                .where(Document.status == DocumentStatus.READY)
+                .where(ts_vector.op("@@")(or_ts_query))
+            )
+            if filters.user_id is not None:
+                or_stmt = or_stmt.where(Document.user_id == filters.user_id)
+            # FIX #1: Apply document_ids (plural) filter in OR fallback — was previously missing,
+            # causing cross-project contamination when entity matching returned multiple docs.
+            if filters.document_ids:
+                or_stmt = or_stmt.where(Document.id.in_(filters.document_ids))
+            elif filters.document_id is not None:
+                or_stmt = or_stmt.where(Document.id == filters.document_id)
+            if filters.document_version_id is not None:
+                or_stmt = or_stmt.where(DocumentVersion.id == filters.document_version_id)
+            else:
+                or_stmt = or_stmt.where(DocumentChunk.document_version_id == Document.current_version_id)
+            or_stmt = or_stmt.order_by(or_rank.desc()).limit(top_k)
+            or_result = await session.execute(or_stmt)
+            for row in or_result.all():
+                score = float(row.rank_score) if row.rank_score is not None else 0.001
+                hits.append(
+                    SearchHit(
+                        chunk_id=row.chunk_id,
+                        chunk_text=row.content,
+                        document_id=row.document_id,
+                        document_version_id=row.document_version_id,
+                        document_title=row.title,
+                        distance=max(0.0, 1.0 - score),
+                        section_title=row.section_title,
+                        page_number=row.page_number,
+                        metadata_=row.metadata_ if isinstance(row.metadata_, dict) else {},
+                    )
+                )
+
     return hits
 
 
 async def search_similar(
-    session: AsyncSession,
+    session: AsyncSession | None,
     query_embedding: list[float],
     *,
     model_name: str,
@@ -142,8 +202,11 @@ async def search_similar(
 
     Returns hits ordered by ascending cosine distance (most similar first).
     """
-    if len(query_embedding) != EMBEDDING_DIM:
+    if query_embedding is not None and len(query_embedding) != EMBEDDING_DIM:
         raise ValueError(f"query_embedding must have {EMBEDDING_DIM} dimensions.")
+
+    if session is None or not query_embedding:
+        return []
 
     filters = filters or SearchFilters()
     distance_expr = Embedding.embedding.cosine_distance(query_embedding)
@@ -173,7 +236,9 @@ async def search_similar(
 
     if filters.user_id is not None:
         stmt = stmt.where(Document.user_id == filters.user_id)
-    if filters.document_id is not None:
+    if filters.document_ids:
+        stmt = stmt.where(Document.id.in_(filters.document_ids))
+    elif filters.document_id is not None:
         stmt = stmt.where(Document.id == filters.document_id)
     if filters.document_version_id is not None:
         stmt = stmt.where(DocumentVersion.id == filters.document_version_id)

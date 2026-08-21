@@ -1,8 +1,9 @@
 import json
 import uuid
+from typing import Any
 import pytest
 from app.rag.service import RAGService
-from app.rag.models import RAGResponse
+from app.rag.response import RAGResponse
 from tests.test_agent_router import _make_service, FakeLLMClient, FakeWebSearchProvider
 from app.tools.web_search import WebSearchResult, WebSearchHit
 
@@ -11,10 +12,10 @@ class ConfigurableFakeLLMClient:
         self.answer = answer
         self.calls = []
 
-    async def generate(self, system_prompt, user_prompt, **kwargs) -> any:
+    async def generate(self, system_prompt, user_prompt, **kwargs) -> Any:
         self.calls.append(kwargs)
         from app.llm.client import LLMResponse
-        from app.llm.models import TokenUsage
+        from app.llm.response import TokenUsage
         return LLMResponse(
             answer=self.answer,
             model_name="test-model",
@@ -42,7 +43,7 @@ async def test_valid_json_response(base_web_service):
 async def test_malformed_json_response_falls_back_to_concise_answer(base_web_service):
     service, session, web = base_web_service
     # Malformed JSON that looks like an attempt (contains { and })
-    service.llm_client = ConfigurableFakeLLMClient('{"answer": "Good Friday is broken')
+    service.llm_client = ConfigurableFakeLLMClient('{"answer": "Good Friday is broken",}')
     
     response = await service.ask(session.id, "When is Good Friday in 2026?")
     assert "Good Friday in 2026 falls on Friday, 3 April 2026." in response.answer

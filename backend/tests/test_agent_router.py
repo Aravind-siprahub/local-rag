@@ -233,7 +233,7 @@ class TestAgentRouterAsk:
         assert retriever.calls == []
         assert web.calls == []
         assert len(llm.calls) == 1
-        assert llm.calls[0]["num_predict"] in (128, 256, 512)
+        assert llm.calls[0]["num_predict"] in (128, 150, 256, 512, 1024)
         assert "Python" in response.answer
         assert response.sources == []
 

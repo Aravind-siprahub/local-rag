@@ -776,6 +776,38 @@ export function SettingsPage() {
                     )
                   }
                 />
+                <InfoRow
+                  label="Vector Extension (pgvector)"
+                  value={
+                    health?.pgvector === 'connected' ? (
+                      <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Active</Badge>
+                    ) : health?.pgvector === 'missing' ? (
+                      <Badge variant="destructive">Missing</Badge>
+                    ) : (
+                      <Badge variant="destructive">Disconnected</Badge>
+                    )
+                  }
+                />
+                <InfoRow
+                  label="Ollama Service"
+                  value={
+                    health?.ollama === 'connected' ? (
+                      <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Connected</Badge>
+                    ) : (
+                      <Badge variant="destructive">Disconnected</Badge>
+                    )
+                  }
+                />
+                <InfoRow
+                  label="Available Local Models"
+                  value={
+                    health?.models && health.models.length > 0 ? (
+                      <ReadOnlyValue value={health.models.join(', ')} />
+                    ) : (
+                      <span className="text-sm text-muted-foreground">No models detected</span>
+                    )
+                  }
+                />
                 <InfoRow label="Local File Storage" value={<ReadOnlyValue value="./uploads directory" />} />
                 <InfoRow label="Execution Mode" value={<ReadOnlyValue value="GPU (Ollama auto-offload)" />} />
               </SettingCard>

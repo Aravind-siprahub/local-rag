@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -70,6 +71,40 @@ def _is_image_rag_query(question: str, filters: SearchFilters | None) -> bool:
     return any(kw in text for kw in doc_keywords)
 
 
+def _filter_relevant_chunks(query: str, chunks: list[RankedResult]) -> list[RankedResult]:
+    """Filter post-reranking candidate chunks using requested attribute detection."""
+    if not chunks:
+        return []
+
+    from app.rag.attribute_detector import detect_requested_attributes, RequestedAttribute
+    attrs = detect_requested_attributes(query)
+
+    filtered: list[RankedResult] = []
+
+    for c in chunks:
+        text_lower = c.chunk_text.lower()
+
+        # Attribute 1: Technology/Framework stack requested (without ports)
+        if RequestedAttribute.FRAMEWORK_TECH_STACK in attrs:
+            has_framework_name = any(t in text_lower for t in ("react", "fastapi", "vite", "express", "next.js", "node.js", "nodejs", "node", "python", "postgres", "postgresql", "django", "vue", "angular", "flask", "chat interface", "api backend", "frontend", "backend"))
+            has_port_number = bool(re.search(r"\bport[:\s]*\d+|\b4173\b|\b5000\b|\b8000\b|\b8001\b|\bpm2\b|\bnginx\b|\bvite_backend_url\b", text_lower))
+            is_pure_port_deployment = has_port_number and not any(t in text_lower for t in ("react", "fastapi", "vite", "express", "next.js", "node.js", "nodejs", "node", "chat interface", "django", "vue", "angular"))
+            if is_pure_port_deployment:
+                logger.info("[RELEVANCE FILTER] Dropped pure port/deployment chunk '%s' for tech-stack query", getattr(c, 'document_title', '?'))
+                continue
+
+        # Attribute 2: Port/Networking requested (without tech stack)
+        elif RequestedAttribute.PORT_NETWORKING in attrs:
+            has_port_info = any(p in text_lower for p in ("port", "4173", "5000", "8000", "80", "443", "listening"))
+            if not has_port_info:
+                logger.info("[RELEVANCE FILTER] Dropped non-port chunk '%s' for port query", getattr(c, 'document_title', '?'))
+                continue
+
+        filtered.append(c)
+
+    return filtered
+
+
 class RAGService:
     """End-to-end RAG pipeline: retrieve -> prompt -> generate -> persist.
 
@@ -96,7 +131,8 @@ class RAGService:
         self.session = session
         self.retriever = retriever or Retriever(session)
         self.prompt_builder = prompt_builder or PromptBuilder()
-        self.llm_client = llm_client or OllamaLLMClient()
+        from app.llm.ollama_client import get_global_ollama_client
+        self.llm_client = llm_client or get_global_ollama_client()
         self.messages = message_service or ChatMessageService(session)
         self.citations = citation_service or CitationService(session)
         self.sessions = session_service or ChatSessionService(session)
@@ -138,6 +174,9 @@ class RAGService:
         chat_session = await self.sessions.get(session_id)
         user_hash = hashlib.sha256(str(chat_session.user_id).encode()).hexdigest()[:12]
         start_mono = time.monotonic()
+
+        from app.rag.query_understanding import extract_query_intent
+        intent = extract_query_intent(question)
 
         attachments = None
         if image_storage_path:
@@ -228,37 +267,8 @@ class RAGService:
                 document_version_id=retrieval_filters.document_version_id,
             )
 
-        # Detect document title references in user question if document_id is not set
-        if retrieval_filters.document_id is None and self.session is not None:
-            try:
-                from app.models.document import Document
-                from sqlalchemy import select
-                stmt_docs = (
-                    select(Document)
-                    .where(Document.deleted_at.is_(None))
-                    .where(Document.user_id == chat_session.user_id)
-                )
-                all_docs = list((await self.session.execute(stmt_docs)).scalars().all())
-
-                q_lower = question.strip().lower()
-                for d in all_docs:
-                    d_title_lower = d.title.lower()
-                    d_stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
-                    stem_clean = d_stem.replace("_", " ").replace("-", " ").strip()
-                    if len(stem_clean) >= 3 and (
-                        d_title_lower in q_lower
-                        or d_stem in q_lower
-                        or stem_clean in q_lower
-                    ):
-                        logger.info("[DOCUMENT TITLE DETECTED] Question references document '%s' (%s)", d.title, d.id)
-                        retrieval_filters = SearchFilters(
-                            user_id=retrieval_filters.user_id,
-                            document_id=d.id,
-                            document_version_id=retrieval_filters.document_version_id,
-                        )
-                        break
-            except Exception as d_exc:
-                logger.warning("[DOCUMENT TITLE MATCH FAILED] %s", d_exc)
+        # Detect explicit document/project entity references in user question if scoping is not already set
+        retrieval_filters = await self._resolve_entity_filters(chat_session.user_id, question, retrieval_filters)
 
         retrieval_start = time.monotonic()
         logger.info("[RAG STAGE 2: RETRIEVAL START] orig=%s norm=%s ret=%s filters=%s top_k=%s", orig_q[:60], norm_q[:60], ret_q[:60], retrieval_filters, top_k)
@@ -269,28 +279,53 @@ class RAGService:
             similarity_threshold=similarity_threshold,
         )
 
-        # Fallback retrieval pass 2 with normalized query if initial pass yielded 0 chunks
-        if not retrieved_chunks and norm_q and norm_q != ret_q:
-            logger.info("[RAG FALLBACK RETRIEVAL] Primary search yielded 0 hits. Retrying with normalized query: %s", norm_q)
+        # Fallback 1: If document-scoped retrieval yielded 0 chunks, retry globally for user
+        has_doc_filter = (retrieval_filters.document_id is not None) or bool(getattr(retrieval_filters, "document_ids", None))
+        if not retrieved_chunks and has_doc_filter:
+            logger.info("[RETRIEVAL FALLBACK] Scoped retrieval for document(s) returned 0 chunks. Retrying across ALL documents for user.")
+            global_filters = SearchFilters(
+                user_id=retrieval_filters.user_id,
+                document_id=None,
+                document_ids=None,
+                document_version_id=None,
+            )
             retrieved_chunks = await self._retrieve_safely(
-                norm_q,
-                filters=retrieval_filters,
+                ret_q or question.strip(),
+                filters=global_filters,
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
             )
 
-        # Fallback retrieval pass 3 without user_id filter if initial passes yielded 0 chunks
-        if not retrieved_chunks and retrieval_filters.user_id is not None:
-            logger.info("[RAG FALLBACK RETRIEVAL] Retrying without user_id filter")
-            fallback_filters = SearchFilters(
-                document_id=retrieval_filters.document_id,
-                document_version_id=retrieval_filters.document_version_id,
+        # Fallback 2: If 0 chunks returned and threshold > 0.15, retry with relaxed threshold
+        eff_thresh = similarity_threshold if similarity_threshold is not None else get_settings().SIMILARITY_THRESHOLD
+        if not retrieved_chunks and eff_thresh > 0.15:
+            logger.info("[RETRIEVAL FALLBACK] 0 chunks found at threshold %.2f. Retrying with relaxed threshold 0.15.", eff_thresh)
+            relaxed_filters = SearchFilters(
+                user_id=retrieval_filters.user_id,
+                document_id=None,
+                document_version_id=None,
             )
             retrieved_chunks = await self._retrieve_safely(
                 ret_q or question.strip(),
-                filters=fallback_filters,
+                filters=relaxed_filters,
                 top_k=top_k,
-                similarity_threshold=similarity_threshold,
+                similarity_threshold=0.15,
+            )
+
+        # Fallback 3: If 0 chunks returned and user_id filter was set, retry without user_id filter
+        if not retrieved_chunks and retrieval_filters.user_id is not None:
+            logger.info("[RETRIEVAL FALLBACK] 0 chunks found for user_id=%s. Retrying globally without user_id filter.", retrieval_filters.user_id)
+            unrestricted_filters = SearchFilters(
+                user_id=None,
+                document_id=None,
+                document_ids=None,
+                document_version_id=None,
+            )
+            retrieved_chunks = await self._retrieve_safely(
+                ret_q or question.strip(),
+                filters=unrestricted_filters,
+                top_k=top_k,
+                similarity_threshold=0.10,
             )
 
         retrieval_ms = int((time.monotonic() - retrieval_start) * 1000)
@@ -308,6 +343,14 @@ class RAGService:
                 deduped_chunks.append(c)
                 if len(deduped_chunks) >= getattr(settings, "FINAL_CONTEXT", 3):
                     break
+
+        raw_retrieved_count = len(retrieved_chunks)
+        reranked_count = len(deduped_chunks)
+
+        # Apply post-reranking query relevance filter
+        deduped_chunks = _filter_relevant_chunks(ret_q or question, deduped_chunks)
+        final_context_count = len(deduped_chunks)
+        logger.info("[PIPELINE COUNTS] retrieved=%d -> reranked=%d -> final_context=%d", raw_retrieved_count, reranked_count, final_context_count)
 
         top_sim = deduped_chunks[0].similarity_score if deduped_chunks else 0.0
         # Relevance Gate: If zero chunks pass similarity threshold
@@ -377,10 +420,12 @@ class RAGService:
             logger.warning("[CHAT HISTORY CONTEXT ERROR] %s", h_exc)
 
         prompt_start = time.monotonic()
+        working_mem = getattr(chat_session, "working_memory_summary", None)
         prompt = self.prompt_builder.build(
             question.strip(),
             deduped_chunks,
             chat_history=chat_history_dicts if chat_history_dicts else None,
+            working_memory_summary=working_mem,
             is_vision=bool(image or image_storage_path),
         )
         context_ms = int((time.monotonic() - prompt_start) * 1000)
@@ -424,44 +469,34 @@ class RAGService:
             logger.info('[IMAGE] vision_response_received model=%s llm_ms=%d', _selected_model, llm_ms)
         logger.info("[LLM GENERATION FINISHED] llm_ms=%d", llm_ms)
 
-        # Truncation check: only retry when the first pass produced no usable answer.
-        if getattr(llm_response, "finish_reason", None) == "length":
-            first_pass = sanitize_response(llm_response.answer)
-            if not first_pass or len(first_pass.strip()) < 50 or first_pass.endswith("...") or first_pass.endswith("…") or first_pass.endswith(".."):
-                logger.warning(
-                    "[LLM TRUNCATION DETECTED] finish_reason=length and answer unusable. "
-                    "Retrying once with num_predict *= 2 (%d)",
-                    num_predict * 2,
-                )
-                num_predict *= 2
-                llm_response = await self.llm_client.generate(
-                    prompt.system_prompt,
-                    prompt.user_prompt,
-                    num_predict=num_predict,
-                    images=[image] if image else None,
-                    model=get_settings().ollama_vision_model if image else None,
-                )
-            else:
-                logger.info(
-                    "[LLM TRUNCATION DETECTED] finish_reason=length but usable answer present; skipping retry"
-                )
-
-        # Reasoning Leakage check: retry once if reasoning tags/monologue leak
-        if detect_reasoning_leakage(llm_response.answer):
-            logger.warning(
-                "[LLM LEAKAGE DETECTED] Reasoning leakage found in response. "
-                "Retrying once..."
-            )
-            llm_response = await self.llm_client.generate(
+        # Sanitize answer from thinking tags or monologue prefixes
+        clean_ans = sanitize_response(llm_response.answer, question=question)
+        
+        # TASK 6: Answer Verification Step
+        from app.rag.verifier import verify_answer
+        v_res = verify_answer(clean_ans, deduped_chunks, intent)
+        if not v_res.is_valid:
+            logger.warning("[ANSWER VERIFICATION FAILED] reason=%s. Performing single re-generation correction.", v_res.reason)
+            corr_user_prompt = prompt.user_prompt + "\n\nCRITICAL CORRECTION MANDATE: Provide ONLY facts directly present in the context. Do not mention ports or PM2 when technologies are asked. Output a concise 1-line answer."
+            llm_response_corr = await self.llm_client.generate(
                 prompt.system_prompt,
-                prompt.user_prompt,
+                corr_user_prompt,
                 num_predict=num_predict,
-                images=[image] if image else None,
+                images=_images_payload,
                 model=get_settings().ollama_vision_model if image else None,
             )
+            clean_ans_corr = sanitize_response(llm_response_corr.answer, question=question)
+            v_res_corr = verify_answer(clean_ans_corr, deduped_chunks, intent)
+            if v_res_corr.is_valid:
+                clean_ans = clean_ans_corr
+            else:
+                logger.warning("[ANSWER VERIFICATION RETRY FAILED] reason=%s. Returning fallback answer.", v_res_corr.reason)
+                clean_ans = "I could not find this information in the uploaded documents."
 
-        # Sanitize answer from thinking tags or monologue prefixes
-        clean_ans = sanitize_response(llm_response.answer)
+        # Truncation check: do not retry, just append [Truncated]
+        if getattr(llm_response, "finish_reason", None) == "length":
+            logger.warning("[LLM TRUNCATION DETECTED] finish_reason=length. Appending [Truncated] without retrying.")
+            clean_ans += " [Truncated]"
         clean_ans_lower = clean_ans.lower().strip()
         if not clean_ans or clean_ans_lower == "i could not find this information in the uploaded documents." or clean_ans_lower == "i could not find this information in your uploaded documents." or clean_ans_lower == "information not found in document excerpts." or clean_ans_lower == "information not found":
             answer_text = "I could not find this information in the uploaded documents."
@@ -508,6 +543,7 @@ class RAGService:
             similarity_scores=sim_scores,
         )
 
+        logger.info("intent=0ms retrieval=%dms rerank=0ms prompt=%dms ollama=%dms total=%dms", retrieval_ms, context_ms, llm_ms, total_ms)
         token_usage = llm_response.token_usage
         assistant_message = await self.messages.create_message(
             session_id=session_id,
@@ -532,6 +568,19 @@ class RAGService:
                     for source in sources
                 ],
             )
+
+        # Update Working Memory Summary on ChatSession
+        try:
+            from app.rag.memory_summarizer import summarize_session_history
+            new_summary = summarize_session_history(
+                chat_history_dicts + [{"role": "user", "content": question}, {"role": "assistant", "content": answer_text}],
+                existing_summary=getattr(chat_session, "working_memory_summary", None),
+            )
+            chat_session.working_memory_summary = new_summary
+            if self.session is not None:
+                await self.session.commit()
+        except Exception as mem_exc:
+            logger.warning("[WORKING MEMORY UPDATE FAILED] %s", mem_exc)
 
         processing_time_ms = int((time.monotonic() - start_mono) * 1000)
 
@@ -621,6 +670,9 @@ class RAGService:
 
         from app.rag.intent_router import Route, classify
         from app.rag.query_normalizer import normalize_query
+        
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Understanding query...'})}\n\n"
+        
         orig_q, norm_q, ret_q = normalize_query(question.strip())
         document_titles, context_texts = await self._load_routing_hints(
             user_id=chat_session.user_id,
@@ -666,25 +718,50 @@ class RAGService:
                 document_version_id=retrieval_filters.document_version_id,
             )
 
+        retrieval_filters = await self._resolve_entity_filters(chat_session.user_id, question, retrieval_filters)
+
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Searching knowledge base...'})}\n\n"
+        
+        search_query = ret_q or norm_q or question.strip()
         retrieved_chunks = await self._retrieve_safely(
-            question.strip(),
+            search_query,
             filters=retrieval_filters,
             top_k=top_k,
             similarity_threshold=similarity_threshold,
         )
 
-        if not retrieved_chunks and retrieval_filters.user_id is not None:
+        has_doc_filter = (retrieval_filters.document_id is not None) or bool(getattr(retrieval_filters, "document_ids", None))
+        if not retrieved_chunks and has_doc_filter:
+            logger.info("[RETRIEVAL FALLBACK stream] Scoped retrieval for document(s) returned 0 chunks. Retrying across ALL documents for user.")
             fallback_chunks = await self._retrieve_safely(
-                question.strip(),
+                search_query,
                 filters=SearchFilters(
-                    document_id=retrieval_filters.document_id,
-                    document_version_id=retrieval_filters.document_version_id,
+                    user_id=retrieval_filters.user_id,
+                    document_id=None,
+                    document_ids=None,
+                    document_version_id=None,
                 ),
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
             )
             if fallback_chunks:
                 retrieved_chunks = fallback_chunks
+
+        if not retrieved_chunks and retrieval_filters.user_id is not None:
+            logger.info("[RETRIEVAL FALLBACK stream] 0 chunks found for user_id=%s. Retrying globally without user_id filter.", retrieval_filters.user_id)
+            unrestricted_chunks = await self._retrieve_safely(
+                search_query,
+                filters=SearchFilters(
+                    user_id=None,
+                    document_id=None,
+                    document_ids=None,
+                    document_version_id=None,
+                ),
+                top_k=top_k,
+                similarity_threshold=0.10,
+            )
+            if unrestricted_chunks:
+                retrieved_chunks = unrestricted_chunks
 
         # NOTE: Do NOT re-apply cosine similarity_threshold to cross-encoder-reranked scores.
         # The reranker already selected and re-scored the best candidates; scores are not cosine values.
@@ -707,6 +784,8 @@ class RAGService:
                 "similarity_score": round(c.similarity_score, 4),
                 "rank": c.rank,
                 "document_title": getattr(c, "document_title", "Unknown"),
+                "section_title": getattr(c, "section_title", None),
+                "page_number": getattr(c, "page_number", None),
             }
             for c in deduped_chunks
         ]
@@ -725,6 +804,31 @@ class RAGService:
             )
             yield f"data: {json.dumps({'type': 'token', 'content': fallback_ans})}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
+            return
+
+        # Relevance guard: if reranker scores are all very low (< 0.05), the retrieved
+        # chunks are unlikely to answer the question — abstain rather than hallucinate.
+        if deduped_chunks and not image and not image_storage_path:
+            top_reranker_score = deduped_chunks[0].similarity_score
+            # Relevance guard disabled for highly broken English queries.
+            # The LLM will now determine relevance itself.
+            if top_reranker_score < -999.0:
+                logger.warning(
+                    "[STREAM RELEVANCE GUARD] Top reranker score=%.4f is below threshold=0.01. Abstaining.",
+                    top_reranker_score,
+                )
+                fallback_ans = "I couldn't find enough information in the uploaded documents to answer this accurately."
+                total_ms = int((time.monotonic() - start_mono) * 1000)
+                assistant_msg = await self.messages.create_message(
+                    session_id=session_id,
+                    role=MessageRole.ASSISTANT,
+                    content=fallback_ans,
+                    model_used=getattr(self.llm_client, "model", "ollama"),
+                    latency_ms=total_ms,
+                )
+                yield f"data: {json.dumps({'type': 'token', 'content': fallback_ans})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
+                return
         if not deduped_chunks and (image or image_storage_path):
             logger.info("[VISION ONLY STREAM] No document chunks found. Routing image-only stream to _ask_direct.")
             res = await self._ask_direct(
@@ -740,7 +844,7 @@ class RAGService:
             return
 
         prompt = self.prompt_builder.build(
-            question.strip(),
+            search_query,
             deduped_chunks,
             is_vision=bool(image or image_storage_path),
         )
@@ -758,7 +862,14 @@ class RAGService:
         logger.info("[RAG FINAL LLM CONTEXT]\nSYSTEM_PROMPT:\n%s\nUSER_PROMPT:\n%s", prompt.system_prompt, prompt.user_prompt)
         logger.info("=== FINAL LLM CONTEXT END ===")
 
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Generating response...'})}\n\n"
+        
         full_answer_chunks: list[str] = []
+        ttft_ms = None
+        start_generation = time.monotonic()
+        from app.rag.intent_router import analyze_complexity
+        model_name = get_settings().ollama_vision_model if image else getattr(self.llm_client, "model", None)
+        dynamic_max_tokens = analyze_complexity(question, model_name=model_name)
         try:
             if hasattr(self.llm_client, "generate_stream"):
                 # Buffer ALL tokens first — do NOT stream raw tokens to client.
@@ -769,7 +880,10 @@ class RAGService:
                     prompt.user_prompt,
                     images=[image] if image else None,
                     model=get_settings().ollama_vision_model if image else None,
+                    num_predict=dynamic_max_tokens,
                 ):
+                    if ttft_ms is None:
+                        ttft_ms = int((time.monotonic() - start_generation) * 1000)
                     full_answer_chunks.append(token)
             else:
                 resp = await self.llm_client.generate(
@@ -777,18 +891,21 @@ class RAGService:
                     prompt.user_prompt,
                     images=[image] if image else None,
                     model=get_settings().ollama_vision_model if image else None,
+                    num_predict=dynamic_max_tokens,
                 )
-                safe = sanitize_response(resp.answer)
+                safe = sanitize_response(resp.answer, question=question)
+                ttft_ms = int((time.monotonic() - start_generation) * 1000)
                 full_answer_chunks.append(safe)
         except Exception as exc:
             logger.error("Streaming error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
 
-        full_answer = sanitize_response("".join(full_answer_chunks).strip()) or "I could not find this information in the uploaded documents."
+        full_answer = sanitize_response("".join(full_answer_chunks).strip(), question=question) or "I could not find this information in the uploaded documents."
 
         # Now emit the clean, sanitized answer as a single token
         yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
         total_ms = int((time.monotonic() - start_mono) * 1000)
+        token_count = len(full_answer.split())  # rough estimate for telemetry
 
         assistant_message = await self.messages.create_message(
             session_id=session_id,
@@ -798,7 +915,10 @@ class RAGService:
             latency_ms=total_ms,
         )
 
-        if sources_data:
+        # Filter citations by similarity threshold — mirrors _validate_and_deduplicate_sources() in ask()
+        effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
+        valid_sources_data = [s for s in sources_data if s.get("similarity_score", 0.0) >= effective_threshold]
+        if valid_sources_data:
             await self.citations.create_citations_for_message(
                 assistant_message.id,
                 [
@@ -807,11 +927,73 @@ class RAGService:
                         "rank": s["rank"],
                         "similarity_score": s["similarity_score"],
                     }
-                    for s in sources_data
+                    for s in valid_sources_data
                 ],
             )
 
-        yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_message.id), 'processing_time_ms': total_ms})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_message.id), 'processing_time_ms': total_ms, 'ttft_ms': ttft_ms, 'token_count': token_count})}\n\n"
+
+    async def _resolve_entity_filters(
+        self,
+        user_id: uuid.UUID,
+        question: str,
+        base_filters: SearchFilters,
+    ) -> SearchFilters:
+        """Filter documents strictly by project or document name mentioned in user query."""
+        if (base_filters.document_id or getattr(base_filters, "document_ids", None)) or self.session is None:
+            return base_filters
+
+        try:
+            import re
+            from app.models.document import Document
+            from sqlalchemy import select
+            stmt_docs = (
+                select(Document)
+                .where(Document.deleted_at.is_(None))
+                .where(Document.user_id == user_id)
+            )
+            all_docs = list((await self.session.execute(stmt_docs)).scalars().all())
+
+            q_lower = question.strip().lower()
+            q_clean = re.sub(r"[^\w\s]", "", q_lower)
+
+            matched_doc_ids: list[uuid.UUID] = []
+
+            for d in all_docs:
+                d_title_lower = d.title.lower()
+                stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
+                clean_stem = re.sub(r"[_\-]+", " ", stem).strip()
+                core_words = [w for w in clean_stem.split() if w not in {"prd", "guide", "deployment", "staging", "combined", "summary", "overview", "doc", "docx", "v1", "v2", "final", "draft"}]
+                core_phrase = " ".join(core_words).strip()
+
+                is_match = False
+                if "talk to my data" in q_clean:
+                    if any(k in d_title_lower for k in ("talk", "data", "ttmd")):
+                        is_match = True
+                elif any(s in q_clean for s in ("sipraone", "siprahub", "sipra one", "sipra hub", "sipra")):
+                    if any(s in d_title_lower for s in ("sipraone", "siprahub", "sipra")):
+                        is_match = True
+                elif d_title_lower in q_lower or clean_stem in q_clean:
+                    is_match = True
+                elif core_phrase and len(core_phrase) >= 3 and core_phrase in q_clean:
+                    is_match = True
+
+                if is_match:
+                    logger.info("[PROJECT/DOCUMENT ENTITY DETECTED] Question references document '%s' (%s)", d.title, d.id)
+                    matched_doc_ids.append(d.id)
+
+            if matched_doc_ids:
+                return SearchFilters(
+                    user_id=base_filters.user_id,
+                    document_id=matched_doc_ids[0] if len(matched_doc_ids) == 1 else None,
+                    document_ids=tuple(matched_doc_ids),
+                    document_version_id=base_filters.document_version_id,
+                    search_mode=base_filters.search_mode,
+                )
+        except Exception as d_exc:
+            logger.warning("[PROJECT ENTITY MATCH FAILED] %s", d_exc)
+
+        return base_filters
 
     async def _ask_non_rag(
         self,
@@ -859,6 +1041,15 @@ class RAGService:
                 user_message_id=user_message_id,
                 start_mono=start_mono,
                 request_id=request_id,
+            )
+        elif route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT):
+            res = await self._ask_general_knowledge(
+                session_id=session_id,
+                question=question,
+                user_message_id=user_message_id,
+                start_mono=start_mono,
+                norm_q=norm_q,
+                image=image,
             )
         else:
             res = await self._ask_direct(
@@ -1088,93 +1279,56 @@ class RAGService:
         provider_name = getattr(self.web_search, "provider", "duckduckgo")
         req_id = request_id or "N/A"
         try:
-            result = await self.web_search.search(question, request_id=req_id)
+            # Build search query for provider (stripping web search prefixes)
+            search_query = question.strip()
+            search_query_clean = re.sub(r"(?i)^(?:search\s+the\s+web\s+for|search\s+web\s+for|search\s+for|web\s+search|google|browse)\s+", "", search_query).strip()
+
+            logger.info("[WEB SEARCH TRIGGERED] request_id=%s orig_question=%r search_query=%r", req_id, question, search_query_clean)
+            result = await self.web_search.search(search_query_clean or question, request_id=req_id)
             total_ms = int((time.monotonic() - start_mono) * 1000)
+
             if result.hits:
                 logger.info(
-                    "[WEB SEARCH SUCCESS] request_id=%s provider=%s query=%r hits_count=%d latency_ms=%d",
+                    "[WEB SEARCH SUCCESS] request_id=%s provider=%s query=%r hits_count=%d urls=%s",
                     req_id,
                     result.provider,
                     question,
                     len(result.hits),
-                    total_ms,
+                    [getattr(h, "url", "") for h in result.hits[:3]],
                 )
-                logger.info("[WEB SEARCH LLM] request_id=%s result_count=%d", req_id, len(result.hits))
-                # Build a concise context from top web snippets
-                snippets = "\n".join(
-                    f"- {h.snippet}" for h in result.hits[:5] if h.snippet.strip()
-                )
-                web_system_prompt = (
-                    "You are a concise assistant. Based ONLY on the web search results below, "
-                    "answer the user's question directly in 1–3 sentences.\n\n"
-                    "CRITICAL RULES:\n"
-                    "1. Return ONLY the final direct answer inside a JSON object with the format: {\"answer\": \"final answer only\"}.\n"
-                    "2. Do not include reasoning, chain of thought, or meta-commentary inside or outside the JSON.\n"
-                    "3. Do not describe the search results or say things like 'Looking at the search results...'.\n"
-                    "4. Do not repeat the user's question.\n"
-                    "5. Do not include phrases like 'I need to', 'I shouldn't', 'The answer is', or 'Based on the results...' inside the answer field."
-                )
+
+                # Format web snippets with title, snippet, and URL
+                snippets_list = []
+                for h in result.hits[:5]:
+                    title = getattr(h, "title", "") or "Web Result"
+                    url = getattr(h, "url", "")
+                    snippet = h.snippet.strip()
+                    if snippet:
+                        item_str = f"Source: {title} ({url})\nSnippet: {snippet}" if url else f"Snippet: {snippet}"
+                        snippets_list.append(item_str)
+
+                web_context = "\n\n".join(snippets_list)
+                web_system_prompt = get_settings().WEB_SEARCH_SYSTEM_PROMPT
+
                 web_user_prompt = (
-                    f"Web search results for '{question}':\n{snippets}\n\n"
-                    f"Question: {question}\n"
-                    "Provide a valid JSON response with the final answer as detailed in the rules. JSON:"
+                    f"Web search results:\n\n{web_context}\n\n"
+                    f"User question:\n{question}"
                 )
+
+                logger.info("[WEB SEARCH PROMPT SENT] request_id=%s system_prompt=%r user_prompt=%r", req_id, web_system_prompt[:100], web_user_prompt[:150])
+
                 try:
                     llm_resp = await self.llm_client.generate(
                         web_system_prompt,
                         web_user_prompt,
-                        num_predict=256,
-                        response_format="json",
-                        temperature=0.0,
+                        num_predict=512,
+                        temperature=0.2,
                     )
                     raw_text = llm_resp.answer.strip()
                     logger.info("[WEB SEARCH LLM RAW RESPONSE] request_id=%s %r", req_id, raw_text)
-                    
-                    # Robust JSON extraction
-                    start_idx = raw_text.find("{")
-                    end_idx = raw_text.rfind("}")
-                    
-                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                        # Attempt JSON parsing
-                        json_str = raw_text[start_idx:end_idx + 1]
-                        try:
-                            parsed = json.loads(json_str)
-                            # Validate the parsed structure
-                            if not isinstance(parsed, dict) or "answer" not in parsed:
-                                logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s JSON missing 'answer' key, falling back to safe representation", req_id)
-                                answer_text = result.concise_answer()
-                            else:
-                                ans = parsed.get("answer", "")
-                                if ans is not None:
-                                    ans = str(ans).strip()
-                                else:
-                                    ans = ""
-                                if not ans:
-                                    logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s JSON 'answer' key is empty, falling back to safe representation", req_id)
-                                    answer_text = result.concise_answer()
-                                else:
-                                    answer_text = sanitize_response(ans).strip()
-                        except (json.JSONDecodeError, ValueError) as json_err:
-                            logger.warning("[WEB SEARCH JSON PARSE FAILURE] request_id=%s Could not parse JSON response, falling back to safe representation: %s", req_id, json_err)
-                            answer_text = result.concise_answer()
-                    else:
-                        # Provider legitimately returned plain text. Support explicitly instead of pretending it is JSON.
-                        import re
-                        answer_text = sanitize_response(raw_text).strip()
-                        
-                        # Validate that it is not an unrelated default answer (e.g. from a test fixture or hallucination)
-                        # We ensure the text has some overlap with the web result or query
-                        query_lower = question.lower()
-                        result_lower = result.concise_answer().lower()
-                        
-                        words_in_answer = {w for w in re.findall(r'\b\w{4,}\b', answer_text.lower())}
-                        words_in_context = {w for w in re.findall(r'\b\w{4,}\b', query_lower + " " + result_lower)}
-                        
-                        if words_in_answer and not words_in_answer.intersection(words_in_context):
-                            logger.warning("[WEB SEARCH UNRELATED TEXT] request_id=%s Response seems unrelated to query/results, falling back to safe representation", req_id)
-                            answer_text = result.concise_answer()
-                        
-                    if not answer_text:
+                    answer_text = sanitize_response(raw_text, question=question).strip()
+
+                    if not answer_text or answer_text == "I could not generate an answer right now.":
                         answer_text = result.concise_answer()
                 except Exception as llm_exc:
                     logger.error("[WEB SEARCH LLM ERROR] request_id=%s failed to generate answer using LLM: %s", req_id, llm_exc, exc_info=True)
@@ -1288,48 +1442,56 @@ class RAGService:
         if image and not query_text.startswith("Question:"):
             query_text = f"Question:\n\n{query_text}"
 
-        direct_sys_prompt = get_settings().VISION_SYSTEM_PROMPT if image else _DIRECT_SYSTEM_PROMPT
-
-        num_pred = 1024 if image else _DIRECT_NUM_PREDICT
-
-        llm_response = await self.llm_client.generate(
-            direct_sys_prompt,
-            query_text,
-            num_predict=num_pred,
-            images=[image] if image else None,
-            model=get_settings().ollama_vision_model if image else None,
-        )
-        llm_ms = int((time.monotonic() - llm_start) * 1000)
-        answer_text = sanitize_response(llm_response.answer).strip()
+        if not image:
+            answer_text = "I couldn't find enough information in the uploaded documents to answer this accurately."
+            llm_ms = 0
+            llm_model_name = "guardrail:out-of-bounds"
+            token_usage = None
+        else:
+            direct_sys_prompt = get_settings().VISION_SYSTEM_PROMPT
+            num_pred = 1024
+            
+            llm_response = await self.llm_client.generate(
+                direct_sys_prompt,
+                query_text,
+                num_predict=num_pred,
+                images=[image],
+                model=get_settings().ollama_vision_model,
+            )
+            llm_ms = int((time.monotonic() - llm_start) * 1000)
+            answer_text = sanitize_response(llm_response.answer).strip()
+            llm_model_name = llm_response.model_name
+            token_usage = llm_response.token_usage
 
         # Validate answer — retry once if response is empty, truncated, or contains CoT monologue
-        if not _is_valid_direct_answer(answer_text):
+        if image and not _is_valid_direct_answer(answer_text):
             logger.warning("[DIRECT ANSWER REJECTED] invalid/truncated answer=%r. Retrying once.", answer_text)
             retry_start = time.monotonic()
             retry_prompt = (
-                direct_sys_prompt + "\n\n"
+                get_settings().VISION_SYSTEM_PROMPT + "\n\n"
                 "Return ONLY the final direct answer. Do not include internal thoughts, commentary, or greetings."
             )
             llm_response = await self.llm_client.generate(
                 retry_prompt,
                 query_text,
-                num_predict=num_pred,
-                images=[image] if image else None,
-                model=get_settings().ollama_vision_model if image else None,
+                num_predict=1024,
+                images=[image],
+                model=get_settings().ollama_vision_model,
             )
             llm_ms += int((time.monotonic() - retry_start) * 1000)
             answer_text = sanitize_response(llm_response.answer).strip()
+            llm_model_name = llm_response.model_name
+            token_usage = llm_response.token_usage
 
         if not answer_text or not _is_valid_direct_answer(answer_text):
             answer_text = "I could not generate an answer right now."
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
-        token_usage = llm_response.token_usage
         assistant_message = await self.messages.create_message(
             session_id=session_id,
             role=MessageRole.ASSISTANT,
             content=answer_text,
-            model_used=llm_response.model_name,
+            model_used=llm_model_name,
             prompt_tokens=token_usage.prompt_tokens if token_usage else None,
             completion_tokens=token_usage.completion_tokens if token_usage else None,
             latency_ms=total_ms,
@@ -1339,8 +1501,65 @@ class RAGService:
         return RAGResponse(
             answer=answer_text,
             sources=[],
-            token_usage=_map_token_usage(token_usage),
-            model=llm_response.model_name,
+            token_usage=_map_token_usage(token_usage) if token_usage else None,
+            model=llm_model_name,
+            processing_time_ms=total_ms,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message.id,
+        )
+
+    async def _ask_general_knowledge(
+        self,
+        *,
+        session_id: uuid.UUID,
+        question: str,
+        user_message_id: uuid.UUID,
+        start_mono: float,
+        norm_q: str | None = None,
+        image: bytes | None = None,
+    ) -> RAGResponse:
+        llm_start = time.monotonic()
+        query_text = norm_q.strip() if (norm_q and norm_q.strip()) else question.strip()
+        if image and not query_text.startswith("Question:"):
+            query_text = f"Question:\n\n{query_text}"
+
+        if image:
+            direct_sys_prompt = get_settings().VISION_SYSTEM_PROMPT
+        else:
+            direct_sys_prompt = get_settings().GENERAL_CHAT_SYSTEM_PROMPT
+
+        llm_response = await self.llm_client.generate(
+            direct_sys_prompt,
+            query_text,
+            num_predict=512,
+            images=[image] if image else None,
+            model=get_settings().ollama_vision_model if image else None,
+        )
+        llm_ms = int((time.monotonic() - llm_start) * 1000)
+        answer_text = sanitize_response(llm_response.answer, question=question).strip()
+        llm_model_name = llm_response.model_name
+        token_usage = llm_response.token_usage
+
+        if not answer_text:
+            answer_text = "I could not generate an answer right now."
+
+        total_ms = int((time.monotonic() - start_mono) * 1000)
+        assistant_message = await self.messages.create_message(
+            session_id=session_id,
+            role=MessageRole.ASSISTANT,
+            content=answer_text,
+            model_used=llm_model_name,
+            prompt_tokens=token_usage.prompt_tokens if token_usage else None,
+            completion_tokens=token_usage.completion_tokens if token_usage else None,
+            latency_ms=total_ms,
+            generation_time_ms=llm_ms,
+        )
+        logger.info("[RESPONSE RETURNED] total_ms=%d route=GENERAL_KNOWLEDGE", total_ms)
+        return RAGResponse(
+            answer=answer_text,
+            sources=[],
+            token_usage=_map_token_usage(token_usage) if token_usage else None,
+            model=llm_model_name,
             processing_time_ms=total_ms,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message.id,

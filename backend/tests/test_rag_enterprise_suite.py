@@ -145,8 +145,8 @@ async def test_reasoning_leakage_detection():
 
 
 @pytest.mark.asyncio
-async def test_reasoning_leakage_discard_and_retry():
-    """Verify that if LLM emits reasoning tags, response is discarded and retried ONCE."""
+async def test_reasoning_leakage_discard_and_sanitized():
+    """Verify that if LLM emits reasoning tags, response is sanitized but NOT retried."""
     session = AsyncMock(spec=AsyncSession)
     retriever = AsyncMock()
     chunk_id = uuid.uuid4()
@@ -167,16 +167,11 @@ async def test_reasoning_leakage_discard_and_retry():
     llm_client = AsyncMock()
     llm_client.model = "qwen3:4b"
 
-    # First call returns tagged reasoning; second call returns clean factual answer
     bad_response = LLMResponse(
-        answer="<think>The user asks about annual leave.</think>I will check the excerpt...",
+        answer="<think>The user asks about annual leave.</think>I will check the excerpt... The annual leave policy allows 20 days per year.",
         model_name="qwen3:4b",
     )
-    good_response = LLMResponse(
-        answer="The annual leave allowance is 20 days per year.",
-        model_name="qwen3:4b",
-    )
-    llm_client.generate.side_effect = [bad_response, good_response]
+    llm_client.generate.return_value = bad_response
 
     messages = AsyncMock()
     user_msg = MagicMock(id=uuid.uuid4())
@@ -201,15 +196,16 @@ async def test_reasoning_leakage_discard_and_retry():
         "According to my documents, what is the annual leave allowance?",
     )
 
-    # LLM should have been called twice (1st discarded, 2nd accepted)
-    assert llm_client.generate.call_count == 2
+    # LLM should be called exactly once
+    assert llm_client.generate.call_count == 1
     assert "20 days per year" in response.answer
+    assert "I will check the excerpt" not in response.answer
     assert "<think>" not in response.answer
 
 
 @pytest.mark.asyncio
-async def test_truncation_done_reason_length_retry():
-    """Verify that finish_reason == 'length' triggers automatic num_predict doubling retry."""
+async def test_truncation_done_reason_length_appends_truncated():
+    """Verify that finish_reason == 'length' appends [Truncated] without retry."""
     session = AsyncMock(spec=AsyncSession)
     retriever = AsyncMock()
     retriever.retrieve.return_value = [
@@ -228,16 +224,11 @@ async def test_truncation_done_reason_length_retry():
     llm_client.model = "qwen3:4b"
 
     truncated_response = LLMResponse(
-        answer="The company policy regarding...",
+        answer="The company policy regarding",
         model_name="qwen3:4b",
         finish_reason="length",
     )
-    full_response = LLMResponse(
-        answer="The company policy regarding remote work specifies 2 days WFH.",
-        model_name="qwen3:4b",
-        finish_reason="stop",
-    )
-    llm_client.generate.side_effect = [truncated_response, full_response]
+    llm_client.generate.return_value = truncated_response
 
     messages = AsyncMock()
     messages.create_message.side_effect = [MagicMock(id=uuid.uuid4()), MagicMock(id=uuid.uuid4())]
@@ -260,11 +251,8 @@ async def test_truncation_done_reason_length_retry():
         "According to my documents, what is the WFH policy?",
     )
 
-    assert llm_client.generate.call_count == 2
-    # Verify num_predict was doubled on 2nd call
-    second_call_kwargs = llm_client.generate.call_args_list[1].kwargs
-    assert second_call_kwargs.get("num_predict") == 2048
-    assert "remote work specifies 2 days WFH" in response.answer
+    assert llm_client.generate.call_count == 1
+    assert "[Truncated]" in response.answer
 
 
 @pytest.mark.asyncio

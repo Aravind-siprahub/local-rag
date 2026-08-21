@@ -123,6 +123,14 @@ export const chatRequestStore = {
     notify()
   },
 
+  abortRequest(conversationId: string): void {
+    const current = conversations.get(conversationId)
+    if (current && current.status === 'loading' && current.abortController) {
+      current.abortController.abort()
+      this.completeRequest(conversationId, current.requestId!, 'cancelled', 'Request stopped by user.')
+    }
+  },
+
   async runRequest<T>(
     conversationId: string,
     task: (

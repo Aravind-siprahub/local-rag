@@ -32,7 +32,7 @@ export function AppSidebar() {
   }
 
   return (
-    <aside className="glass-panel flex h-full w-full flex-col gap-5 p-4 lg:w-64">
+    <aside className="glass-panel flex h-full w-full flex-col gap-5 p-4 lg:w-56">
       <div className="px-2 pt-1">
         <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-primary/80">
           Local RAG
