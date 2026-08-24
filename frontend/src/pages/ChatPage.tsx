@@ -48,7 +48,7 @@ function setOverlay(id: string, state: ConversationOverlayState) {
 export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<string>('qwen3:4b')
+  const [selectedModel, setSelectedModel] = useState<string>('qwen3:8b')
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [, setOverlayVersion] = useState(0)
   const queryClient = useQueryClient()

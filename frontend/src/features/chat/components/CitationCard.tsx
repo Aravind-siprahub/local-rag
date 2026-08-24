@@ -16,7 +16,7 @@ export function CitationCard({ citation }: CitationCardProps) {
   ].filter(Boolean).join(" • ")
 
   return (
-    <div className="group mt-2 border border-border/60 rounded-xl p-3 bg-card/50 text-card-foreground text-sm flex flex-col gap-2.5 shadow-xs transition-all duration-200 hover:border-primary/30 hover:bg-primary/[0.02]">
+    <div className="group mt-2 border border-border/60 rounded-xl p-3 bg-card/50 text-card-foreground text-sm flex flex-col gap-2.5 shadow-xs transition-all duration-200 hover:border-primary/30 hover:bg-primary/2">
       <div 
         className="flex items-start justify-between gap-3 cursor-pointer select-none"
         onClick={() => setExpanded(!expanded)}
@@ -26,7 +26,7 @@ export function CitationCard({ citation }: CitationCardProps) {
             <FileText className="w-3.5 h-3.5" />
           </div>
           <div className="flex flex-col min-w-0">
-            <span className="truncate max-w-[200px] sm:max-w-[250px] font-medium text-foreground text-[13px] leading-tight">
+            <span className="truncate max-w-50 sm:max-w-62.5 font-medium text-foreground text-[13px] leading-tight">
               {docTitle}
             </span>
             {locationInfo && (
@@ -53,7 +53,7 @@ export function CitationCard({ citation }: CitationCardProps) {
       <div 
         className={cn(
           "text-muted-foreground/90 text-xs italic border-l-[3px] border-primary/20 pl-3 py-1 transition-all duration-200 overflow-hidden",
-          expanded ? "max-h-[500px]" : "max-h-[60px] line-clamp-3"
+          expanded ? "max-h-125" : "max-h-15 line-clamp-3"
         )}
       >
         "{citation.chunk_text}"

@@ -67,10 +67,10 @@ async def test_combines_frontend_backend_info():
     retriever.retrieve.return_value = [frontend_chunk, backend_chunk] + noise_chunks
 
     llm_client = AsyncMock()
-    llm_client.model = "qwen3:4b"
+    llm_client.model = "qwen3:8b"
     llm_client.generate.return_value = LLMResponse(
         answer="Talk to My Data uses a chat interface for the frontend and FastAPI for the backend.",
-        model_name="qwen3:4b",
+        model_name="qwen3:8b",
         token_usage=TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
     )
 

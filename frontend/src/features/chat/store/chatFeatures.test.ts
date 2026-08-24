@@ -96,14 +96,14 @@ describe('Chat Features & Model Selection Rules', () => {
     assert.equal(correspondingUserMsg?.content, 'What is local RAG?')
   })
 
-  it('6. Model Selector: exposes qwen3:4b and qwen3-vl:4b', () => {
+  it('6. Model Selector: exposes qwen3:8b and qwen3-vl:4b', () => {
     const modelIds = AVAILABLE_MODELS.map((m: any) => m.id)
-    assert.ok(modelIds.includes('qwen3:4b'))
+    assert.ok(modelIds.includes('qwen3:8b'))
     assert.ok(modelIds.includes('qwen3-vl:4b'))
   })
 
   it('7. Available Models display text vs vision badges', () => {
-    const textModel = AVAILABLE_MODELS.find((m: any) => m.id === 'qwen3:4b')
+    const textModel = AVAILABLE_MODELS.find((m: any) => m.id === 'qwen3:8b')
     const visionModel = AVAILABLE_MODELS.find((m: any) => m.id === 'qwen3-vl:4b')
 
     assert.equal(textModel?.type, 'text')
@@ -112,18 +112,18 @@ describe('Chat Features & Model Selection Rules', () => {
 
   it('8. Image automatically selects/uses vision model qwen3-vl:4b', () => {
     const hasImageAttached = true
-    const selectedModel = 'qwen3:4b' // user selected text model
+    const selectedModel = 'qwen3:8b' // user selected text model
 
     const effectiveModel = hasImageAttached ? 'qwen3-vl:4b' : selectedModel
     assert.equal(effectiveModel, 'qwen3-vl:4b')
   })
 
-  it('9. Text uses default selected model qwen3:4b', () => {
+  it('9. Text uses default selected model qwen3:8b', () => {
     const hasImageAttached = false
-    const selectedModel = 'qwen3:4b'
+    const selectedModel = 'qwen3:8b'
 
     const effectiveModel = hasImageAttached ? 'qwen3-vl:4b' : selectedModel
-    assert.equal(effectiveModel, 'qwen3:4b')
+    assert.equal(effectiveModel, 'qwen3:8b')
   })
 
   it('10. Responsive action buttons: ensures Edit and Regenerate actions exist on messages', () => {

@@ -110,7 +110,7 @@ class Settings(BaseSettings):
 
     # --- Chat LLM (Ollama) ----------------------------------------------------
     # Prefer OLLAMA_MODEL when set; CHAT_MODEL remains the documented default.
-    CHAT_MODEL: str = "qwen3:4b"
+    CHAT_MODEL: str = "qwen3:8b"
     OLLAMA_MODEL: str | None = None
     OLLAMA_VISION_MODEL: str = "qwen3-vl:4b"
     # When False, requests send options.num_gpu=0 (CPU). When True, Ollama may
@@ -127,6 +127,17 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     LLM_TEMPERATURE: float = 0.0
     OLLAMA_NUM_PREDICT: int = 150
+
+    # --- Agentic AI Architecture & Model Router Settings ---------------------
+    MODEL_ROUTER_CLASSIFY: str = "qwen3:4b"
+    MODEL_QUERY_REWRITE: str = "qwen3:4b"
+    MODEL_RAG_REASONING: str = "qwen3:8b"
+    MODEL_COMPLEX_REASONING: str = "qwen3:8b"
+    MODEL_FINAL_ANSWER: str = "qwen3:8b"
+
+    AGENT_MAX_ITERATIONS: int = 4
+    AGENT_TIMEOUT_SECONDS: float = 60.0
+    STRICT_RELEVANCE_GATE_THRESHOLD: float = 0.30
 
     # --- Agent router / web search --------------------------------------------
     WEB_SEARCH_PROVIDER: str = "duckduckgo"

@@ -13,6 +13,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 
+import asyncio
+import sys
+
+if sys.platform == "win32" and sys.version_info < (3, 14):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore  # noqa
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 

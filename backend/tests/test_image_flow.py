@@ -168,4 +168,4 @@ class TestImageFlowVerification:
         sys_prompt, user_prompt, imgs, model = llm.calls[0]
         assert sys_prompt == get_settings().SYSTEM_PROMPT
         assert imgs is None
-        assert get_settings().ollama_chat_model == "qwen3:4b"
+        assert get_settings().ollama_chat_model == "qwen3:8b"

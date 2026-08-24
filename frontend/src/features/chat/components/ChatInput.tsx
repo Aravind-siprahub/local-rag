@@ -236,7 +236,7 @@ export function ChatInput({
             }
             disabled={disabled}
             className={cn(
-              'flex-1 min-h-[44px] max-h-56 w-full resize-none bg-transparent px-3 py-3 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/50',
+              'flex-1 min-h-11 max-h-56 w-full resize-none bg-transparent px-3 py-3 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/50',
               'scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent',
             )}
             rows={1}

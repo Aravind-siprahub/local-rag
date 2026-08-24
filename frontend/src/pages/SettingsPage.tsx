@@ -30,7 +30,7 @@ export function SettingsPage() {
 
   // Production level defaults
   const DEFAULTS = {
-    chatModel: 'qwen3:4b',
+    chatModel: 'qwen3:8b',
     temperature: '0.20',
     maxContextTokens: '6000',
     llmTimeout: '300.0',

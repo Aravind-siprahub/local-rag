@@ -7,8 +7,8 @@ export interface ModelOption {
 
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
-    id: 'qwen3:4b',
-    name: 'qwen3:4b',
+    id: 'qwen3:8b',
+    name: 'qwen3:8b',
     description: 'Text and Document RAG',
     type: 'text',
   },

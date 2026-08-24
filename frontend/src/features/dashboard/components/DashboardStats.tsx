@@ -41,7 +41,7 @@ export function DashboardStats({ stats, isLoading }: DashboardStatsProps) {
 
       <div className="flex-1 p-5 flex flex-col gap-1">
         <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <CheckCircle2Icon className="size-4 text-[hsl(var(--success))]" />
+          <CheckCircle2Icon className="size-4 text-success" />
           Ready
         </div>
         <div className="text-3xl font-semibold tracking-tight">{ready}</div>
@@ -52,7 +52,7 @@ export function DashboardStats({ stats, isLoading }: DashboardStatsProps) {
 
       <div className="flex-1 p-5 flex flex-col gap-1">
         <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <LoaderCircleIcon className="size-4 text-[hsl(var(--warning))]" />
+          <LoaderCircleIcon className="size-4 text-warning" />
           Processing
         </div>
         <div className="text-3xl font-semibold tracking-tight">{processing}</div>

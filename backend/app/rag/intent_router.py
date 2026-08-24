@@ -234,7 +234,8 @@ _DOC_LIST_REGEX = re.compile(
 
 # Document metadata cues
 _DOC_METADATA_KEYWORDS = (
-    "when was",
+    "when was file",
+    "when was document",
     "when this file",
     "when document",
     "upload date",
@@ -243,9 +244,12 @@ _DOC_METADATA_KEYWORDS = (
     "file size",
     "size of document",
     "who uploaded",
-    "version of",
-    "when was file",
-    "when was document",
+    "version of file",
+    "version of document",
+    "version of the document",
+    "version of the file",
+    "document version",
+    "file version",
 )
 
 

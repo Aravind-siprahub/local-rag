@@ -79,7 +79,7 @@ export function ChatSidebar({
                 <div className="flex items-center min-w-0 overflow-hidden pr-6">
                   <MessageSquare className="w-3.5 h-3.5 mr-2.5 shrink-0 opacity-40 group-hover:opacity-75 transition-opacity" />
                   <div className="flex flex-col truncate">
-                    <span className="text-xs truncate max-w-[155px] text-foreground/90">{conv.title}</span>
+                    <span className="text-xs truncate max-w-38.75 text-foreground/90">{conv.title}</span>
                     {conv.last_message_at && (
                       <span className="text-[9px] text-muted-foreground/50 mt-0.5">
                         {formatDistanceToNow(new Date(conv.last_message_at), { addSuffix: true })}
