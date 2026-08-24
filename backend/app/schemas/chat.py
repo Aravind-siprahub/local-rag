@@ -16,6 +16,15 @@ class ChatDocumentFilters(BaseModel):
     document_version_id: OptionalUUID = None
 
 
+class ChatAttachment(BaseModel):
+    id: str | None = None
+    filename: str
+    mime_type: str
+    size: int | None = None
+    url: str | None = None
+    document_id: OptionalUUID = None
+
+
 class ChatRequest(BaseModel):
     """POST /chat body."""
 
@@ -43,6 +52,7 @@ class ChatRequest(BaseModel):
     document_version_id: OptionalUUID = None
     top_k: Annotated[int, Field(ge=1, le=100)] | None = None
     similarity_threshold: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
+    attachments: list[ChatAttachment] | None = None
 
     model_config = ConfigDict(json_schema_extra={"example": CHAT_REQUEST_OPENAPI_EXAMPLE})
 

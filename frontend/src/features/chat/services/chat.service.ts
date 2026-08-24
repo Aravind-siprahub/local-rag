@@ -143,7 +143,17 @@ export const chatService = {
       body = formData
     } else {
       headers['Content-Type'] = 'application/json'
-      body = JSON.stringify(payload)
+      const jsonPayload = {
+        ...payload,
+        attachments: payload.attachments?.map((a) => ({
+          id: a.id,
+          filename: a.filename,
+          mime_type: a.mime_type,
+          size: a.size,
+          document_id: a.document_id,
+        })),
+      }
+      body = JSON.stringify(jsonPayload)
     }
 
     try {

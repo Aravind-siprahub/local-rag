@@ -13,16 +13,19 @@ USER_PROMPT_WITH_CONTEXT = (
     "{context}\n\n"
     "{question_header} {question}\n\n"
     "CRITICAL RULES FOR YOUR RESPONSE:\n"
-    "1. Give ONLY the direct factual answer immediately (e.g. \"Frontend: React, Backend: FastAPI\").\n"
+    "1. Give a direct, factual, and complete response based strictly on the provided context.\n"
     "2. Do NOT list documents, section numbers, or page numbers.\n"
     "3. Do NOT output self-talk, reasoning, or phrases like 'Let's write', 'We are to be', 'Note that', or 'The key is'.\n"
-    "4. If information is not found in the context, reply ONLY: \"The requested information is not found in the documents.\"\n"
+    "4. If the answer is not in the above context, say: \"The requested information is not found in the documents.\"\n"
 )
 
 USER_PROMPT_WITHOUT_CONTEXT = (
+    "Retrieved Document Context:\n\n"
+    "No document excerpts were available.\n\n"
     "Question:\n\n{question}\n\n"
-    "---------------------------------\n\n"
-    "Retrieved Document Context\n\nNo document excerpts were available."
+    "Note: No document context was retrieved for this query.\n"
+    "If the question is a general knowledge question, greeting, current date/time query, or calculation, answer it directly and accurately. "
+    "Only if the question specifically asks for information from an uploaded document that is missing, reply that the requested document information was not found."
 )
 
 

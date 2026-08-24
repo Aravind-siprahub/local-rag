@@ -1,8 +1,10 @@
-"""Unified chat API — RAG Q&A and session transcript access."""
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status, Request
+
+logger = logging.getLogger(__name__)
 
 from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_current_user, get_rag_service
 from app.api.security import verify_ownership
@@ -76,6 +78,7 @@ async def ask_chat(
     image_mime: str | None = None
     image_size: int | None = None
     image_storage_path: str | None = None
+    attachments_meta: list[dict[str, Any]] | None = None
 
     logger.info(
         '[CHAT REQUEST] request_id=%s content_type=%r content_length=%s is_multipart=%s',
@@ -176,6 +179,7 @@ async def ask_chat(
             document_version_id = payload.document_version_id
             top_k = payload.top_k
             similarity_threshold = payload.similarity_threshold
+            attachments_meta = [att.model_dump(mode="json") for att in payload.attachments] if payload.attachments else None
     except ValidationError as err:
         raise RequestValidationError(err.errors())
 
@@ -220,6 +224,17 @@ async def ask_chat(
             logger.error("[IMAGE] supabase_upload_failed request_id=%s error=%s", request_id, e)
             raise HTTPException(status_code=500, detail="Image upload failed. Please try again.")
 
+    if document_id is None and attachments_meta:
+        for att in attachments_meta:
+            doc_id_val = att.get("document_id")
+            if doc_id_val:
+                try:
+                    document_id = uuid.UUID(str(doc_id_val))
+                    logger.info("[CHAT API] Extracted document_id=%s from attachments_meta", document_id)
+                    break
+                except ValueError:
+                    pass
+
     filters = SearchFilters(
         user_id=current_user.id,
         document_id=document_id,
@@ -239,6 +254,7 @@ async def ask_chat(
             image_name=image_name,
             image_mime=image_mime,
             image_size=image_size,
+            attachments=attachments_meta,
         )
         total_ms = int((time.monotonic() - start_time) * 1000)
         logger.info('[CHAT END] request_id=%s status=200 total_ms=%d', request_id, total_ms)
@@ -279,6 +295,7 @@ async def ask_chat_stream(
     image_mime: str | None = None
     image_size: int | None = None
     image_storage_path: str | None = None
+    attachments_meta: list[dict[str, Any]] | None = None
 
     from pydantic import ValidationError
     from fastapi.exceptions import RequestValidationError
@@ -372,6 +389,7 @@ async def ask_chat_stream(
             document_version_id = payload.document_version_id
             top_k = payload.top_k
             similarity_threshold = payload.similarity_threshold
+            attachments_meta = [att.model_dump(mode="json") for att in payload.attachments] if payload.attachments else None
     except ValidationError as err:
         raise RequestValidationError(err.errors())
 
@@ -414,6 +432,17 @@ async def ask_chat_stream(
             _stream_logger.error("[IMAGE] supabase_upload_failed (stream) error=%s", e)
             raise HTTPException(status_code=500, detail="Image upload failed. Please try again.")
 
+    if document_id is None and attachments_meta:
+        for att in attachments_meta:
+            doc_id_val = att.get("document_id")
+            if doc_id_val:
+                try:
+                    document_id = uuid.UUID(str(doc_id_val))
+                    logger.info("[CHAT API stream] Extracted document_id=%s from attachments_meta", document_id)
+                    break
+                except ValueError:
+                    pass
+
     filters = SearchFilters(
         document_id=document_id,
         document_version_id=document_version_id,
@@ -430,6 +459,7 @@ async def ask_chat_stream(
         image_name=image_name,
         image_mime=image_mime,
         image_size=image_size,
+        attachments=attachments_meta,
     )
 
     return StreamingResponse(

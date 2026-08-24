@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class DocumentRAGTool(Tool):
     """Modular tool for document RAG retrieval, reranking, and relevance gate validation."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession | None = None, retriever: Any = None) -> None:
         super().__init__(
             ToolMetadata(
                 name="document_rag",
@@ -28,7 +28,7 @@ class DocumentRAGTool(Tool):
             )
         )
         self.session = session
-        self.retriever = Retriever(session)
+        self.retriever = retriever if retriever is not None else Retriever(session)
 
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         start_mono = time.monotonic()
@@ -37,6 +37,7 @@ class DocumentRAGTool(Tool):
 
         user_id = params.get("user_id")
         document_id = params.get("document_id")
+        document_ids = params.get("document_ids")
         document_version_id = params.get("document_version_id")
         top_k = params.get("top_k", get_settings().TOP_K)
         similarity_threshold = params.get("similarity_threshold", get_settings().SIMILARITY_THRESHOLD)
@@ -44,6 +45,7 @@ class DocumentRAGTool(Tool):
         filters = SearchFilters(
             user_id=user_id,
             document_id=document_id,
+            document_ids=document_ids,
             document_version_id=document_version_id,
         )
 

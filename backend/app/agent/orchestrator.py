@@ -24,19 +24,79 @@ from app.llm.sanitize import sanitize_response
 logger = logging.getLogger(__name__)
 
 
+def _validate_web_search_answer(
+    raw_answer: str,
+    clean_answer: str,
+    web_concise_text: str,
+    original_query: str,
+) -> str:
+    """Validate LLM answer against web search results.
+
+    1. If raw response is JSON → extract 'answer' field; if malformed or empty → use concise_text.
+    2. If the answer is unrelated to the query topic (no topic keyword overlap) → use concise_text.
+    3. Otherwise return clean_answer.
+    """
+    import json as _json
+    import re as _re
+
+    raw = (raw_answer or "").strip()
+
+    # Step 1: If raw is JSON-like, try to parse it
+    if raw.startswith("{") and "answer" in raw:
+        try:
+            parsed = _json.loads(raw)
+            if isinstance(parsed, dict):
+                extracted = (parsed.get("answer") or "").strip()
+                if extracted:
+                    return extracted
+                # 'answer' key exists but empty → fallback
+                logger.info("[AGENT WEB FALLBACK] JSON had empty 'answer' field. Using concise_text.")
+                return web_concise_text
+        except (_json.JSONDecodeError, ValueError):
+            # Malformed JSON → fallback
+            logger.info("[AGENT WEB FALLBACK] Malformed JSON from LLM. Using concise_text.")
+            return web_concise_text
+
+    # Step 2: Check that the clean answer is related to the query topic.
+    # Extract meaningful tokens from the query and web concise text.
+    query_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", original_query.lower()))
+    web_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", web_concise_text.lower()))
+    topic_tokens = (query_tokens | web_tokens) - {"what", "when", "where", "which", "that", "with", "from", "this", "they", "have", "here", "found"}
+
+    if topic_tokens and clean_answer:
+        ans_lower = clean_answer.lower()
+        overlap = sum(1 for t in topic_tokens if t in ans_lower)
+        # If fewer than 15% of topic tokens appear in the answer, it's unrelated
+        if overlap / len(topic_tokens) < 0.15:
+            logger.info(
+                "[AGENT WEB FALLBACK] LLM answer unrelated (overlap=%.2f). Using concise_text.", overlap / len(topic_tokens)
+            )
+            return web_concise_text
+
+    return clean_answer or web_concise_text
+
+
 class AgentOrchestrator:
     """Production Agent Orchestrator for multi-tool execution, verification, and self-correction."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession | None = None,
+        *,
+        retriever: Any = None,
+        llm_client: Any = None,
+        web_search: Any = None,
+        prompt_builder: Any = None,
+    ) -> None:
         self.session = session
         self.planner = Planner()
         self.verifier = VerificationAgent()
-        self.prompt_builder = PromptBuilder()
-        self.llm_client = get_global_ollama_client()
+        self.prompt_builder = prompt_builder if prompt_builder is not None else PromptBuilder()
+        self.llm_client = llm_client if llm_client is not None else get_global_ollama_client()
 
         # Initialize modular tools
-        self.rag_tool = DocumentRAGTool(session)
-        self.web_tool = WebSearchTool()
+        self.rag_tool = DocumentRAGTool(session, retriever=retriever)
+        self.web_tool = WebSearchTool(web_search=web_search)
         self.vision_tool = VisionTool()
         self.memory_tool = MemoryTool(session)
 
@@ -47,6 +107,7 @@ class AgentOrchestrator:
         session_id: uuid.UUID | None = None,
         user_id: uuid.UUID | None = None,
         document_id: uuid.UUID | None = None,
+        document_ids: tuple[uuid.UUID, ...] | None = None,
         document_version_id: uuid.UUID | None = None,
         image_bytes: bytes | None = None,
         image_name: str | None = None,
@@ -119,6 +180,7 @@ class AgentOrchestrator:
                         parameters={
                             "user_id": user_id,
                             "document_id": document_id,
+                            "document_ids": document_ids,
                             "document_version_id": document_version_id,
                         },
                     )
@@ -178,13 +240,7 @@ class AgentOrchestrator:
                         "[AGENT SELF-CORRECTION] Step %d tool=%s failed: %s. Retrying...",
                         current_step.step_number, target_tool, tool_output.error
                     )
-
-                    # Fallback Strategy: If Document RAG failed/empty, try Web Search
-                    if target_tool == "document_rag":
-                        current_step.target_tool = "web_search"
-                        current_step.description = "Fallback live web search after RAG tool retry."
-                    else:
-                        state.current_step_index += 1
+                    state.current_step_index += 1
 
             # 4. Verification Step
             state.transition_to(AgentStatus.VERIFYING)
@@ -193,8 +249,9 @@ class AgentOrchestrator:
             state.verification_result = v_outcome
             state.metrics.verification_time_ms = int((time.monotonic() - ver_start) * 1000)
 
-            # If evidence is rejected and we can retry, switch strategy
-            if not v_outcome.is_valid and v_outcome.requires_retry and state.retry_count < max_iterations:
+            # If evidence is rejected and we can retry, switch strategy (only if document_rag was not used)
+            doc_ran = any(r.tool_name == "document_rag" for r in state.tool_results)
+            if not v_outcome.is_valid and v_outcome.requires_retry and state.retry_count < max_iterations and not document_id and not doc_ran:
                 state.transition_to(AgentStatus.RETRYING)
                 state.retry_count += 1
                 logger.info("[AGENT SELF-CORRECTION] Evidence rejected. Retrying with Web Search fallback.")
@@ -219,42 +276,102 @@ class AgentOrchestrator:
 
             llm_start = time.monotonic()
 
-            if not state.evidence and not any(r.success for r in state.tool_results):
-                state.final_answer = "I could not find this information in the uploaded documents."
-            else:
-                prompt = self.prompt_builder.build(
-                    query,
-                    state.retrieved_documents,
-                    chat_history=state.conversation_context,
-                    working_memory_summary=state.working_memory,
-                    is_vision=bool(image_bytes),
-                )
+            # Check if web_search was the active tool and handle its special cases
+            web_tool_results = [r for r in state.tool_results if r.tool_name == "web_search"]
+            web_was_used = bool(web_tool_results)
+            web_concise_text: str | None = None
+            web_had_hits = False
 
-                _images_payload = [image_bytes] if image_bytes else None
-                resp = await self.llm_client.generate(
-                    prompt.system_prompt,
-                    prompt.user_prompt,
-                    num_predict=settings.OLLAMA_NUM_PREDICT,
-                    images=_images_payload,
-                    model=ModelRouter.get_model(TaskRole.VISION) if image_bytes else final_model,
-                )
+            if web_was_used and web_tool_results:
+                last_web = web_tool_results[-1]
+                web_concise_text = last_web.output_data.get("concise_text", "")
+                web_had_hits = bool(last_web.output_data.get("count", 0))
 
-                clean_ans = sanitize_response(resp.answer, question=query)
-
-                # Verify Final Answer
-                ans_outcome = self.verifier.verify_final_answer(clean_ans, state)
-                if not ans_outcome.is_valid and ans_outcome.requires_retry and state.retry_count < max_iterations:
-                    logger.warning("[AGENT] Final answer verification failed: %s. Performing re-generation.", ans_outcome.reason)
-                    corr_prompt = prompt.user_prompt + "\n\nCRITICAL MANDATE: Answer using ONLY verified facts directly present in the context."
-                    resp_corr = await self.llm_client.generate(
-                        prompt.system_prompt,
-                        corr_prompt,
-                        num_predict=settings.OLLAMA_NUM_PREDICT,
-                        model=final_model,
+                if not web_had_hits:
+                    # Web search returned 0 hits — use the safe "no results" message
+                    state.final_answer = (
+                        "I could not find reliable web results for that question right now. "
+                        "Please try again shortly."
                     )
-                    clean_ans = sanitize_response(resp_corr.answer, question=query)
+                    state.metrics.llm_generation_time_ms = 0
+                    state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
+                    state.transition_to(AgentStatus.COMPLETED)
+                    return state
 
+            # Check if document_rag ran or 0 chunks/evidence were retrieved for document query (when no image provided)
+            if doc_ran and not state.retrieved_documents and not image_bytes:
+                state.final_answer = "I could not find this information in the uploaded documents."
+                state.metrics.llm_generation_time_ms = 0
+                state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
+                state.transition_to(AgentStatus.COMPLETED)
+                return state
+
+            if not state.evidence and not state.retrieved_documents and not image_bytes:
+                state.final_answer = "I could not find this information in the uploaded documents."
+                state.metrics.llm_generation_time_ms = 0
+                state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
+                state.transition_to(AgentStatus.COMPLETED)
+                return state
+
+            prompt = self.prompt_builder.build(
+                query,
+                state.retrieved_documents,
+                chat_history=state.conversation_context,
+                working_memory_summary=state.working_memory,
+                is_vision=bool(image_bytes),
+            )
+
+            _images_payload = [image_bytes] if image_bytes else None
+            resp = await self.llm_client.generate(
+                prompt.system_prompt,
+                prompt.user_prompt,
+                num_predict=settings.OLLAMA_NUM_PREDICT,
+                images=_images_payload,
+                model=ModelRouter.get_model(TaskRole.VISION) if image_bytes else final_model,
+            )
+
+            if getattr(resp, "token_usage", None):
+                state.metrics.prompt_tokens += getattr(resp.token_usage, "prompt_tokens", 0) or 0
+                state.metrics.completion_tokens += getattr(resp.token_usage, "completion_tokens", 0) or 0
+                state.metrics.total_tokens += getattr(resp.token_usage, "total_tokens", 0) or 0
+
+            clean_ans = sanitize_response(resp.answer, question=query)
+
+            # Append [Truncated] if the LLM stopped due to token limit
+            if getattr(resp, "finish_reason", None) in ("length", "max_tokens"):
+                if not clean_ans.endswith("[Truncated]"):
+                    clean_ans = (clean_ans + " [Truncated]").strip()
                 state.final_answer = clean_ans
+                state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
+                state.transition_to(AgentStatus.COMPLETED)
+                return state
+
+            # For web search results: validate LLM response relevance to the query.
+            # If the LLM response is malformed JSON or unrelated to web hits, use concise_text fallback.
+            if web_was_used and web_had_hits and web_concise_text:
+                clean_ans = _validate_web_search_answer(
+                    raw_answer=resp.answer,
+                    clean_answer=clean_ans,
+                    web_concise_text=web_concise_text,
+                    original_query=query,
+                )
+
+            # Verify Final Answer
+            ans_outcome = self.verifier.verify_final_answer(clean_ans, state)
+            if not ans_outcome.is_valid and ans_outcome.requires_retry and state.retry_count < max_iterations:
+                logger.warning("[AGENT] Final answer verification failed: %s. Performing re-generation.", ans_outcome.reason)
+                corr_prompt = prompt.user_prompt + "\n\nCRITICAL MANDATE: Answer using ONLY verified facts directly present in the context."
+                resp_corr = await self.llm_client.generate(
+                    prompt.system_prompt,
+                    corr_prompt,
+                    num_predict=settings.OLLAMA_NUM_PREDICT,
+                    model=final_model,
+                )
+                clean_ans = sanitize_response(resp_corr.answer, question=query)
+
+            if getattr(resp, "model_name", None):
+                state.selected_model = resp.model_name
+            state.final_answer = clean_ans
 
             state.metrics.llm_generation_time_ms = int((time.monotonic() - llm_start) * 1000)
             state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
@@ -268,6 +385,8 @@ class AgentOrchestrator:
             return state
 
         except Exception as exc:
+            if type(exc).__name__ in ("RetrievalError", "RAGError", "LLMUnavailableError", "LLMTimeoutError"):
+                raise
             state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
             state.transition_to(AgentStatus.FAILED)
             state.final_answer = "I encountered an error processing your request. Please try again."

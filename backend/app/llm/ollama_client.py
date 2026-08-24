@@ -136,6 +136,8 @@ class OllamaLLMClient:
             "temperature": self.temperature,
             "num_ctx": self.num_ctx,
             "num_predict": predict,
+            "top_p": getattr(settings, "OLLAMA_TOP_P", 0.9),
+            "top_k": getattr(settings, "OLLAMA_TOP_K", 40),
             "think": False,
         }
         if not self.use_gpu:
@@ -173,8 +175,7 @@ class OllamaLLMClient:
                     return True
                 # 2. Model family — includes qwen alongside llava/mllama/clip
                 details = data.get("details", {})
-                families = details.get("families", []) or []
-                _VISION_FAMILIES = {"mllama", "llava", "clip", "qwen", "qwen2", "qwen3", "minicpm", "moondream"}
+                _VISION_FAMILIES = {"mllama", "llava", "clip", "minicpm", "moondream", "qwen-vl", "qwen2-vl", "qwen3-vl"}
                 if any(f in _VISION_FAMILIES for f in families):
                     logger.info("[VISION] supports_vision=True (family=%s) model=%s", families, target_model)
                     return True
@@ -524,7 +525,7 @@ def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMRespon
         if is_reasoning_model(model_name) and (not isinstance(thinking, str) or not thinking.strip()):
             content = ""
         else:
-            content = "Information not found in document excerpts."
+            content = "I could not generate an answer right now."
 
     model_name = data.get("model") if isinstance(data.get("model"), str) else fallback_model
     finish_reason = data.get("done_reason") if isinstance(data.get("done_reason"), str) else None

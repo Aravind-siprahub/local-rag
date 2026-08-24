@@ -5,6 +5,7 @@ import { Bot, User, Copy, Check, X, Maximize2, FileText, Pencil, RefreshCw, Cpu 
 import { cn } from '@/lib/utils'
 import type { Message, Citation } from '../types/chat'
 import { Button } from '@/components/ui/button'
+import { AttachmentCard } from './AttachmentCard'
 
 interface ChatMessageProps {
   message: Message
@@ -154,67 +155,34 @@ export function ChatMessage({
               </div>
             )}
 
-            {/* Integrated Image Preview inside user message bubble */}
-            {(message.localImageUrl || imageAttachment) && (
-              <div className="pt-1">
-                <div
-                  onClick={() => setIsLightboxOpen(true)}
-                  className="group/img relative inline-block overflow-hidden rounded-xl border border-border/50 bg-background/50 cursor-pointer shadow-xs hover:border-primary/40 transition-all duration-200"
-                  title="Click to expand image"
-                >
-                  {message.localImageUrl ? (
-                    <img
-                      src={message.localImageUrl}
-                      alt="User attached file"
-                      className="max-h-64 sm:max-h-72 w-auto max-w-full object-contain rounded-lg transition-transform duration-200 group-hover/img:scale-[1.01]"
+            {/* Attachments rendering using AttachmentCard */}
+            {((message.attachments && message.attachments.length > 0) || message.localImageUrl) && (
+              <div className="flex flex-wrap gap-2 pt-1.5 max-w-full">
+                {message.attachments && message.attachments.length > 0 ? (
+                  message.attachments.map((att, idx) => (
+                    <AttachmentCard
+                      key={att.id || (att as any).storage_path || (att as any).filename || idx}
+                      attachment={{
+                        ...att,
+                        previewUrl: att.previewUrl || ((att.mime_type || (att as any).mimeType || '')?.startsWith('image/') ? message.localImageUrl : undefined),
+                      }}
+                      readOnly
                     />
-                  ) : imageAttachment ? (
-                    <div className="flex items-center gap-2 p-2.5 bg-muted/30 max-w-xs text-xs rounded-lg">
-                      <FileText className="h-4 w-4 text-primary shrink-0" />
-                      <span className="truncate font-medium">{imageAttachment.filename}</span>
-                      <span className="text-muted-foreground shrink-0 text-[10px]">
-                        ({(imageAttachment.size / 1024).toFixed(1)} KB)
-                      </span>
-                    </div>
-                  ) : null}
-
-                  {message.localImageUrl && (
-                    <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/20 transition-colors flex items-center justify-center">
-                      <div className="opacity-0 group-hover/img:opacity-100 transition-opacity bg-black/70 text-white p-1.5 rounded-full backdrop-blur-xs shadow-md">
-                        <Maximize2 className="h-4 w-4" />
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  ))
+                ) : message.localImageUrl ? (
+                  <AttachmentCard
+                    attachment={{
+                      id: 'local-img',
+                      filename: 'Attached Image',
+                      mime_type: 'image/png',
+                      size: 0,
+                      previewUrl: message.localImageUrl,
+                    }}
+                    readOnly
+                  />
+                ) : null}
               </div>
             )}
-
-            {/* Non-image attachment chip */}
-            {message.attachments &&
-              message.attachments.length > 0 &&
-              !message.localImageUrl &&
-              !imageAttachment && (
-                <div className="flex flex-col gap-1.5 pt-1">
-                  {message.attachments.map((att) => (
-                    <div
-                      key={att.id}
-                      className="flex items-center gap-2 p-2 rounded-lg border border-border/50 bg-muted/20 max-w-xs text-xs"
-                    >
-                      <div className="h-7 w-7 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0 font-semibold text-[10px] uppercase">
-                        {att.mime_type.split('/')[1] || 'FILE'}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium truncate" title={att.filename}>
-                          {att.filename}
-                        </p>
-                        <p className="text-muted-foreground text-[10px]">
-                          {(att.size / 1024).toFixed(1)} KB
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
 
             {/* Citations section hidden per user preference */}
           </div>

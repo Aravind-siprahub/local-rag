@@ -132,6 +132,11 @@ _PROJECT_INFO_CUES = (
     "front end",
     "back end",
     "architecture",
+    "problem statement",
+    "problem",
+    "statement",
+    "prd",
+    "requirements",
     "were using",
     "we're using",
     "we using",
@@ -162,6 +167,11 @@ _PROJECT_INFO_CUES = (
     "nginx",
     "install",
     "installation",
+    "python",
+    "version",
+    "required",
+    "leave",
+    "policy",
 )
 
 _GENERIC_DEFINITION = re.compile(
@@ -222,12 +232,33 @@ _DOC_LIST_KEYWORDS = (
     "what file u have",
     "what doc i have",
     "what docs i have",
+    "what documents u have",
+    "what files u have",
+    "what are documents u have",
+    "what are the documents u have",
+    "what are files u have",
+    "what are the files u have",
+    "documents u have list it",
+    "documents u have list",
+    "files u have list",
+    "what doc you have",
+    "what docs you have",
+    "what file you have",
+    "what documents you have",
+    "what files you have",
+    "what are documents you have",
+    "what are the documents you have",
+    "what are files you have",
+    "what are the files you have",
+    "documents you have list it",
+    "documents you have list",
+    "files you have list",
 )
 
 _DOC_LIST_REGEX = re.compile(
     r"\b(?:list|show|get|display|count)\s+(?:out\s+)?(?:all\s+)?(?:my\s+)?(?:uploaded\s+)?(?:documents?|files?|docs?)\b|"
-    r"\bwhat\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)\s+have\b|"
-    r"\bwhich\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)\s+have\b|"
+    r"\bwhat\s+(?:are\s+)?(?:the\s+)?(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)?\s*(?:have|uploaded|available)?\b|"
+    r"\bwhich\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)?\s*(?:have|uploaded|available)?\b|"
     r"\bwhat\s+(?:documents?|files?|docs?)\s+(?:are\s+)?(?:available|uploaded)\b",
     re.IGNORECASE,
 )
@@ -274,14 +305,22 @@ def _is_generic_chat(lower: str) -> bool:
 
 
 def _is_document_list(lower: str) -> bool:
-    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy", "tell"]):
+    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy"]):
         return False
     if _DOC_LIST_REGEX.search(lower):
         return True
-    return any(kw in lower for kw in _DOC_LIST_KEYWORDS)
+    if any(kw in lower for kw in _DOC_LIST_KEYWORDS):
+        return True
+    doc_target = any(term in lower for term in ["document", "documents", "file", "files", "doc", "docs"])
+    list_action = any(term in lower for term in ["list", "show", "have", "available", "uploaded"])
+    if doc_target and list_action and not any(w in lower for w in ["what is", "how to", "why", "where is", "according to"]):
+        return True
+    return False
 
 
 def _is_document_metadata(lower: str) -> bool:
+    if ("when" in lower or "date" in lower) and ("uploaded" in lower or "upload" in lower):
+        return True
     return any(kw in lower for kw in _DOC_METADATA_KEYWORDS)
 
 
@@ -398,7 +437,20 @@ def _is_calculator(text: str, lower: str) -> bool:
     return False
 
 
+def _is_datetime_query(lower: str) -> bool:
+    datetime_phrases = (
+        "today date", "today's date", "todays date", "date today", "the date today",
+        "what is the date", "what date is it", "current date", "what time is it",
+        "current time", "what day is today", "what day is it today", "time right now",
+        "today's time", "current day"
+    )
+    return any(p in lower for p in datetime_phrases)
+
+
 def _is_web_query(text: str, lower: str) -> bool:
+    if _is_datetime_query(lower):
+        return False
+
     # Explicit web search intent phrases
     web_phrases = (
         "search the web", "search web", "web search", "search online",
@@ -411,14 +463,14 @@ def _is_web_query(text: str, lower: str) -> bool:
 
     # Look for keywords indicating real-time info or search queries
     web_keywords = {
-        "weather", "today", "tomorrow", "yesterday", "current",
-        "news", "stock", "price", "good friday", "time", "date",
+        "weather", "tomorrow", "yesterday",
+        "news", "stock", "price", "good friday",
         "forecast", "temperature", "temp", "latest", "recent", "who won"
     }
     if any(kw in lower for kw in web_keywords):
         return True
     # If the question contains a specific 4-digit year like 2024, 2025, 2026
-    if re.search(r"\b20\d{2}\b", lower):
+    if re.search(r"\b20\d{2}\b", lower) and not any(k in lower for k in ("date", "time")):
         return True
     # If London/cities or similar real-time queries are present, or "weather in ..."
     if "london" in lower:
@@ -438,7 +490,7 @@ def classify(
     Optional ``document_titles`` / ``context_texts`` enable corpus-aware routing
     for project questions without hard-coding brand names into GENERAL->RAG.
     """
-    text = (question or "").strip()
+    text = (question or "").strip().strip('"\'`')
     req_id = request_id or "N/A"
     if not text:
         logger.info('[AI ROUTER] request_id="%s" question="" selected_intent="GENERIC_CHAT" selected_route="generic_chat"', req_id)
@@ -448,7 +500,9 @@ def classify(
     _, norm, _ = normalize_query(text)
     lower = norm.lower() if norm else text.lower()
 
-    if _is_generic_chat(lower):
+    if _is_datetime_query(lower):
+        route = Route.WEB
+    elif _is_generic_chat(lower):
         route = Route.GENERIC_CHAT
     elif len(lower.split()) == 1:
         route = Route.DIRECT
@@ -520,6 +574,9 @@ _TOKEN_TIERS = {
     "complex": 1024,
     "very_complex": 2048,
 }
+
+# Alias for backward compatibility with regression test suites
+route_question = classify
 
 
 def analyze_complexity(query: str, model_name: str | None = None) -> int:

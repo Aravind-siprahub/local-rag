@@ -146,7 +146,7 @@ class TestVisionServiceRouting:
 
         assert len(llm.calls) == 1
         call_sys_prompt = llm.calls[0][0]
-        assert call_sys_prompt == get_settings().SYSTEM_PROMPT
+        assert call_sys_prompt.startswith(get_settings().SYSTEM_PROMPT)
 
     @pytest.mark.asyncio
     async def test_6_image_text_prompt_injection_defense(self) -> None:

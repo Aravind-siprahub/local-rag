@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class WebSearchTool(Tool):
     """Modular tool for real-time web search and evidence extraction."""
 
-    def __init__(self) -> None:
+    def __init__(self, web_search: Any = None) -> None:
         super().__init__(
             ToolMetadata(
                 name="web_search",
@@ -23,7 +23,7 @@ class WebSearchTool(Tool):
                 requires_network=True,
             )
         )
-        self.provider = get_web_search_provider()
+        self.provider = web_search if web_search is not None else get_web_search_provider()
 
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         start_mono = time.monotonic()

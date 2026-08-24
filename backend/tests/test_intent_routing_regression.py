@@ -6,10 +6,10 @@ def test_python_version_query_routing():
     query = "What is the current latest release version of Python in 2026?"
     res = route_question(query)
     # Must NOT route to DOCUMENT_METADATA
-    assert res.route != Route.DOCUMENT_METADATA
-    assert res.route in (Route.WEB, Route.GENERAL_KNOWLEDGE)
+    assert res != Route.DOCUMENT_METADATA
+    assert res in (Route.WEB, Route.GENERAL_KNOWLEDGE)
 
 def test_document_metadata_version_routing():
     query = "What is the document version of this uploaded file?"
     res = route_question(query)
-    assert res.route == Route.DOCUMENT_METADATA
+    assert res == Route.DOCUMENT_METADATA

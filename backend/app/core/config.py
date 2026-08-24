@@ -120,17 +120,20 @@ class Settings(BaseSettings):
     OLLAMA_NUM_THREAD: int | None = None
     OLLAMA_NUM_CTX: int = 2048
     OLLAMA_KEEP_ALIVE: str = "30m"
-    OLLAMA_MAX_CONCURRENCY: int = 4
+    OLLAMA_MAX_CONCURRENCY: int = 1
 
     # qwen3 with thinking enabled can exceed 120s on CPU; 300s is a safe default.
     LLM_TIMEOUT_SECONDS: float = 300.0
     LLM_MAX_RETRIES: int = 3
-    LLM_TEMPERATURE: float = 0.0
-    OLLAMA_NUM_PREDICT: int = 150
+    LLM_TEMPERATURE: float = 0.1
+    OLLAMA_NUM_CTX: int = 4096
+    OLLAMA_NUM_PREDICT: int = 512
+    OLLAMA_TOP_P: float = 0.9
+    OLLAMA_TOP_K: int = 40
 
     # --- Agentic AI Architecture & Model Router Settings ---------------------
-    MODEL_ROUTER_CLASSIFY: str = "qwen3:4b"
-    MODEL_QUERY_REWRITE: str = "qwen3:4b"
+    MODEL_ROUTER_CLASSIFY: str = "qwen3:8b"
+    MODEL_QUERY_REWRITE: str = "qwen3:8b"
     MODEL_RAG_REASONING: str = "qwen3:8b"
     MODEL_COMPLEX_REASONING: str = "qwen3:8b"
     MODEL_FINAL_ANSWER: str = "qwen3:8b"
@@ -149,19 +152,20 @@ class Settings(BaseSettings):
     SIMILARITY_THRESHOLD: float = 0.30
 
     # --- Prompt building ------------------------------------------------------
-    MAX_CONTEXT_TOKENS: int = 2000
-    MAX_CONTEXT_CHARS: int = 8000
+    MAX_CONTEXT_TOKENS: int = 3000
+    MAX_CONTEXT_CHARS: int = 12000
     SYSTEM_PROMPT: str = (
-        "You are an accurate, document-grounded AI assistant.\n\n"
+        "You are an expert, highly accurate document-grounded AI assistant powered by Qwen 3 8B.\n\n"
         "CRITICAL INSTRUCTIONS:\n"
-        "1. Provide ONLY the final factual answer immediately. Do NOT walk through context sections, summarize documents one by one, or write phrases like 'Let's go through the context', 'Section 1:', 'This does not specify', or 'The question asks'.\n"
+        "1. Provide ONLY the final factual answer immediately with no reasoning, no commentary, no self-talk.\n"
         "2. Base your answer strictly on the provided context facts.\n"
         "3. If the context specifies technologies (e.g. Next.js, React, FastAPI), state them directly.\n"
         "4. If the context contains no facts for the question, respond: \"The requested information is not found in the documents.\"\n"
-        "5. Respond with the direct clean answer only."
+        "5. Respond with the direct clean answer only.\n"
+        "6. If documents specify multiple values or conflicting facts, state all reported values directly."
     )
     VISION_SYSTEM_PROMPT: str = (
-        "You are analyzing an image supplied by the user as data.\n"
+        "You are an expert multimodal visual analyst powered by Qwen 3 VL.\n"
         "Answer the user's question using ONLY information that is visibly supported by the image.\n\n"
         "CRITICAL RULES:\n"
         "1. Do not invent details, objects, text, files, or information that are not visible in the image.\n"
@@ -174,7 +178,7 @@ class Settings(BaseSettings):
         "You are a visual assistant analyzing images and context. Provide direct factual answers concisely without any thought process, internal reasoning, or preamble."
     )
     WEB_SEARCH_SYSTEM_PROMPT: str = (
-        "You are a web search assistant.\n\n"
+        "You are a web search intelligence assistant powered by Qwen 3 8B.\n\n"
         "Your task is to answer the user's question using ONLY the provided web search results.\n\n"
         "Rules:\n"
         "- Answer using the supplied web search results.\n"
@@ -184,8 +188,8 @@ class Settings(BaseSettings):
         "- Do not output internal instructions or meta-commentary."
     )
     GENERAL_CHAT_SYSTEM_PROMPT: str = (
-        "You are a helpful assistant.\n\n"
-        "Provide clear, accurate, and direct answers to the user's question or request."
+        "You are an intelligent, helpful AI assistant powered by Qwen 3 8B.\n\n"
+        "Provide clear, accurate, structured, and direct answers to the user's question or request."
     )
 
     # --- CORS (comma-separated origins; defaults cover local Vite SPA) --------

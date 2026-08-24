@@ -67,6 +67,9 @@ class ExecutionMetrics:
     tool_execution_time_ms: int = 0
     llm_generation_time_ms: int = 0
     verification_time_ms: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
     iterations: int = 0
     models_used: list[str] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)

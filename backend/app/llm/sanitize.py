@@ -85,7 +85,7 @@ _META_SUBJECT_VERBS = [
     r"the question (?:asks|is|requires|states):?",
     r"the question is (?:specifically )?(?:about|asking for)",
     r"(?:but|however)[,.]?\s+the question is (?:specifically )?(?:about|asking for)",
-    r"(?:the\s+)?answer (?:should|must|might|will|is) be:?",
+    r"(?:therefore|so)[,.]?\s*(?:the\s+)?answer (?:should|must|might|will|is) be:?",
     r"(?:[^,\n()]+\)?\s*[,:]?\s*)?we (?:know|note|observe|see|find|gather|infer|learn|deduce|conclude)(?:[:\s]+that)?",
     r"the (?:context|document|documents|passage|passages) (?:tells us|shows|states|mentions|indicates|explains|says|includes|contains|has|provides)(?:\s+that)?:?",
     r"the context (?:includes|contains|has|lists):?",
@@ -104,6 +104,8 @@ _META_SUBJECT_VERBS = [
     r"\d+[\.)]\s*(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?) document section",
     r"(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?) document section",
     r"discrepancy between the (?:two|three|\d+|several)?\s*(?:documents|sources|chunks|passages)",
+    r"so there(?:'s| is) a discrepancy.*",
+    r"wait[,.]?\s+the\s+other\s+documents?.*",
 ]
 
 # Match the FULL reasoning sentence up to its terminating punctuation or newline.
@@ -184,7 +186,15 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
     if text is None or not isinstance(text, str) or not text.strip():
         return ""
 
-    cleaned = text
+    cleaned = text.strip()
+    if cleaned.startswith("{") and "answer" in cleaned:
+        try:
+            import json
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict) and "answer" in parsed and isinstance(parsed["answer"], str):
+                cleaned = parsed["answer"].strip()
+        except Exception:
+            pass
 
     # Strip XML blocks safely
     for _ in range(3):
@@ -198,10 +208,7 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
 
     # Aggressively extract the final answer if the model leaked a concluding phrase anywhere
     concluding_regex = re.compile(
-        r"(?:i think|so|therefore|thus|hence|in conclusion|to summarize|to sum up|overall|in summary)?\s*(?:the\s+)?(?:final\s+)?answer(?:\s+to\s+[^\n:]+)?\s+(?:is|would be)[:\s]*|"
-        r"final answer:\s*|"
-        r"in summary:?\s*|"
-        r"in conclusion:?\s*",
+        r"(?:final\s+answer|in\s+summary|in\s+conclusion)[:\s]*",
         re.IGNORECASE
     )
     matches = list(concluding_regex.finditer(cleaned))

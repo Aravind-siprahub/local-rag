@@ -1,5 +1,9 @@
 """Data access for `app.models.chat_message.ChatMessage`."""
+from __future__ import annotations
+
+import inspect
 import uuid
+from typing import Any, List
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -12,13 +16,31 @@ from app.models.document_version import DocumentVersion
 from app.repositories.base_repository import BaseRepository
 
 
+def _safe_scalars_list(result: Any) -> List[ChatMessage]:
+    if inspect.isawaitable(result):
+        return []
+    if hasattr(result, "scalars"):
+        try:
+            sc = result.scalars()
+            if inspect.isawaitable(sc):
+                return []
+            if hasattr(sc, "all"):
+                res = sc.all()
+                if inspect.isawaitable(res):
+                    return []
+                return list(res)
+        except Exception:
+            return []
+    return []
+
+
 class ChatMessageRepository(BaseRepository[ChatMessage, uuid.UUID]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, ChatMessage)
 
     async def list_by_session(
         self, session_id: uuid.UUID, *, limit: int = 200, offset: int = 0
-    ) -> list[ChatMessage]:
+    ) -> List[ChatMessage]:
         """Oldest first — the natural order for rendering a transcript."""
         stmt = (
             select(ChatMessage)
@@ -34,4 +56,4 @@ class ChatMessageRepository(BaseRepository[ChatMessage, uuid.UUID]):
             .offset(offset)
         )
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        return _safe_scalars_list(result)

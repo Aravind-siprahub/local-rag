@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class MemoryTool(Tool):
     """Modular tool for memory and context retrieval."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession | None = None) -> None:
         super().__init__(
             ToolMetadata(
                 name="memory_context",
@@ -26,8 +26,8 @@ class MemoryTool(Tool):
             )
         )
         self.session = session
-        self.message_service = ChatMessageService(session)
-        self.session_service = ChatSessionService(session)
+        self.message_service = ChatMessageService(session) if session is not None else None
+        self.session_service = ChatSessionService(session) if session is not None else None
 
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         start_mono = time.monotonic()
@@ -36,7 +36,7 @@ class MemoryTool(Tool):
         exclude_message_id = params.get("exclude_message_id")
         history_limit = params.get("history_limit", 4)
 
-        if not session_id:
+        if not session_id or self.session_service is None or self.message_service is None:
             return ToolOutput(
                 success=True,
                 data={"history": [], "working_memory": None},

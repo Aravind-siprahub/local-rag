@@ -79,6 +79,10 @@ class PromptBuilder:
             working_memory_summary=working_memory_summary,
         )
 
+        from datetime import datetime, timezone
+        now_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+        date_context = f"\n\nCurrent Temporal Context:\nToday's Date: {now_str}\nIf the user asks for today's date, current time, or day of the week, answer directly using this temporal context."
+
         system_prompt = self.system_prompt
         if is_vision and not self._custom_system_prompt:
             settings = get_settings()
@@ -86,9 +90,19 @@ class PromptBuilder:
                 system_prompt = settings.VISION_RAG_SYSTEM_PROMPT
             else:
                 system_prompt = settings.VISION_SYSTEM_PROMPT
+            return Prompt(
+                system_prompt=system_prompt.strip(),
+                user_prompt=user_prompt,
+                retrieved_chunks=included_chunks,
+            )
+
+        if self._custom_system_prompt:
+            full_system_prompt = system_prompt.strip()
+        else:
+            full_system_prompt = (system_prompt.strip() + date_context).strip()
 
         return Prompt(
-            system_prompt=system_prompt.strip(),
+            system_prompt=full_system_prompt,
             user_prompt=user_prompt,
             retrieved_chunks=included_chunks,
         )

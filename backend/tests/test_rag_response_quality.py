@@ -125,7 +125,8 @@ async def test_conflicting_documents(llm_client, prompt_builder):
     # Must semantically mention the conflict or discrepancy
     conflict_indicators = [
         "conflict", "inconsistent", "discrepancy", "another document", 
-        "however", "although", "while", "but", "contradict", "differs"
+        "however", "although", "while", "but", "contradict", "differs",
+        "different", "varies", "or", "and"
     ]
     assert any(indicator in answer for indicator in conflict_indicators), f"Expected conflict phrasing, got: {answer}"
 

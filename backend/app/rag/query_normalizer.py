@@ -39,7 +39,7 @@ def normalize_query(query: str) -> tuple[str, str, str]:
     Returns:
         (original_query, normalized_query, retrieval_query)
     """
-    raw = (query or "").strip()
+    raw = (query or "").strip().strip('"\'`')
     if not raw:
         return "", "", ""
 
@@ -57,8 +57,8 @@ def normalize_query(query: str) -> tuple[str, str, str]:
     for pattern, replacement in _SHORTHAND_MAP:
         norm = pattern.sub(replacement, norm)
 
-    # 2. Clean extra whitespace
-    norm = re.sub(r"\s+", " ", norm).strip()
+    # 2. Clean extra whitespace & trailing quotes/punctuation
+    norm = re.sub(r'[\s"\'`]+', " ", norm).strip()
 
     # Restore protected filenames
     for placeholder, original_token in protected_tokens.items():

@@ -31,14 +31,14 @@ export function SettingsPage() {
   // Production level defaults
   const DEFAULTS = {
     chatModel: 'qwen3:8b',
-    temperature: '0.20',
-    maxContextTokens: '6000',
+    temperature: '0.10',
+    maxContextTokens: '4096',
     llmTimeout: '300.0',
-    topK: '20',
-    finalContext: '4',
-    similarityThreshold: '0.35',
-    chunkSize: '1000',
-    chunkOverlap: '200',
+    topK: '15',
+    finalContext: '5',
+    similarityThreshold: '0.30',
+    chunkSize: '1500',
+    chunkOverlap: '300',
     embeddingModel: 'nomic-embed-text',
     vectorDimensions: '768',
   }

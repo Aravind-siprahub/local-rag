@@ -235,12 +235,27 @@ async def test_talk_to_my_data_vs_sipraone_project_entity_scoping():
     session = AsyncMock(spec=AsyncSession)
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = [ttmd_doc, sipra_doc]
-    session.execute.return_value = mock_result
-
     retriever = AsyncMock()
     retriever.retrieve.return_value = []
 
-    rag = RAGService(session, retriever=retriever)
+    messages_mock = AsyncMock()
+    messages_mock.create_message.return_value = MagicMock(id=uuid.uuid4())
+    sessions_mock = AsyncMock()
+    sessions_mock.get.return_value = MagicMock(user_id=uuid.uuid4())
+
+    llm_mock = AsyncMock()
+    llm_mock.generate.return_value = LLMResponse(
+        answer="Talk to My Data uses React and FastAPI.",
+        model_name="test-model",
+    )
+
+    rag = RAGService(
+        session,
+        retriever=retriever,
+        llm_client=llm_mock,
+        message_service=messages_mock,
+        session_service=sessions_mock,
+    )
 
     # 1. Talk to My Data query
     await rag.ask(uuid.uuid4(), "what frontend and backend are using talk to my data")

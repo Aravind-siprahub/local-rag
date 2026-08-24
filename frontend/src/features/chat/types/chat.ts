@@ -33,6 +33,7 @@ export interface ChatRequest {
   document_version_id?: string
   top_k?: number
   similarity_threshold?: number
+  attachments?: Attachment[]
 }
 
 export interface Conversation {
@@ -49,7 +50,14 @@ export interface Attachment {
   mime_type: string
   filename: string
   size: number
-  timestamp: string
+  timestamp?: string
+  url?: string
+  previewUrl?: string
+  file?: File
+  document_id?: string
+  status?: 'uploading' | 'ready' | 'error'
+  progress?: number
+  error?: string
 }
 
 export interface Message {
