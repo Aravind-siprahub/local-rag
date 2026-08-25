@@ -23,6 +23,7 @@ class Route(str, Enum):
     CALCULATOR = "CALCULATOR"
     DIRECT = "DIRECT"
     WEB = "WEB"
+    HYBRID = "HYBRID"
 
 
 # Greetings / Conversational patterns
@@ -315,7 +316,7 @@ def _is_document_metadata(lower: str) -> bool:
 def _is_document_list(lower: str) -> bool:
     if _is_document_metadata(lower):
         return False
-    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy"]):
+    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy", "compare", "vs", "versus"]):
         return False
     if _DOC_LIST_REGEX.search(lower):
         return True
@@ -451,16 +452,37 @@ def _is_datetime_query(lower: str) -> bool:
     return any(p in lower for p in datetime_phrases)
 
 
+_WEB_SEARCH_REGEX = re.compile(
+    r"\b(?:"
+    r"look\s*up|lookup|"
+    r"search(?:\s+\w+){0,3}\s+for|"
+    r"search\s+(?:the\s+)?(?:web|online|internet|google|github|reddit|documentation|docs|bing|duckduckgo|repo|repository|live)|"
+    r"find\s+(?:\w+\s+){0,2}(?:online|information\s+(?:about|on)?|info\s+(?:about|on)?|on\s+(?:the\s+)?(?:web|internet|google|github|reddit|documentation))|"
+    r"verify\s+online|check\s+online|"
+    r"real-?time|live\s+(?:search|info|data)|"
+    r"latest|recent|today"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def _is_web_query(text: str, lower: str) -> bool:
     if _is_datetime_query(lower):
         return False
 
+    if _WEB_SEARCH_REGEX.search(lower):
+        return True
+
     # Explicit web search intent phrases
     web_phrases = (
-        "search the web", "search web", "web search", "search online",
+        "search the web", "search web", "web search", "search online", "search internet",
         "find online", "look up online", "search for", "google", "browse",
         "latest news", "current version", "what is the latest", "who is the current",
-        "latest python", "latest react", "latest version", "current react"
+        "latest python", "latest react", "latest version", "current react",
+        "look up", "lookup", "search github", "find on github", "search reddit",
+        "search documentation", "verify online", "check online", "find information about",
+        "find information on", "find public information", "public information", "search google", "search internet",
+        "realtime", "real-time", "live search"
     )
     if any(phrase in lower for phrase in web_phrases):
         return True
@@ -469,7 +491,7 @@ def _is_web_query(text: str, lower: str) -> bool:
     web_keywords = {
         "weather", "tomorrow", "yesterday",
         "news", "stock", "price", "good friday",
-        "forecast", "temperature", "temp", "latest", "recent", "who won"
+        "forecast", "temperature", "temp", "latest", "recent", "who won", "today"
     }
     if any(kw in lower for kw in web_keywords):
         return True
@@ -482,27 +504,41 @@ def _is_web_query(text: str, lower: str) -> bool:
     return False
 
 
+def _has_explicit_private_doc_ref(lower: str) -> bool:
+    private_doc_cues = (
+        "my document", "my doc", "my file", "my pdf", "uploaded document",
+        "uploaded doc", "uploaded file", "uploaded pdf", "our document", "our file",
+        "in my document", "in my doc", "in my file", "in uploaded", "from my document",
+        "from uploaded", "my uploaded"
+    )
+    return any(cue in lower for cue in private_doc_cues)
+
+
 def classify(
-    question: str,
+    text: str,
     *,
     document_titles: Sequence[str] | None = None,
     context_texts: Sequence[str] | None = None,
     request_id: str | None = None,
 ) -> Route:
-    """Return the route for ``question`` using lightweight deterministic rules.
+    """Classify input query into an execution Route.
 
-    Optional ``document_titles`` / ``context_texts`` enable corpus-aware routing
-    for project questions without hard-coding brand names into GENERAL->RAG.
+    Deterministic & low-latency (<1ms) pattern matching.
     """
-    text = (question or "").strip().strip('"\'`')
     req_id = request_id or "N/A"
-    if not text:
-        logger.info('[AI ROUTER] request_id="%s" question="" selected_intent="GENERIC_CHAT" selected_route="generic_chat"', req_id)
-        return Route.GENERIC_CHAT
-
     from app.rag.query_normalizer import normalize_query
     _, norm, _ = normalize_query(text)
     lower = norm.lower() if norm else text.lower()
+
+    is_doc_q = _is_document_qa(text, lower) or _is_corpus_document_qa(
+        lower,
+        document_titles=document_titles,
+        context_texts=context_texts,
+    )
+    is_web_q = _is_web_query(text, lower)
+    has_private_doc = _has_explicit_private_doc_ref(lower) or (
+        document_titles and _matches_document_entity(lower, document_titles)
+    )
 
     if _is_datetime_query(lower):
         route = Route.WEB
@@ -516,16 +552,12 @@ def classify(
         route = Route.DOCUMENT_LIST
     elif _is_calculator(text, lower):
         route = Route.CALCULATOR
-    elif _is_document_qa(text, lower):
-        route = Route.DOCUMENT_QA
-    elif _is_corpus_document_qa(
-        lower,
-        document_titles=document_titles,
-        context_texts=context_texts,
-    ):
-        route = Route.DOCUMENT_QA
-    elif _is_web_query(text, lower):
+    elif is_web_q and has_private_doc:
+        route = Route.HYBRID
+    elif is_web_q:
         route = Route.WEB
+    elif is_doc_q:
+        route = Route.DOCUMENT_QA
     else:
         # Default fallback for general questions without document cues
         route = Route.GENERAL_KNOWLEDGE

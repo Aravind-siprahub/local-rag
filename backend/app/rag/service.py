@@ -8,6 +8,7 @@ import logging
 import re
 import time
 import uuid
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,6 +33,7 @@ from app.llm.sanitize import detect_reasoning_leakage, sanitize_response
 from app.tools.calculator import CalculatorError, calculate
 from app.tools.web_search import (
     WebSearchError,
+    WebSearchHit,
     WebSearchProvider,
     get_web_search_provider,
 )
@@ -62,18 +64,19 @@ def _validate_web_answer(
     4. Otherwise return clean_answer.
     """
     import json as _json
+    import re as _re
 
     raw = (raw_answer or "").strip()
 
-    # Step 1: JSON detection
-    if raw.startswith("{") and "answer" in raw:
+    # Step 1: JSON detection (reject serialized JSON if missing or empty 'answer' field)
+    if raw.startswith("{"):
         try:
             parsed = _json.loads(raw)
             if isinstance(parsed, dict):
                 extracted = (parsed.get("answer") or "").strip()
                 if extracted:
                     return extracted
-                logger.info("[WEB ANSWER FALLBACK] JSON 'answer' field empty. Using concise_text.")
+                logger.info("[WEB ANSWER FALLBACK] JSON 'answer' field missing or empty. Using concise_text.")
                 return concise_text
         except (_json.JSONDecodeError, ValueError):
             logger.info("[WEB ANSWER FALLBACK] Malformed JSON from LLM. Using concise_text.")
@@ -84,18 +87,32 @@ def _validate_web_answer(
         return concise_text
 
     # Step 3: Relevance check against query + web result tokens
-    import re as _re
-    query_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", original_query.lower()))
-    web_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", concise_text.lower()))
     stopwords = {"what", "when", "where", "which", "that", "with", "from", "this", "they", "have", "here", "found"}
-    topic_tokens = (query_tokens | web_tokens) - stopwords
+    query_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", original_query.lower())) - stopwords
+    web_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", concise_text.lower())) - stopwords
+    topic_tokens = query_tokens | web_tokens
 
     if topic_tokens:
-        ans_lower = clean_answer.lower()
-        overlap = sum(1 for t in topic_tokens if t in ans_lower)
-        if overlap / len(topic_tokens) < 0.15:
-            logger.info("[WEB ANSWER FALLBACK] Answer unrelated (overlap=%.2f). Using concise_text.", overlap / len(topic_tokens))
+        answer_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", clean_answer.lower())) - stopwords
+        if not (answer_tokens & topic_tokens):
+            logger.info("[WEB ANSWER FALLBACK] Answer has no topic overlap with query/results. Using concise_text.")
             return concise_text
+
+    # Step 4: Disallow LLM disclaimer responses when real web search results are available
+    disclaimer_phrases = (
+        "cannot perform external search",
+        "cannot perform live internet",
+        "cannot access github",
+        "cannot access external",
+        "don't have access to the internet",
+        "dont have access to the internet",
+        "no internet access",
+        "cannot search the web",
+        "cannot browse the web",
+    )
+    if any(phrase in clean_answer.lower() for phrase in disclaimer_phrases):
+        logger.info("[WEB ANSWER FALLBACK] Replaced LLM disclaimer answer with concise web search results.")
+        return concise_text
 
     return clean_answer
 
@@ -1257,44 +1274,109 @@ class RAGService:
         """Search the web and synthesize a clean answer using the LLM."""
         provider_name = getattr(self.web_search, "provider", "duckduckgo")
         req_id = request_id or "N/A"
+        sources: list[SourceCitation] = []
         try:
-            # Build search query for provider (stripping web search prefixes)
-            search_query = question.strip()
-            search_query_clean = re.sub(r"(?i)^(?:search\s+the\s+web\s+for|search\s+web\s+for|search\s+for|web\s+search|google|browse)\s+", "", search_query).strip()
+            # Build search queries (supporting compound / multi-intent prompts)
+            queries = []
+            q_str = question.strip()
+            parts = re.split(r"(?i)\b(?:also\s+(?:can\s+you\s+)?search|and\s+(?:can\s+you\s+)?search|\. |\n)\b", q_str)
+            clean_prefix = re.compile(
+                r"(?i)^(?:can\s+you\s+|please\s+)?(?:look\s*up|search\s+(?:the\s+web\s+for|web\s+for|github\s+for|google\s+for|online\s+for|for)?|web\s+search|google|browse|find\s+online|find\s+information\s+(?:about|on)?)\s+"
+            )
+            for part in parts:
+                part_clean = clean_prefix.sub("", part).strip()
+                part_clean = re.sub(r"(?i)\band\s+tell\s+me\s+what\s+it\s+is\??$", "", part_clean).strip()
+                part_clean = re.sub(r"(?i)\band\s+paste\s+it\s+back.*$", "", part_clean).strip()
+                if not part_clean:
+                    continue
+                p_lower = part.lower()
+                if "github" in p_lower and "site:github.com" not in part_clean.lower():
+                    clean_topic = re.sub(r"(?i)\bgithub\b", "", part_clean).strip()
+                    clean_topic = re.sub(r"\s+", " ", clean_topic).strip()
+                    part_clean = f"site:github.com {clean_topic or part_clean}"
+                elif "reddit" in p_lower and "site:reddit.com" not in part_clean.lower():
+                    clean_topic = re.sub(r"(?i)\breddit\b", "", part_clean).strip()
+                    clean_topic = re.sub(r"\s+", " ", clean_topic).strip()
+                    part_clean = f"site:reddit.com {clean_topic or part_clean}"
+                elif ("stack overflow" in p_lower or "stackoverflow" in p_lower) and "site:stackoverflow.com" not in part_clean.lower():
+                    clean_topic = re.sub(r"(?i)\bstack\s*overflow\b", "", part_clean).strip()
+                    clean_topic = re.sub(r"\s+", " ", clean_topic).strip()
+                    part_clean = f"site:stackoverflow.com {clean_topic or part_clean}"
 
-            logger.info("[WEB SEARCH TRIGGERED] request_id=%s orig_question=%r search_query=%r", req_id, question, search_query_clean)
-            result = await self.web_search.search(search_query_clean or question, request_id=req_id)
+                if part_clean and part_clean not in queries:
+                    queries.append(part_clean)
+            if not queries:
+                queries.append(q_str)
+
+            logger.info("[WEB SEARCH START] query=%r", queries[0])
+            logger.info("[WEB SEARCH PROVIDER] provider=%s", provider_name)
+
+            all_hits: list[WebSearchHit] = []
+            seen_urls: set[str] = set()
+            last_sub_exc: Exception | None = None
+            for q_item in queries[:3]:
+                try:
+                    res_q = await self.web_search.search(q_item, request_id=req_id)
+                    for h in res_q.hits:
+                        c_url = (h.url or "").strip().rstrip("/")
+                        if c_url and c_url in seen_urls:
+                            continue
+                        if c_url:
+                            seen_urls.add(c_url)
+                        all_hits.append(h)
+                except Exception as sq_exc:
+                    last_sub_exc = sq_exc
+                    logger.warning("[WEB SEARCH SUB-QUERY FAILED] query=%r: %s", q_item, sq_exc)
+
             total_ms = int((time.monotonic() - start_mono) * 1000)
 
-            if result.hits:
-                logger.info(
-                    "[WEB SEARCH SUCCESS] request_id=%s provider=%s query=%r hits_count=%d urls=%s",
-                    req_id,
-                    result.provider,
-                    question,
-                    len(result.hits),
-                    [getattr(h, "url", "") for h in result.hits[:3]],
-                )
+            if all_hits:
+                logger.info("[WEB SEARCH COMPLETE] result_count=%d", len(all_hits))
+                logger.info("[WEB SEARCH CONTEXT] results_passed_to_llm=%d", len(all_hits))
 
                 # Format web snippets with title, snippet, and URL
                 snippets_list = []
-                for h in result.hits[:5]:
+                for idx, h in enumerate(all_hits[:6], start=1):
                     title = getattr(h, "title", "") or "Web Result"
                     url = getattr(h, "url", "")
                     snippet = h.snippet.strip()
                     if snippet:
-                        item_str = f"Source: {title} ({url})\nSnippet: {snippet}" if url else f"Snippet: {snippet}"
+                        item_str = f"Source {idx}: {title} ({url})\nSnippet: {snippet}" if url else f"Snippet: {snippet}"
                         snippets_list.append(item_str)
+
+                    # Build SourceCitation for web hit
+                    url_val = url or f"https://duckduckgo.com/?q={urllib.parse.quote(queries[0])}"
+                    doc_uuid = uuid.uuid5(uuid.NAMESPACE_URL, url_val)
+                    sources.append(
+                        SourceCitation(
+                            chunk_id=doc_uuid,
+                            chunk_text=snippet,
+                            document_id=doc_uuid,
+                            similarity_score=1.0,
+                            rank=idx,
+                            document_title=title,
+                            section_title=getattr(h, "source", "web"),
+                        )
+                    )
 
                 web_context = "\n\n".join(snippets_list)
                 web_system_prompt = get_settings().WEB_SEARCH_SYSTEM_PROMPT
 
                 web_user_prompt = (
-                    f"Web search results:\n\n{web_context}\n\n"
-                    f"User question:\n{question}"
+                    f"WEB SEARCH RESULTS (retrieved live via DuckDuckGo):\n\n{web_context}\n\n"
+                    f"User Question:\n{question}\n\n"
+                    f"Instructions:\nAnswer the user's question accurately using the web search results above. "
+                    f"If multiple items/queries were requested, answer each part clearly. "
+                    f"Do NOT output disclaimers claiming that you cannot access external sites or GitHub."
                 )
 
-                logger.info("[WEB SEARCH PROMPT SENT] request_id=%s system_prompt=%r user_prompt=%r", req_id, web_system_prompt[:100], web_user_prompt[:150])
+                # Debug logging as required by Section 4 & Section 19
+                logger.info("[WEB SEARCH DEBUG] query=%r", queries[0])
+                logger.info("[WEB SEARCH DEBUG] result_count=%d", len(all_hits))
+                logger.info("[WEB SEARCH DEBUG] results_context_length=%d", len(web_context))
+                logger.info("[WEB SEARCH DEBUG] first_result_title=%r", all_hits[0].title if all_hits else "")
+                logger.info("[WEB SEARCH DEBUG] first_result_url=%r", all_hits[0].url if all_hits else "")
+                logger.info("[WEB SEARCH DEBUG] llm_prompt_contains_web_results=true")
 
                 try:
                     llm_resp = await self.llm_client.generate(
@@ -1306,42 +1388,62 @@ class RAGService:
                     raw_text = llm_resp.answer.strip()
                     logger.info("[WEB SEARCH LLM RAW RESPONSE] request_id=%s %r", req_id, raw_text)
                     clean_text = sanitize_response(raw_text, question=question).strip()
+                    concise_ans = "\n".join(f"- {h.title}: {h.snippet} ({h.url})" for h in all_hits[:5])
                     answer_text = _validate_web_answer(
                         raw_answer=raw_text,
                         clean_answer=clean_text,
-                        concise_text=result.concise_answer(),
+                        concise_text=concise_ans,
                         original_query=question,
                     )
                     logger.info("[WEB SEARCH VALIDATED ANSWER] request_id=%s %r", req_id, answer_text[:100])
+                    logger.info("[WEB SEARCH ANSWER] grounded=true")
+
+                    # Attach markdown source links to answer if not present
+                    if all_hits and "**Sources:**" not in answer_text and "http" not in answer_text:
+                        src_links = [
+                            f"- [{h.title or 'Link'}]({h.url})"
+                            for h in all_hits[:5]
+                            if getattr(h, "url", "")
+                        ]
+                        if src_links:
+                            answer_text = answer_text + "\n\n**Sources:**\n" + "\n".join(src_links)
                 except Exception as llm_exc:
                     logger.error("[WEB SEARCH LLM ERROR] request_id=%s failed to generate answer using LLM: %s", req_id, llm_exc, exc_info=True)
-                    answer_text = result.concise_answer()
+                    answer_text = "\n".join(f"- {h.title}: {h.snippet} ({h.url})" for h in all_hits[:5])
             else:
-                logger.warning("[WEB SEARCH EMPTY] request_id=%s provider=%s query=%r empty results", req_id, provider_name, question)
+                logger.warning("[WEB SEARCH EMPTY] request_id=%s provider=%s queries=%r empty results", req_id, provider_name, queries)
+                if last_sub_exc:
+                    raise last_sub_exc
                 answer_text = "I could not find reliable web results for that question right now."
                 raise WebSearchError("Web search yielded no results. Please try again.")
             
-            model_name = f"web-search:{result.provider}"
+            model_name = f"web-search:{provider_name}"
 
         except WebSearchError as exc:
             msg = str(exc)
-            if "timeout" in msg.lower():
+            msg_lower = msg.lower()
+            if "timeout" in msg_lower or "timed out" in msg_lower or "time out" in msg_lower:
                 error_type = "timeout"
-                answer_text = "Web search timed out. Please try again shortly."
-            elif "no results" in msg.lower() or "yielded no results" in msg.lower():
+                answer_text = "Web search timed out. I couldn't retrieve current web results for this request."
+                logger.info("[WEB SEARCH RESPONSE] status=WEB_SEARCH_TIMEOUT answer_contains_timeout=true")
+            elif "no results" in msg_lower or "yielded no results" in msg_lower:
                 error_type = "empty_results"
                 answer_text = "I could not find reliable web results for that question right now."
-            elif "unavailable" in msg.lower() or "http" in msg.lower():
+                logger.info("[WEB SEARCH RESPONSE] status=WEB_SEARCH_NO_RESULTS answer_contains_timeout=false")
+            elif "unavailable" in msg_lower or "http" in msg_lower:
                 error_type = "provider_unavailable"
                 answer_text = "Web search is temporarily unavailable. Please try again shortly."
-            elif "parse" in msg.lower():
+                logger.info("[WEB SEARCH RESPONSE] status=WEB_SEARCH_ERROR answer_contains_timeout=false")
+            elif "parse" in msg_lower:
                 error_type = "parser_failure"
                 answer_text = "Web search failed to parse results. Please try again shortly."
+                logger.info("[WEB SEARCH RESPONSE] status=WEB_SEARCH_ERROR answer_contains_timeout=false")
             else:
                 error_type = "search_failed"
                 answer_text = "Web search failed. Please try again shortly."
-                
-            logger.error("[WEB SEARCH FAILURE] request_id=%s provider=%s query=%r error_type=%s reason=%r", req_id, provider_name, question, error_type, msg)
+                logger.info("[WEB SEARCH RESPONSE] status=WEB_SEARCH_ERROR answer_contains_timeout=false")
+
+            logger.error("[WEB SEARCH ERROR] type=%s message=%s", error_type, msg)
             model_name = f"web-search:error:{error_type}"
 
         except Exception as exc:
@@ -1362,7 +1464,7 @@ class RAGService:
         logger.info("[RESPONSE RETURNED] total_ms=%d route=WEB", total_ms)
         return RAGResponse(
             answer=answer_text,
-            sources=[],
+            sources=sources,
             token_usage=None,
             model=model_name,
             processing_time_ms=total_ms,

@@ -40,25 +40,26 @@ class Planner:
                 )
             )
 
-        if route in (Route.DOCUMENT_QA, Route.RAG) or has_doc_filter or _has_document_keywords(query):
-            step_num = len(plan) + 1
-            plan.append(
-                PlanStep(
-                    step_number=step_num,
-                    description="Perform hybrid vector retrieval over uploaded project documents.",
-                    target_tool="document_rag",
-                    expected_outcome="Relevant document chunks and evidence statements.",
-                )
-            )
+        is_web = route == Route.WEB or _is_explicit_web_query(query)
+        is_doc = (route in (Route.DOCUMENT_QA, Route.RAG) or has_doc_filter or _has_document_keywords(query))
 
-        elif route == Route.WEB or _is_explicit_web_query(query):
-            step_num = len(plan) + 1
+        if is_web:
             plan.append(
                 PlanStep(
-                    step_number=step_num,
+                    step_number=len(plan) + 1,
                     description="Search the live web for current real-time or external facts.",
                     target_tool="web_search",
                     expected_outcome="Current web search hits and web evidence.",
+                )
+            )
+
+        if is_doc and (not is_web or has_doc_filter):
+            plan.append(
+                PlanStep(
+                    step_number=len(plan) + 1,
+                    description="Perform hybrid vector retrieval over uploaded project documents.",
+                    target_tool="document_rag",
+                    expected_outcome="Relevant document chunks and evidence statements.",
                 )
             )
 
@@ -96,13 +97,15 @@ def _has_document_keywords(query: str) -> bool:
 
 def _is_explicit_web_query(query: str) -> bool:
     q_low = query.lower()
-    return any(
-        kw in q_low
-        for kw in (
-            "search web", "web search", "search online", "latest version", "weather",
-            "current date", "news", "today", "google", "online", "latest news",
-            "current price", "current prices", "recent release", "recent releases",
-            "current documentation", "event", "events", "price of", "latest",
-            "recent", "release date", "stock price", "current info", "live search"
-        )
+    web_verbs = (
+        "search web", "web search", "search online", "search internet", "latest version", "weather",
+        "current date", "news", "today", "google", "online", "latest news",
+        "current price", "current prices", "recent release", "recent releases",
+        "current documentation", "event", "events", "price of", "latest",
+        "recent", "release date", "stock price", "current info", "live search",
+        "look up", "lookup", "search github", "find on github", "search reddit",
+        "search documentation", "verify online", "check online", "find information about",
+        "find information on", "search google", "search internet",
+        "realtime", "real-time", "search for"
     )
+    return any(kw in q_low for kw in web_verbs)

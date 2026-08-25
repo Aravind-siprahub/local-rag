@@ -207,7 +207,7 @@ class TestAgentRouterAsk:
         assert web.calls == ["When is Good Friday in 2026?"]
         assert retriever.calls == []
         assert "Good Friday" in response.answer or "April" in response.answer or "found" in response.answer.lower()
-        assert response.sources == []
+        assert not response.sources or getattr(response.sources[0], "section_title", "web") in ("web", "duckduckgo", "fake", "example.com")
 
     @pytest.mark.asyncio
     async def test_deployment_guide_routes_rag_and_calls_retriever(self) -> None:
@@ -291,6 +291,14 @@ class TestAgentRouterAsk:
         assert classify("what are documents u have list it") == Route.DOCUMENT_LIST
         assert classify("what are documents you have list it") == Route.DOCUMENT_LIST
         assert classify("what documents u have") == Route.DOCUMENT_LIST
+
+    @pytest.mark.asyncio
+    async def test_look_up_and_search_github_routes_to_web(self) -> None:
+        from app.rag.intent_router import Route, classify
+        assert classify("Can you look up posthog and tell me what it is?") == Route.WEB
+        assert classify("search github for Claude Fable leaked system prompt") == Route.WEB
+        assert classify("look up weather in Tokyo") == Route.WEB
+        assert classify("search online for python docs") == Route.WEB
 
 
 @pytest.mark.asyncio

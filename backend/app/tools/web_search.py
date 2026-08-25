@@ -291,24 +291,30 @@ class DuckDuckGoWebSearchProvider:
                 seen_urls.add(clean_url)
 
             source_name = h.source
-            if source_name == "web" and h.url:
+            if (source_name == "web" or not source_name) and h.url:
                 try:
                     netloc = urllib.parse.urlparse(h.url).netloc
                     if netloc:
-                        source_name = netloc
+                        source_name = netloc.replace("www.", "")
                 except Exception:
                     pass
 
             unique_hits.append(
                 WebSearchHit(
-                    title=h.title,
+                    title=h.title or "Search Result",
                     url=h.url,
                     snippet=h.snippet,
-                    source=source_name,
+                    source=source_name or "web",
                     published_at=h.published_at,
                     content=h.content,
                 )
             )
+
+        # Prioritize GitHub results if searching GitHub
+        if "github" in q.lower():
+            gh_hits = [h for h in unique_hits if "github.com" in (h.url or "").lower() or "github" in (h.source or "").lower()]
+            other_hits = [h for h in unique_hits if h not in gh_hits]
+            unique_hits = gh_hits + other_hits
 
         latency_ms = int((time.monotonic() - start_mono) * 1000)
         logger.info(
@@ -323,7 +329,16 @@ class DuckDuckGoWebSearchProvider:
             raise WebSearchError("Web search yielded no results. Please try again.")
 
         limit = max_results if max_results and max_results > 0 else 5
-        return WebSearchResult(query=q, hits=unique_hits[:limit], provider="duckduckgo")
+        final_hits = unique_hits[:limit]
+
+        logger.info("[WEB SEARCH] query=%r", q)
+        logger.info("[WEB SEARCH RESULTS] provider=\"duckduckgo\" result_count=%d", len(final_hits))
+        for hit in final_hits:
+            logger.info("[WEB SEARCH RESULT] title=%r url=%r", hit.title, hit.url)
+        logger.info("[WEB SEARCH CONTEXT] results_passed_to_llm=%d", len(final_hits))
+        logger.info("[WEB SEARCH COMPLETE] success=true")
+
+        return WebSearchResult(query=q, hits=final_hits, provider="duckduckgo")
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:

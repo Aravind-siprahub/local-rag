@@ -20,6 +20,7 @@ from app.core.config import get_settings
 from app.prompting.builder import PromptBuilder
 from app.llm.ollama_client import get_global_ollama_client
 from app.llm.sanitize import sanitize_response
+from app.retrieval.ranking import RankedResult
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +68,21 @@ def _validate_web_search_answer(
         ans_lower = clean_answer.lower()
         overlap = sum(1 for t in topic_tokens if t in ans_lower)
         # If fewer than 15% of topic tokens appear in the answer, it's unrelated
-        if overlap / len(topic_tokens) < 0.15:
-            logger.info(
-                "[AGENT WEB FALLBACK] LLM answer unrelated (overlap=%.2f). Using concise_text.", overlap / len(topic_tokens)
-            )
-            return web_concise_text
+    # Step 3: Check for LLM disclaimer phrases
+    disclaimer_phrases = (
+        "cannot perform external search",
+        "cannot perform live internet",
+        "cannot access github",
+        "cannot access external",
+        "don't have access to the internet",
+        "dont have access to the internet",
+        "no internet access",
+        "cannot search the web",
+        "cannot browse the web",
+    )
+    if any(phrase in clean_answer.lower() for phrase in disclaimer_phrases):
+        logger.info("[AGENT WEB FALLBACK] LLM disclaimer detected. Replacing with concise web search text.")
+        return web_concise_text
 
     return clean_answer or web_concise_text
 
@@ -292,11 +303,11 @@ class AgentOrchestrator:
                 web_had_hits = bool(last_web.output_data.get("count", 0))
 
                 if not web_had_hits:
-                    # Web search returned 0 hits — use the safe "no results" message
-                    state.final_answer = (
-                        "I could not find reliable web results for that question right now. "
-                        "Please try again shortly."
-                    )
+                    web_err = (last_web.error_message or "").lower()
+                    if "timeout" in web_err or "timed out" in web_err:
+                        state.final_answer = "Web search timed out. I couldn't retrieve current web results for this request."
+                    else:
+                        state.final_answer = "I could not find reliable web results for that question right now."
                     state.metrics.llm_generation_time_ms = 0
                     state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
                     state.transition_to(AgentStatus.COMPLETED)
@@ -309,6 +320,27 @@ class AgentOrchestrator:
                 state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
                 state.transition_to(AgentStatus.COMPLETED)
                 return state
+
+            if web_was_used and web_had_hits:
+                web_chunks = []
+                for idx, ev in enumerate(state.evidence, 1):
+                    if ev.source_type in ("web", "web_search") and ev.content:
+                        url_val = (ev.metadata.get("url") if isinstance(ev.metadata, dict) else "") or f"https://websearch/{idx}"
+                        doc_id = uuid.uuid5(uuid.NAMESPACE_URL, url_val)
+                        web_chunks.append(
+                            RankedResult(
+                                chunk_id=doc_id,
+                                chunk_text=f"Source {idx}: {ev.source_name} ({url_val})\nSnippet: {ev.content}",
+                                document_id=doc_id,
+                                document_version_id=uuid.uuid4(),
+                                similarity_score=ev.relevance_score,
+                                rank=idx,
+                                document_title=ev.source_name or "Web Source",
+                                section_title="web",
+                            )
+                        )
+                if web_chunks:
+                    state.retrieved_documents.extend(web_chunks)
 
             if not state.evidence and not state.retrieved_documents and not image_bytes:
                 state.final_answer = "I could not find this information in the uploaded documents."
@@ -325,9 +357,20 @@ class AgentOrchestrator:
                 is_vision=bool(image_bytes),
             )
 
+            sys_prompt = prompt.system_prompt
+            if web_was_used and web_had_hits:
+                sys_prompt = settings.WEB_SEARCH_SYSTEM_PROMPT
+                logger.info("[WEB SEARCH DEBUG] query=%r", query)
+                logger.info("[WEB SEARCH DEBUG] result_count=%d", len(state.evidence))
+                logger.info("[WEB SEARCH DEBUG] results_context_length=%d", len(prompt.user_prompt))
+                if state.evidence:
+                    logger.info("[WEB SEARCH DEBUG] first_result_title=%r", state.evidence[0].source_name)
+                    logger.info("[WEB SEARCH DEBUG] first_result_url=%r", getattr(state.evidence[0], "url", ""))
+                logger.info("[WEB SEARCH DEBUG] llm_prompt_contains_web_results=true")
+
             _images_payload = [image_bytes] if image_bytes else None
             resp = await self.llm_client.generate(
-                prompt.system_prompt,
+                sys_prompt,
                 prompt.user_prompt,
                 num_predict=settings.OLLAMA_NUM_PREDICT,
                 images=_images_payload,

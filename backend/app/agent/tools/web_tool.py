@@ -32,7 +32,35 @@ class WebSearchTool(Tool):
         start_mono = time.monotonic()
         query = tool_input.query.strip()
         request_id = tool_input.parameters.get("request_id")
-        
+
+        # Format web search query (strip prefixes & handle GitHub queries)
+        import re
+        q_lower = query.lower()
+        is_github_search = bool(re.search(r"\b(?:search|find|look\s*up)\s+(?:on\s+)?github\b|\bgithub\s+for\b", q_lower))
+        is_reddit_search = bool(re.search(r"\b(?:search|find|look\s*up)\s+(?:on\s+)?reddit\b|\breddit\s+for\b", q_lower))
+        is_so_search = bool(re.search(r"\b(?:search|find|look\s*up)\s+(?:on\s+)?(?:stack\s*overflow|stackoverflow)\b|\b(?:stack\s*overflow|stackoverflow)\s+for\b", q_lower))
+
+        clean_prefix = re.compile(
+            r"(?i)^(?:can\s+you\s+|please\s+)?(?:look\s*up|search\s+(?:the\s+web\s+for|web\s+for|github\s+for|reddit\s+for|stackoverflow\s+for|google\s+for|online\s+for|for)?|web\s+search|google|browse|find\s+online|find\s+information\s+(?:about|on)?)\s+"
+        )
+        search_query_clean = clean_prefix.sub("", query).strip()
+        search_query_clean = re.sub(r"(?i)\balso\s+(?:can\s+you\s+)?(?:search|look\s*up)\s+(?:github|reddit|stackoverflow|google|web|online)?\s*(?:for)?\s*", " ", search_query_clean).strip()
+
+        if is_github_search and "site:github.com" not in search_query_clean.lower():
+            clean_topic = re.sub(r"(?i)\bgithub\b", "", search_query_clean).strip()
+            clean_topic = re.sub(r"\s+", " ", clean_topic).strip()
+            search_query_clean = f"site:github.com {clean_topic or search_query_clean}"
+        elif is_reddit_search and "site:reddit.com" not in search_query_clean.lower():
+            clean_topic = re.sub(r"(?i)\breddit\b", "", search_query_clean).strip()
+            clean_topic = re.sub(r"\s+", " ", clean_topic).strip()
+            search_query_clean = f"site:reddit.com {clean_topic or search_query_clean}"
+        elif is_so_search and "site:stackoverflow.com" not in search_query_clean.lower():
+            clean_topic = re.sub(r"(?i)\bstack\s*overflow\b", "", search_query_clean).strip()
+            clean_topic = re.sub(r"\s+", " ", clean_topic).strip()
+            search_query_clean = f"site:stackoverflow.com {clean_topic or search_query_clean}"
+
+        query = search_query_clean or query
+
         max_results_val = tool_input.parameters.get("max_results", 5)
         try:
             max_results = int(max_results_val)
@@ -58,6 +86,7 @@ class WebSearchTool(Tool):
             )
 
         try:
+            logger.info("[WEB TOOL EXECUTE] query=%r request_id=%s", query, request_id or "N/A")
             search_result = await self.provider.search(
                 query,
                 max_results=max_results,
