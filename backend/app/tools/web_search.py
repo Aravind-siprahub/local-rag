@@ -87,15 +87,20 @@ class BackupSnippetParser(HTMLParser):
             self.current_snippet.append(data)
 
 
+import urllib.parse
+
 class WebSearchError(Exception):
     """Raised when web search fails in a controlled way."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class WebSearchHit:
     title: str
     url: str
     snippet: str
+    source: str = "web"
+    published_at: str | None = None
+    content: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,13 +128,25 @@ class WebSearchResult:
 class WebSearchProvider(Protocol):
     """Vendor-agnostic web search contract."""
 
-    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult: ...
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        recency_days: int | None = None,
+        request_id: str | None = None,
+    ) -> WebSearchResult: ...
 
 
 class StubWebSearchProvider:
     """Deterministic provider for tests and offline use — no network calls."""
 
-    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        recency_days: int | None = None,
+        request_id: str | None = None,
+    ) -> WebSearchResult:
         q = (query or "").strip() or "empty"
         logger.info("[WEB SEARCH START] provider=stub query=%r request_id=%s", q, request_id or "N/A")
         result = WebSearchResult(
@@ -143,8 +160,9 @@ class StubWebSearchProvider:
                         f"Stub search result for: {q}. "
                         "Configure WEB_SEARCH_PROVIDER=duckduckgo for live results."
                     ),
+                    source="example.com",
                 )
-            ],
+            ][: max_results if max_results > 0 else 5],
         )
         logger.info("[WEB SEARCH RESULT] provider=stub status=200 result_count=1 latency_ms=0 request_id=%s", request_id or "N/A")
         return result
@@ -163,14 +181,20 @@ class DuckDuckGoWebSearchProvider:
         self._client = client
         self._owns_client = client is None
 
-    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        recency_days: int | None = None,
+        request_id: str | None = None,
+    ) -> WebSearchResult:
         q = (query or "").strip().strip('"').strip("'").strip()
         if not q:
             raise WebSearchError("Search query must not be empty.")
 
         req_id = request_id or "N/A"
         start_mono = time.monotonic()
-        logger.info("[WEB SEARCH START] provider=duckduckgo query=%r request_id=%s", q, req_id)
+        logger.info("[WEB SEARCH START] provider=duckduckgo query=%r max_results=%d request_id=%s", q, max_results, req_id)
 
         hits: list[WebSearchHit] = []
         http_status: int | None = None
@@ -224,7 +248,7 @@ class DuckDuckGoWebSearchProvider:
                         backup_parser = BackupSnippetParser()
                         backup_parser.feed(response.text)
                         hits = [
-                            WebSearchHit(title="Search Result", url="", snippet=snip)
+                            WebSearchHit(title="Search Result", url="", snippet=snip, source="duckduckgo")
                             for snip in backup_parser.snippets
                         ]
                 logger.info("[WEB SEARCH FALLBACK RESULT] request_id=%s status=%s parsed_count=%d", req_id, http_status, len(hits))
@@ -256,19 +280,50 @@ class DuckDuckGoWebSearchProvider:
                 )
                 raise WebSearchError("Web search failed.") from exc
 
+        # Deduplicate hits by URL and extract source domains
+        unique_hits: list[WebSearchHit] = []
+        seen_urls: set[str] = set()
+        for h in hits:
+            clean_url = (h.url or "").strip().rstrip("/")
+            if clean_url and clean_url in seen_urls:
+                continue
+            if clean_url:
+                seen_urls.add(clean_url)
+
+            source_name = h.source
+            if source_name == "web" and h.url:
+                try:
+                    netloc = urllib.parse.urlparse(h.url).netloc
+                    if netloc:
+                        source_name = netloc
+                except Exception:
+                    pass
+
+            unique_hits.append(
+                WebSearchHit(
+                    title=h.title,
+                    url=h.url,
+                    snippet=h.snippet,
+                    source=source_name,
+                    published_at=h.published_at,
+                    content=h.content,
+                )
+            )
+
         latency_ms = int((time.monotonic() - start_mono) * 1000)
         logger.info(
             "[WEB SEARCH RESULT] provider=duckduckgo status=%s result_count=%d latency_ms=%d request_id=%s",
             http_status if http_status is not None else 200,
-            len(hits),
+            len(unique_hits),
             latency_ms,
             req_id,
         )
 
-        if not hits:
+        if not unique_hits:
             raise WebSearchError("Web search yielded no results. Please try again.")
 
-        return WebSearchResult(query=q, hits=hits[:5], provider="duckduckgo")
+        limit = max_results if max_results and max_results > 0 else 5
+        return WebSearchResult(query=q, hits=unique_hits[:limit], provider="duckduckgo")
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:

@@ -1198,10 +1198,8 @@ class RAGService:
         )
 
         if user_id is not None:
-            stmt_user = stmt_base.where((Document.user_id == user_id) | (Document.user_id.is_(None)))
+            stmt_user = stmt_base.where(Document.user_id == user_id)
             rows = (await self.session.execute(stmt_user)).all()
-            if not rows:
-                rows = (await self.session.execute(stmt_base)).all()
         else:
             rows = (await self.session.execute(stmt_base)).all()
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.tools.calculator import CalculatorError, CalculatorResult, calculate
+from app.tools.page_fetcher import PageFetcher, extract_readable_content, is_safe_url
 from app.tools.web_search import (
     DuckDuckGoWebSearchProvider,
     StubWebSearchProvider,
@@ -23,4 +24,7 @@ __all__ = [
     "WebSearchProvider",
     "WebSearchResult",
     "get_web_search_provider",
+    "PageFetcher",
+    "extract_readable_content",
+    "is_safe_url",
 ]

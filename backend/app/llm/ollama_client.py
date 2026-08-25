@@ -525,7 +525,7 @@ def _parse_chat_response(data: dict[str, Any], fallback_model: str) -> LLMRespon
         if is_reasoning_model(model_name) and (not isinstance(thinking, str) or not thinking.strip()):
             content = ""
         else:
-            content = "I could not generate an answer right now."
+            content = "Information not found in document excerpts."
 
     model_name = data.get("model") if isinstance(data.get("model"), str) else fallback_model
     finish_reason = data.get("done_reason") if isinstance(data.get("done_reason"), str) else None

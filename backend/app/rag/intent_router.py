@@ -304,7 +304,17 @@ def _is_generic_chat(lower: str) -> bool:
     return any(lower == phrase or lower.startswith(phrase + " ") for phrase in _CHAT_PHRASES)
 
 
+def _is_document_metadata(lower: str) -> bool:
+    if any(kw in lower for kw in _DOC_METADATA_KEYWORDS):
+        return True
+    if ("when" in lower or "date" in lower or "time" in lower or "who" in lower or "size" in lower) and ("uploaded" in lower or "upload" in lower or "created" in lower or "modified" in lower or "added" in lower):
+        return True
+    return False
+
+
 def _is_document_list(lower: str) -> bool:
+    if _is_document_metadata(lower):
+        return False
     if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy"]):
         return False
     if _DOC_LIST_REGEX.search(lower):
@@ -313,15 +323,9 @@ def _is_document_list(lower: str) -> bool:
         return True
     doc_target = any(term in lower for term in ["document", "documents", "file", "files", "doc", "docs"])
     list_action = any(term in lower for term in ["list", "show", "have", "available", "uploaded"])
-    if doc_target and list_action and not any(w in lower for w in ["what is", "how to", "why", "where is", "according to"]):
+    if doc_target and list_action and not any(w in lower for w in ["what is", "how to", "why", "where is", "according to", "when"]):
         return True
     return False
-
-
-def _is_document_metadata(lower: str) -> bool:
-    if ("when" in lower or "date" in lower) and ("uploaded" in lower or "upload" in lower):
-        return True
-    return any(kw in lower for kw in _DOC_METADATA_KEYWORDS)
 
 
 def _is_document_qa(text: str, lower: str) -> bool:
@@ -506,10 +510,10 @@ def classify(
         route = Route.GENERIC_CHAT
     elif len(lower.split()) == 1:
         route = Route.DIRECT
-    elif _is_document_list(lower):
-        route = Route.DOCUMENT_LIST
     elif _is_document_metadata(lower):
         route = Route.DOCUMENT_METADATA
+    elif _is_document_list(lower):
+        route = Route.DOCUMENT_LIST
     elif _is_calculator(text, lower):
         route = Route.CALCULATOR
     elif _is_document_qa(text, lower):

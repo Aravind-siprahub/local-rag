@@ -190,7 +190,11 @@ class AgentOrchestrator:
                     state.transition_to(AgentStatus.SEARCHING)
                     web_input = ToolInput(
                         query=query,
-                        parameters={"request_id": state.trace_id},
+                        parameters={
+                            "request_id": state.trace_id,
+                            "max_results": 5,
+                            "fetch_pages": True,
+                        },
                     )
                     tool_output = await self.web_tool.execute(web_input)
                 else:

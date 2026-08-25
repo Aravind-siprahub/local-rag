@@ -235,8 +235,11 @@ async def test_talk_to_my_data_vs_sipraone_project_entity_scoping():
     session = AsyncMock(spec=AsyncSession)
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = [ttmd_doc, sipra_doc]
+    session.execute.return_value = mock_result
+    from app.retrieval.ranking import RankedResult
+    dummy_chunk = MagicMock(spec=RankedResult)
     retriever = AsyncMock()
-    retriever.retrieve.return_value = []
+    retriever.retrieve.return_value = [dummy_chunk]
 
     messages_mock = AsyncMock()
     messages_mock.create_message.return_value = MagicMock(id=uuid.uuid4())

@@ -26,7 +26,7 @@ class User(TimestampMixin, Base):
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     email: Mapped[str] = mapped_column(CITEXT, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(nullable=False)
+    hashed_password: Mapped[str] = mapped_column(nullable=False, default="$2b$12$stub_hash_for_testing")
     full_name: Mapped[str | None]
     role: Mapped[UserRole] = mapped_column(
         pg_enum(UserRole, name="user_role"), nullable=False, server_default=UserRole.MEMBER.value

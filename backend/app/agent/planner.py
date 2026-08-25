@@ -100,6 +100,9 @@ def _is_explicit_web_query(query: str) -> bool:
         kw in q_low
         for kw in (
             "search web", "web search", "search online", "latest version", "weather",
-            "current date", "news", "today", "google", "online",
+            "current date", "news", "today", "google", "online", "latest news",
+            "current price", "current prices", "recent release", "recent releases",
+            "current documentation", "event", "events", "price of", "latest",
+            "recent", "release date", "stock price", "current info", "live search"
         )
     )
