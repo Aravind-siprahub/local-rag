@@ -23,9 +23,8 @@ USER_PROMPT_WITHOUT_CONTEXT = (
     "Retrieved Document Context:\n\n"
     "No document excerpts were available.\n\n"
     "Question:\n\n{question}\n\n"
-    "Note: No document context was retrieved for this query.\n"
-    "If the question is a general knowledge question, greeting, current date/time query, or calculation, answer it directly and accurately. "
-    "Only if the question specifically asks for information from an uploaded document that is missing, reply that the requested document information was not found."
+    "CRITICAL GROUNDING RULES:\n"
+    "No document context was retrieved for this query. If the question asks for information from uploaded documents or project specifications, or if no relevant context exists, respond: \"Information not found in document excerpts.\""
 )
 
 

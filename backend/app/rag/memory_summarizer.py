@@ -24,12 +24,15 @@ def summarize_session_history(
     key_topics: set[str] = set()
 
     for msg in chat_history:
-        role = msg.get("role", "").lower()
-        content = (msg.get("content") or "").strip()
+        raw_role = msg.get("role", "")
+        role = str(raw_role).lower() if raw_role else ""
+        raw_content = msg.get("content", "")
+        content = str(raw_content).strip() if raw_content is not None else ""
         if not content:
             continue
 
         content_lower = content.lower()
+
 
         # Extract project entities
         if "talk to my data" in content_lower:

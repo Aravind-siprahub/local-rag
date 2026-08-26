@@ -144,8 +144,18 @@ class OllamaLLMClient:
             options["num_gpu"] = 0
         elif self.num_gpu is not None:
             options["num_gpu"] = self.num_gpu
+        else:
+            options["num_gpu"] = getattr(settings, "OLLAMA_NUM_GPU", 99) or 99
+
         if self.num_thread is not None:
             options["num_thread"] = self.num_thread
+        elif settings.OLLAMA_NUM_THREAD is not None:
+            options["num_thread"] = settings.OLLAMA_NUM_THREAD
+        else:
+            import os
+            cpu_cnt = os.cpu_count() or 4
+            options["num_thread"] = max(1, cpu_cnt // 2 if cpu_cnt > 4 else cpu_cnt)
+
         return options
 
     async def supports_vision(self, model: str | None = None) -> bool:
@@ -175,6 +185,7 @@ class OllamaLLMClient:
                     return True
                 # 2. Model family — includes qwen alongside llava/mllama/clip
                 details = data.get("details", {})
+                families = details.get("families", []) or ([details.get("family")] if details.get("family") else [])
                 _VISION_FAMILIES = {"mllama", "llava", "clip", "minicpm", "moondream", "qwen-vl", "qwen2-vl", "qwen3-vl"}
                 if any(f in _VISION_FAMILIES for f in families):
                     logger.info("[VISION] supports_vision=True (family=%s) model=%s", families, target_model)
@@ -476,7 +487,8 @@ class OllamaLLMClient:
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             # Single timeout applies to connect + read while Ollama generates.
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout))
+            limits = httpx.Limits(max_keepalive_connections=20, max_connections=100, keepalive_expiry=600.0)
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout), limits=limits)
         return self._client
 
 

@@ -21,3 +21,8 @@ class LLMResponse:
     model_name: str
     token_usage: TokenUsage | None = None
     finish_reason: str | None = None
+    ttft_ms: float | None = None
+    generation_time_ms: float | None = None
+    tokens_per_second: float | None = None
+    cost_usd: float | None = None
+    provider: str | None = None

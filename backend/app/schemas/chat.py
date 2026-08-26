@@ -53,6 +53,9 @@ class ChatRequest(BaseModel):
     top_k: Annotated[int, Field(ge=1, le=100)] | None = None
     similarity_threshold: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
     attachments: list[ChatAttachment] | None = None
+    provider: str | None = None
+    model: str | None = None
+
 
     model_config = ConfigDict(json_schema_extra={"example": CHAT_REQUEST_OPENAPI_EXAMPLE})
 

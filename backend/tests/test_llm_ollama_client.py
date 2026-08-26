@@ -206,6 +206,27 @@ async def test_gpu_enabled_can_limit_num_gpu() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gpu_enabled_defaults_to_full_offload() -> None:
+    capture: dict = {}
+    transport = _make_transport(capture=capture)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = OllamaLLMClient(
+            base_url="http://ollama.test",
+            model="test-chat-model",
+            use_gpu=True,
+            num_gpu=99,
+            max_retries=0,
+            client=http_client,
+        )
+
+        await client.generate("System.", "Question?")
+        await client.close()
+
+    assert capture["payload"]["options"]["num_gpu"] == 99
+    assert "num_thread" in capture["payload"]["options"]
+
+
+@pytest.mark.asyncio
 async def test_oom_maps_to_unavailable_without_retry() -> None:
     capture: dict = {"attempts": 0}
 

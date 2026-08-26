@@ -270,6 +270,59 @@ async def search_similar(
         )
 
     logger.info("[VECTOR QUERY RESULT] hits_found=%d", len(hits))
+
+    # Fallback to system-wide documents if user_id filter produced 0 hits
+    if not hits and filters.user_id is not None:
+        logger.info("[VECTOR QUERY FALLBACK] 0 hits for user_id=%s. Searching system-wide ready documents.", filters.user_id)
+        fallback_stmt = (
+            select(
+                Embedding.chunk_id,
+                DocumentChunk.content,
+                DocumentVersion.document_id,
+                DocumentChunk.document_version_id,
+                Document.title,
+                DocumentChunk.section_title,
+                DocumentChunk.page_number,
+                DocumentChunk.metadata_,
+                distance_expr.label("distance"),
+            )
+            .join(DocumentChunk, Embedding.chunk_id == DocumentChunk.id)
+            .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
+            .join(Document, DocumentVersion.document_id == Document.id)
+            .where(
+                (Embedding.model_name == model_name)
+                | (Embedding.model_name.ilike(f"{model_name.split(':')[0]}%"))
+            )
+            .where(Document.deleted_at.is_(None))
+            .where(Document.status == DocumentStatus.READY)
+        )
+        if filters.document_ids:
+            fallback_stmt = fallback_stmt.where(Document.id.in_(filters.document_ids))
+        elif filters.document_id is not None:
+            fallback_stmt = fallback_stmt.where(Document.id == filters.document_id)
+        if filters.document_version_id is not None:
+            fallback_stmt = fallback_stmt.where(DocumentVersion.id == filters.document_version_id)
+        else:
+            fallback_stmt = fallback_stmt.where(DocumentChunk.document_version_id == Document.current_version_id)
+
+        fallback_stmt = fallback_stmt.order_by(distance_expr).limit(top_k)
+        fb_res = await session.execute(fallback_stmt)
+        for row in fb_res.all():
+            hits.append(
+                SearchHit(
+                    chunk_id=row.chunk_id,
+                    chunk_text=row.content,
+                    document_id=row.document_id,
+                    document_version_id=row.document_version_id,
+                    document_title=row.title,
+                    distance=float(row.distance),
+                    section_title=row.section_title,
+                    page_number=row.page_number,
+                    metadata_=row.metadata_ if isinstance(row.metadata_, dict) else {},
+                )
+            )
+        logger.info("[VECTOR QUERY FALLBACK RESULT] hits_found=%d", len(hits))
+
     for idx, hit in enumerate(hits, 1):
         logger.info(
             "  Hit #%d: chunk_id=%s doc_id=%s distance=%.4f sim=%.4f preview=%r",
@@ -277,4 +330,5 @@ async def search_similar(
         )
 
     return hits
+
 

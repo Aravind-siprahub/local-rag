@@ -12,6 +12,12 @@ from typing import Any
 
 import httpx
 
+# Ensure backend root is in sys.path when running as script
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+
 from app.eval.baseline import compare_baseline, load_baseline_results, save_baseline_results
 from app.eval.dataset import EvalDataset, EvalTestCase
 from app.eval.formatter import (
@@ -38,8 +44,11 @@ def run_evaluation_suite(
     output_dir: str | Path | None = None,
     save_baseline_path: str | Path | None = None,
     compare_baseline_path: str | Path | None = None,
+    provider: str | None = None,
+    model: str | None = None,
     silent: bool = False,
 ) -> dict[str, Any]:
+
     """Execute complete evaluation suite against RAG pipeline."""
     ds_path = Path(dataset_path or DEFAULT_DATASET_PATH)
     target_api = api_url or DEFAULT_API_URL
@@ -87,13 +96,14 @@ def run_evaluation_suite(
     eval_session_id = os.getenv("EVAL_SESSION_ID", "00000000-0000-0000-0000-000000000000")
     eval_auth_token = os.getenv("EVAL_AUTH_TOKEN")
     if not eval_auth_token:
-        token_url = target_api.replace("/api/chat", "/api/auth/token")
+        token_url = target_api.replace("/api/chat", "/api/auth/demo-token")
         try:
             tok_res = httpx.post(token_url, json={}, timeout=5)
             if tok_res.status_code == 200:
                 eval_auth_token = tok_res.json().get("access_token")
         except Exception:
             pass
+
 
     eval_headers = {}
     if eval_auth_token:
@@ -113,13 +123,19 @@ def run_evaluation_suite(
         total_lat_ms = 0
 
         try:
+            req_payload = {"question": test_case.question, "session_id": eval_session_id}
+            if provider:
+                req_payload["provider"] = provider
+            if model:
+                req_payload["model"] = model
             resp = httpx.post(
                 target_api,
-                json={"question": test_case.question, "session_id": eval_session_id},
+                json=req_payload,
                 headers=eval_headers,
                 timeout=180,
             )
             total_lat_ms = int((time.time() - start_time) * 1000)
+
 
             if resp.status_code == 200:
                 raw_json = resp.json()
@@ -127,10 +143,12 @@ def run_evaluation_suite(
                 citations = raw_json.get("citations", [])
                 retrieval_lat_ms = raw_json.get("retrieval_duration_ms", raw_json.get("processing_time_ms", total_lat_ms))
             else:
-                actual_answer = f"HTTP {resp.status_code}: {resp.text}"
+                actual_answer = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                retrieval_lat_ms = total_lat_ms
         except Exception as err:
             total_lat_ms = int((time.time() - start_time) * 1000)
             actual_answer = f"Exception: {err}"
+            retrieval_lat_ms = total_lat_ms
 
         # Populate retrieved documents/versions/chunks from citations
         for cite in citations:
@@ -189,6 +207,8 @@ def run_evaluation_suite(
         overall_pass = (hit_metrics["hit@5"] or test_case.is_negative) and citation_passed and answer_passed and version_ok
 
         issues: list[str] = []
+        if actual_answer.startswith("Exception:") or actual_answer.startswith("HTTP "):
+            issues.append(actual_answer)
         if not hit_metrics["hit@5"] and not test_case.is_negative:
             issues.append("Expected document missing from top-5 retrieved context")
         if not version_ok:

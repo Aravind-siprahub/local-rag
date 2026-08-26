@@ -315,7 +315,7 @@ class AgentOrchestrator:
 
             # Check if document_rag ran or 0 chunks/evidence were retrieved for document query (when no image provided)
             if doc_ran and not state.retrieved_documents and not image_bytes:
-                state.final_answer = "I could not find this information in the uploaded documents."
+                state.final_answer = "Information not found in document excerpts."
                 state.metrics.llm_generation_time_ms = 0
                 state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
                 state.transition_to(AgentStatus.COMPLETED)
@@ -343,11 +343,12 @@ class AgentOrchestrator:
                     state.retrieved_documents.extend(web_chunks)
 
             if not state.evidence and not state.retrieved_documents and not image_bytes:
-                state.final_answer = "I could not find this information in the uploaded documents."
+                state.final_answer = "Information not found in document excerpts."
                 state.metrics.llm_generation_time_ms = 0
                 state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
                 state.transition_to(AgentStatus.COMPLETED)
                 return state
+
 
             prompt = self.prompt_builder.build(
                 query,

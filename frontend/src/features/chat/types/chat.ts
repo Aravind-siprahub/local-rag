@@ -34,7 +34,10 @@ export interface ChatRequest {
   top_k?: number
   similarity_threshold?: number
   attachments?: Attachment[]
+  provider?: string
+  model?: string
 }
+
 
 export interface Conversation {
   id: string
