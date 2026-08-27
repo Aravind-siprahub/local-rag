@@ -211,6 +211,7 @@ class OllamaLLMClient:
         temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
+        request_id: str | None = None,
     ) -> LLMResponse:
         """Generate a completion from system and user prompts."""
         if not user_prompt or not user_prompt.strip():
@@ -218,6 +219,8 @@ class OllamaLLMClient:
         if not system_prompt or not system_prompt.strip():
             raise LLMClientError("system_prompt must not be empty.")
 
+        req_id = request_id or f"req-{time.time_ns()}"
+        target_model = model or self.model
         payload = self._build_payload(
             system_prompt,
             user_prompt,
@@ -230,19 +233,8 @@ class OllamaLLMClient:
         )
 
         logger.info(
-            "Ollama LLM request starting: model=%s execution=%s num_gpu=%s "
-            "num_thread=%s num_predict=%s timeout_seconds=%.1f max_retries=%d stream=%s keep_alive=%s think=%s format=%s",
-            model or self.model,
-            "GPU enabled" if self.use_gpu else "CPU fallback",
-            payload["options"].get("num_gpu", "default"),
-            payload["options"].get("num_thread", "default"),
-            payload["options"].get("num_predict"),
-            self.timeout,
-            self.max_retries,
-            payload["stream"],
-            self.keep_alive,
-            payload.get("think", "omitted"),
-            payload.get("format", "omitted"),
+            "stage=provider_request_started request_id=%s provider=ollama model=%s endpoint=%s/api/chat stream=false execution=%s",
+            req_id, target_model, self.base_url, "GPU" if self.use_gpu else "CPU"
         )
         started_at = datetime.now(timezone.utc)
         start_mono = time.monotonic()
@@ -252,11 +244,11 @@ class OllamaLLMClient:
             response_data = await self._request_with_retry("/api/chat", payload)
 
         latency_ms = int((time.monotonic() - start_mono) * 1000)
+        prompt_tokens = response_data.get("prompt_eval_count") or 0
+        completion_tokens = response_data.get("eval_count") or 0
         logger.info(
-            "Ollama LLM request finished: model=%s latency_ms=%d started_at=%s",
-            model or self.model,
-            latency_ms,
-            started_at.isoformat(),
+            "stage=provider_response_received request_id=%s provider=ollama model=%s status=200 prompt_tokens=%s completion_tokens=%s duration_ms=%d",
+            req_id, target_model, prompt_tokens, completion_tokens, latency_ms
         )
         return _parse_chat_response(response_data, fallback_model=model or self.model)
 
@@ -327,6 +319,7 @@ class OllamaLLMClient:
         num_predict: int | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
+        request_id: str | None = None,
     ):
         """Yield token deltas as they stream from Ollama `/api/chat`."""
         if not user_prompt or not user_prompt.strip():
@@ -334,6 +327,8 @@ class OllamaLLMClient:
         if not system_prompt or not system_prompt.strip():
             raise LLMClientError("system_prompt must not be empty.")
 
+        req_id = request_id or f"req-{time.time_ns()}"
+        target_model = model or self.model
         payload = self._build_payload(system_prompt, user_prompt, stream=True, num_predict=num_predict, images=images, model=model)
 
         url = f"{self.base_url}/api/chat"
@@ -342,10 +337,24 @@ class OllamaLLMClient:
 
         stream_filter = ThinkingStreamFilter()
 
+        logger.info(
+            "stage=provider_request_started request_id=%s provider=ollama model=%s endpoint=%s stream=true",
+            req_id, target_model, url
+        )
+
         async with client.stream("POST", url, json=payload) as response:
             if response.status_code >= 400:
                 error_text = await response.aread()
+                logger.error(
+                    "stage=provider_response_failed request_id=%s provider=ollama model=%s status=%d body=%s",
+                    req_id, target_model, response.status_code, error_text.decode("utf-8", errors="ignore")[:200]
+                )
                 raise LLMAPIError(f"Ollama stream returned HTTP {response.status_code}: {error_text.decode('utf-8')}")
+
+            logger.info(
+                "stage=provider_response_received request_id=%s provider=ollama model=%s status=200 stream=true",
+                req_id, target_model
+            )
 
             async for line in response.aiter_lines():
                 if not line or not line.strip():

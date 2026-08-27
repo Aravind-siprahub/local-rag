@@ -206,7 +206,7 @@ def test_factory_missing_api_key_errors():
 def test_factory_model_and_url_selection():
     """Verify correct default model and base URL configuration for all providers."""
     from app.llm.openai_client import OmniRouteLLMClient
-    with patch("app.llm.factory.get_settings") as mock_settings:
+    with patch("app.llm.factory.get_settings") as mock_settings, patch("app.llm.openai_client.get_settings", mock_settings):
         mock_settings.return_value = MagicMock(
             LLM_PROVIDER="ollama",
             OLLAMA_MODEL="qwen3:8b",

@@ -8,9 +8,23 @@ export interface ModelOption {
 
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
+    id: 'auto/fast',
+    name: 'OmniRoute Gateway (Auto Fast Cloud)',
+    description: 'Auto-Fallback Cloud Gateway (1-3s response)',
+    type: 'text',
+    provider: 'omniroute',
+  },
+  {
+    id: 'nvidia/nemotron-4-340b-instruct',
+    name: 'Nemotron 4 340B (NVIDIA Cloud)',
+    description: 'Accelerated Cloud Model (1-2s response)',
+    type: 'text',
+    provider: 'nvidia',
+  },
+  {
     id: 'qwen3:8b',
-    name: 'qwen3:8b (Local)',
-    description: 'Local Text & Document RAG',
+    name: 'qwen3:8b (Local Offline)',
+    description: 'Local CPU Model (~50s response)',
     type: 'text',
     provider: 'ollama',
   },
@@ -20,27 +34,6 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Multimodal Image Analysis',
     type: 'vision',
     provider: 'ollama',
-  },
-  {
-    id: 'google/gemma-4-31b-it:free',
-    name: 'Gemma 4 31B (OpenRouter)',
-    description: 'Open-Source Cloud Model via OpenRouter',
-    type: 'text',
-    provider: 'openrouter',
-  },
-  {
-    id: 'nvidia/nemotron-4-340b-instruct',
-    name: 'Nemotron 4 340B (NVIDIA Build)',
-    description: 'Accelerated Open Model via NVIDIA Build API',
-    type: 'text',
-    provider: 'nvidia',
-  },
-  {
-    id: 'omniroute/auto',
-    name: 'OmniRoute Gateway (Local Proxy)',
-    description: 'Resilient Multi-Provider Routing & Quota Auto-Fallback',
-    type: 'text',
-    provider: 'omniroute',
   },
 ]
 

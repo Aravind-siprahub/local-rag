@@ -59,6 +59,7 @@ class LLMClient(Protocol):
         temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
+        request_id: str | None = None,
     ) -> LLMResponse: ...
 
     async def close(self) -> None: ...

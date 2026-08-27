@@ -156,13 +156,16 @@ async def lifespan(app: FastAPI):
         except SQLAlchemyError as exc:
             logger.warning("Could not load Swagger example ids: %s", exc)
 
-        # Warm up Ollama chat model in background so first user request completes in <5s
+        # Warm up Ollama chat model in background ONLY if Ollama is the selected provider
         async def _warmup_ollama() -> None:
             try:
+                settings = get_settings()
+                if (getattr(settings, "LLM_PROVIDER", "") or "").strip().lower() != "ollama":
+                    logger.info("stage=ollama_warmup request_id=N/A action=SKIPPED reason=provider_not_selected provider=%s", getattr(settings, "LLM_PROVIDER", "omniroute"))
+                    return
                 from app.llm.ollama_client import get_global_ollama_client
                 client = get_global_ollama_client()
                 await client.warmup()
-                # DO NOT close the client here to preserve HTTP Keep-Alive across the application lifespan.
             except Exception as exc:
                 logger.warning("Ollama background warmup error: %s", exc)
 

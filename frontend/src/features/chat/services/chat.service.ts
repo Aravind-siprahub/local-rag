@@ -145,6 +145,8 @@ export const chatService = {
       if (payload.document_version_id) formData.append('document_version_id', payload.document_version_id)
       if (payload.top_k) formData.append('top_k', String(payload.top_k))
       if (payload.similarity_threshold) formData.append('similarity_threshold', String(payload.similarity_threshold))
+      if (payload.provider) formData.append('provider', payload.provider)
+      if (payload.model) formData.append('model', payload.model)
       formData.append('file', payload.file)
       body = formData
     } else {

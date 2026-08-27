@@ -107,6 +107,19 @@ _DOC_QA_PHRASES = (
     "in the project",
     "in project",
     "my project",
+    "only my local documents",
+    "my local documents",
+    "local documents",
+    "local document",
+    "local rag",
+    "local codebase",
+    "local files",
+    "local project",
+    "local documentation",
+    "in my local",
+    "my local",
+    "my documents only",
+    "local only",
 )
 
 _DOC_QA_CUE_WORDS = (
@@ -452,6 +465,33 @@ def _is_datetime_query(lower: str) -> bool:
     return any(p in lower for p in datetime_phrases)
 
 
+_CURRENT_INFO_CONCEPTS = (
+    "latest",
+    "current",
+    "newest",
+    "most recent",
+    "today",
+    "now",
+    "currently",
+    "up-to-date",
+    "up to date",
+    "recent version",
+    "latest version",
+    "current version",
+    "latest release",
+    "current release",
+    "recent release",
+    "latest stable",
+    "current stable",
+    "latest documentation",
+    "current documentation",
+)
+
+
+def _is_current_information_query(lower: str) -> bool:
+    return any(concept in lower for concept in _CURRENT_INFO_CONCEPTS)
+
+
 _WEB_SEARCH_REGEX = re.compile(
     r"\b(?:"
     r"look\s*up|lookup|"
@@ -470,6 +510,16 @@ def _is_web_query(text: str, lower: str) -> bool:
     if _is_datetime_query(lower):
         return False
 
+    # Negative override: explicit instruction NOT to use web search
+    no_web_phrases = (
+        "do not use web search", "dont use web search", "don't use web search",
+        "do not search web", "ignore web search", "without web search",
+        "no web search", "do not search the web", "local documents only",
+        "only my local", "my documents only", "local only"
+    )
+    if any(phrase in lower for phrase in no_web_phrases):
+        return False
+
     if _WEB_SEARCH_REGEX.search(lower):
         return True
 
@@ -482,7 +532,7 @@ def _is_web_query(text: str, lower: str) -> bool:
         "look up", "lookup", "search github", "find on github", "search reddit",
         "search documentation", "verify online", "check online", "find information about",
         "find information on", "find public information", "public information", "search google", "search internet",
-        "realtime", "real-time", "live search"
+        "realtime", "real-time", "live search", "use web search only", "web search only"
     )
     if any(phrase in lower for phrase in web_phrases):
         return True
@@ -509,7 +559,9 @@ def _has_explicit_private_doc_ref(lower: str) -> bool:
         "my document", "my doc", "my file", "my pdf", "uploaded document",
         "uploaded doc", "uploaded file", "uploaded pdf", "our document", "our file",
         "in my document", "in my doc", "in my file", "in uploaded", "from my document",
-        "from uploaded", "my uploaded"
+        "from uploaded", "my uploaded", "my local documents", "local documents",
+        "local document", "local rag", "local codebase", "local files", "local project",
+        "local documentation", "in my local", "my local", "my documents only", "local only"
     )
     return any(cue in lower for cue in private_doc_cues)
 
@@ -528,47 +580,74 @@ def classify(
     req_id = request_id or "N/A"
     from app.rag.query_normalizer import normalize_query
     _, norm, _ = normalize_query(text)
-    lower = norm.lower() if norm else text.lower()
+    lower = norm.lower() if norm else text.lower()    # Explicit override checks (Priority 1 & Priority 2)
+    is_web_only = any(p in lower for p in ("use web search only", "web search only", "ignore my local documents", "ignore local documents", "without local documents"))
+    is_local_only = any(p in lower for p in ("only my local", "do not use web search", "dont use web search", "don't use web search", "ignore web search", "without web search", "no web search", "my documents only", "local only", "according to my local", "answer this using only my local"))
 
+    is_current_info = _is_current_information_query(lower)
+    has_private_doc = _has_explicit_private_doc_ref(lower) or (
+        document_titles and _matches_document_entity(lower, document_titles)
+    )
     is_doc_q = _is_document_qa(text, lower) or _is_corpus_document_qa(
         lower,
         document_titles=document_titles,
         context_texts=context_texts,
     )
-    is_web_q = _is_web_query(text, lower)
-    has_private_doc = _has_explicit_private_doc_ref(lower) or (
-        document_titles and _matches_document_entity(lower, document_titles)
-    )
 
-    if _is_datetime_query(lower):
+    # Priority 3: Explicit LOCAL + WEB / Comparison -> HYBRID
+    comparison_phrases = (
+        "compare both", "compare local", "compare my project", "compare the python version",
+        "my local documents, then search the web", "local project documentation and current official web",
+        "and is it current", "is it up-to-date", "is it up to date"
+    )
+    is_explicit_hybrid = any(p in lower for p in comparison_phrases) or (is_current_info and (has_private_doc or "in this project" in lower or "my project" in lower or "configured in" in lower or "does this project use" in lower))
+
+    if is_local_only:
+        route = Route.DOCUMENT_QA
+        reason = "explicit_local_only"
+    elif is_web_only:
         route = Route.WEB
+        reason = "explicit_web_only"
+    elif is_explicit_hybrid:
+        route = Route.HYBRID
+        reason = "hybrid_comparison"
+    elif is_current_info and not (has_private_doc or "in this project" in lower or "my project" in lower or "configured in" in lower or "does this project use" in lower or "in my local" in lower or "according to my" in lower):
+        route = Route.WEB
+        reason = "current_information"
+    elif _is_datetime_query(lower):
+        route = Route.WEB
+        reason = "datetime_query"
     elif _is_generic_chat(lower):
         route = Route.GENERIC_CHAT
+        reason = "generic_chat"
     elif len(lower.split()) == 1:
         route = Route.DIRECT
+        reason = "single_word"
     elif _is_document_metadata(lower):
         route = Route.DOCUMENT_METADATA
+        reason = "document_metadata"
     elif _is_document_list(lower):
         route = Route.DOCUMENT_LIST
+        reason = "document_list"
     elif _is_calculator(text, lower):
         route = Route.CALCULATOR
-    elif is_web_q and has_private_doc:
-        route = Route.HYBRID
-    elif is_web_q:
+        reason = "calculator"
+    elif _is_web_query(text, lower):
         route = Route.WEB
-    elif is_doc_q:
+        reason = "web_query"
+    elif is_doc_q or has_private_doc:
         route = Route.DOCUMENT_QA
+        reason = "document_qa"
     else:
-        # Default fallback for general questions without document cues
         route = Route.GENERAL_KNOWLEDGE
+        reason = "general_knowledge"
+
+    local_rag_active = str(route in (Route.DOCUMENT_QA, Route.RAG, Route.HYBRID)).lower()
+    web_search_active = str(route in (Route.WEB, Route.HYBRID)).lower()
 
     logger.info(
-        '[AI ROUTER] request_id="%s" query="%s" norm="%s" selected_intent="%s" selected_route="%s"',
-        req_id,
-        text[:200],
-        lower[:200],
-        route.name,
-        route.value,
+        "stage=intent_classified request_id=%s route=%s reason=%s local_rag=%s web_search=%s",
+        req_id, route.value, reason, local_rag_active, web_search_active
     )
     return route
 

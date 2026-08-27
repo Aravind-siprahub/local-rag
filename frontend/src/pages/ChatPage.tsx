@@ -14,6 +14,7 @@ import {
 import { useConversationRequestState } from '@/features/chat/hooks/useChatRequestStore'
 import type { Message, Citation, Attachment } from '@/features/chat/types/chat'
 import { chatService } from '@/features/chat/services/chat.service'
+import { AVAILABLE_MODELS } from '@/features/chat/constants/models'
 import { Button } from '@/components/ui/button'
 
 interface ConversationOverlayState {
@@ -48,7 +49,14 @@ function setOverlay(id: string, state: ConversationOverlayState) {
 export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<string>('qwen3:8b')
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    return localStorage.getItem('SELECTED_CHAT_MODEL') || 'auto/fast'
+  })
+
+  const handleSelectModel = (modelId: string) => {
+    setSelectedModel(modelId)
+    localStorage.setItem('SELECTED_CHAT_MODEL', modelId)
+  }
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [, setOverlayVersion] = useState(0)
   const queryClient = useQueryClient()
@@ -301,12 +309,15 @@ export function ChatPage() {
             streamingStatus: 'Starting...',
           })
 
+          const selectedModelObj = AVAILABLE_MODELS.find((m) => m.id === selectedModel)
           await chatService.streamMessage(
             {
               session_id: currentSessionId,
               question: content,
               file: primaryFile,
               attachments: attachments,
+              model: selectedModel,
+              provider: selectedModelObj?.provider,
             },
             {
               onStatus: (message) => {
@@ -406,19 +417,19 @@ export function ChatPage() {
         setMobileOpen={setIsMobileSidebarOpen}
       />
 
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full relative z-0 bg-background/50">
-        <div className="h-13 border-b border-border/35 flex items-center justify-between px-4 bg-background/95 backdrop-blur-md z-10 shrink-0">
-          <div className="flex items-center min-w-0 flex-1">
+      <div className="flex-1 flex flex-col min-w-0 h-full">
+        <header className="h-14 border-b border-border/40 flex items-center justify-between px-4 bg-background/80 backdrop-blur shrink-0 z-10">
+          <div className="flex items-center gap-3 min-w-0">
             <Button
               variant="ghost"
               size="icon"
-              className="md:hidden mr-2 shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+              className="lg:hidden shrink-0"
               onClick={() => setIsMobileSidebarOpen(true)}
             >
-              <Menu className="h-4 w-4" />
+              <Menu className="h-5 w-5" />
             </Button>
-            <h1 className="text-sm font-semibold truncate text-foreground/90 font-display">
-              {activeConversation ? activeConversation.title : 'New Chat'}
+            <h1 className="text-base font-semibold truncate">
+              {activeConversation?.title || 'New Chat'}
             </h1>
           </div>
 
@@ -428,7 +439,7 @@ export function ChatPage() {
               <span>Local RAG</span>
             </div>
           </div>
-        </div>
+        </header>
 
         {errorMessage ? (
           <div className="mx-4 mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center justify-between gap-3 shrink-0">
@@ -474,7 +485,7 @@ export function ChatPage() {
               sendDisabled={currentMessageSending}
               disabled={false}
               selectedModel={selectedModel}
-              onSelectModel={setSelectedModel}
+              onSelectModel={handleSelectModel}
               editingMessage={editingMessage}
               onCancelEdit={() => setEditingMessage(null)}
             />

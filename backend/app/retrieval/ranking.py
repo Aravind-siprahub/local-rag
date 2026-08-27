@@ -299,11 +299,16 @@ def _fallback_heuristic_rerank(
             elif has_pure_port:
                 attr_boost = -0.35
         elif intent.category == AttributeCategory.CONFIGURATION:
+            query_low = query.lower()
+            is_llm_config_query = any(k in query_low for k in ("provider", "model", "omniroute", "llm", "configured", "configuration", "rag pipeline", "pipeline"))
+            has_llm_config_keys = any(k in text for k in ("llm_provider", "omniroute_model", "ollama_model", "openrouter_model", "nvidia_model", "openai_model", "omniroute/auto", "omniroute", "provider=", "model="))
             has_port = any(p in text for p in ("port", "4173", "5000", "8000", "8001", "80", "443", "listening"))
-            if has_port:
+            if is_llm_config_query and has_llm_config_keys:
+                attr_boost = 0.85
+            elif has_port:
                 attr_boost = 0.50
             else:
-                attr_boost = -0.35
+                attr_boost = 0.0
 
         query_low = query.lower()
         section_boost = 0.15 if any(t in section for t in content_tokens if len(t) > 3) else 0.0

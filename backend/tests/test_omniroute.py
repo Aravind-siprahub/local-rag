@@ -88,7 +88,7 @@ async def test_omniroute_with_optional_api_key():
 
 def test_factory_omniroute_provider_selection():
     """Verify get_llm_client instantiates OmniRouteLLMClient correctly."""
-    with patch("app.llm.factory.get_settings") as mock_settings:
+    with patch("app.llm.factory.get_settings") as mock_settings, patch("app.llm.openai_client.get_settings", mock_settings):
         mock_settings.return_value = MagicMock(
             LLM_PROVIDER="omniroute",
             OMNIROUTE_MODEL="omniroute/auto",

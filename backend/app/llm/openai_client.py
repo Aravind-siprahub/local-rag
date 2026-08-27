@@ -96,12 +96,15 @@ class OpenAICompatibleLLMClient:
         temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
+        request_id: str | None = None,
     ) -> LLMResponse:
         """Execute a non-streaming completion request against OpenAI-compatible API."""
         self._validate_credentials()
         target_model = model or self.model
         temp = self.temperature if temperature is None else temperature
         headers = self._build_headers()
+        req_id = request_id or f"req-{time.time_ns()}"
+        headers["X-Request-ID"] = req_id
 
         messages: list[dict[str, Any]] = []
         if system_prompt and system_prompt.strip():
@@ -121,12 +124,16 @@ class OpenAICompatibleLLMClient:
         endpoint_url = f"{self.base_url}/chat/completions"
         start_mono = time.monotonic()
 
+        logger.info(
+            "stage=provider_request_started request_id=%s provider=%s model=%s base_url=%s endpoint=%s stream=false",
+            req_id, self.provider, target_model, self.base_url, endpoint_url
+        )
+
         last_error: Exception | None = None
         for attempt in range(1 + self.max_retries):
             try:
                 response = await client.post(endpoint_url, json=payload, headers=headers)
                 generation_time_ms = max((time.monotonic() - start_mono) * 1000.0, 0.1)
-
 
                 if response.status_code == 200:
                     data = response.json()
@@ -143,11 +150,13 @@ class OpenAICompatibleLLMClient:
                     token_usage = None
                     tokens_per_sec = None
                     cost_usd = None
+                    prompt_tokens = 0
+                    completion_tokens = 0
 
                     if raw_usage:
-                        prompt_tokens = raw_usage.get("prompt_tokens")
-                        completion_tokens = raw_usage.get("completion_tokens")
-                        total_tokens = raw_usage.get("total_tokens")
+                        prompt_tokens = raw_usage.get("prompt_tokens") or 0
+                        completion_tokens = raw_usage.get("completion_tokens") or 0
+                        total_tokens = raw_usage.get("total_tokens") or (prompt_tokens + completion_tokens)
                         token_usage = TokenUsage(
                             prompt_tokens=prompt_tokens,
                             completion_tokens=completion_tokens,
@@ -164,6 +173,11 @@ class OpenAICompatibleLLMClient:
                                     + (completion_tokens * self.completion_price_per_1m / 1e6),
                                     6,
                                 )
+
+                    logger.info(
+                        "stage=provider_response_received request_id=%s provider=%s model=%s status=200 prompt_tokens=%s completion_tokens=%s duration_ms=%.2f",
+                        req_id, self.provider, target_model, prompt_tokens, completion_tokens, generation_time_ms
+                    )
 
                     return LLMResponse(
                         answer=answer,
@@ -215,12 +229,15 @@ class OpenAICompatibleLLMClient:
         temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
+        request_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream completion tokens from OpenAI-compatible SSE endpoint."""
         self._validate_credentials()
         target_model = model or self.model
         temp = self.temperature if temperature is None else temperature
         headers = self._build_headers()
+        req_id = request_id or f"req-{time.time_ns()}"
+        headers["X-Request-ID"] = req_id
 
         messages: list[dict[str, Any]] = []
         if system_prompt and system_prompt.strip():
@@ -238,12 +255,26 @@ class OpenAICompatibleLLMClient:
 
         client = await self._get_client()
         endpoint_url = f"{self.base_url}/chat/completions"
+        start_mono = time.monotonic()
+
+        logger.info(
+            "stage=provider_request_started request_id=%s provider=%s model=%s base_url=%s endpoint=%s stream=true",
+            req_id, self.provider, target_model, self.base_url, endpoint_url
+        )
 
         async with client.stream("POST", endpoint_url, json=payload, headers=headers) as response:
             if response.status_code != 200:
                 body = await response.aread()
+                logger.error(
+                    "stage=provider_response_failed request_id=%s provider=%s model=%s status=%d body=%s",
+                    req_id, self.provider, target_model, response.status_code, body.decode("utf-8", errors="ignore")[:200]
+                )
                 raise LLMAPIError(f"{self.provider.upper()} streaming error {response.status_code}: {body.decode('utf-8', errors='ignore')}")
 
+            logger.info(
+                "stage=provider_response_received request_id=%s provider=%s model=%s status=200 stream=true",
+                req_id, self.provider, target_model
+            )
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line or not line.startswith("data:"):

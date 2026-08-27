@@ -1,0 +1,27 @@
+RETURN CODE: 0
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-8.3.4, pluggy-1.6.0 -- C:\Users\ARAVIND\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: D:\local-rag\backend
+configfile: pytest.ini
+plugins: anyio-4.12.1, asyncio-0.25.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=session
+collecting ... collected 12 items
+
+tests/test_omniroute.py::test_omniroute_client_generation_and_headers PASSED [  8%]
+tests/test_omniroute.py::test_omniroute_with_optional_api_key PASSED     [ 16%]
+tests/test_omniroute.py::test_factory_omniroute_provider_selection PASSED [ 25%]
+tests/test_omniroute.py::test_factory_omniroute_model_autodetect PASSED  [ 33%]
+tests/test_llm_providers.py::test_openai_compatible_headers_and_payload_construction PASSED [ 41%]
+tests/test_llm_providers.py::test_nvidia_client_configuration_and_override PASSED [ 50%]
+tests/test_llm_providers.py::test_missing_api_key_handling PASSED        [ 58%]
+tests/test_llm_providers.py::test_provider_error_handling_and_status_codes PASSED [ 66%]
+tests/test_llm_providers.py::test_openai_compatible_streaming PASSED     [ 75%]
+tests/test_llm_providers.py::test_factory_missing_api_key_errors PASSED  [ 83%]
+tests/test_llm_providers.py::test_factory_model_and_url_selection PASSED [ 91%]
+tests/test_llm_providers.py::test_rag_service_provider_override_integration PASSED [100%]
+
+============================= 12 passed in 2.62s ==============================
+
+--- STDERR ---

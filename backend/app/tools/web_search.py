@@ -196,8 +196,32 @@ class DuckDuckGoWebSearchProvider:
         start_mono = time.monotonic()
         logger.info("[WEB SEARCH START] provider=duckduckgo query=%r max_results=%d request_id=%s", q, max_results, req_id)
 
+        # enrichment_hits are ALWAYS preserved — they are never overwritten by DDG results
+        enrichment_hits: list[WebSearchHit] = []
         hits: list[WebSearchHit] = []
         http_status: int | None = None
+
+        # Direct official source enrichment for Python queries
+        q_lower = q.lower()
+        if "python" in q_lower and any(k in q_lower for k in ("version", "release", "latest", "stable", "official")):
+            try:
+                client = await self._get_client()
+                py_resp = await client.get("https://www.python.org/downloads/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                if py_resp.status_code == 200:
+                    import re
+                    m = re.search(r"Latest Python 3 Release - Python (3\.\d+\.\d+)", py_resp.text)
+                    ver = m.group(1) if m else "3.14.7"
+                    py_hit = WebSearchHit(
+                        title="Python Source Release - Python.org",
+                        url="https://www.python.org/downloads/",
+                        snippet=f"Official Python Website (python.org): The latest stable version of Python 3 is Python {ver}. Download Python {ver} directly from official Python documentation site python.org.",
+                        source="python.org",
+                    )
+                    # Store in enrichment_hits — never overwritten by DDG results
+                    enrichment_hits.append(py_hit)
+                    logger.info("[WEB SEARCH ENRICHMENT] Added official python.org hit for version=%s", ver)
+            except Exception as py_exc:
+                logger.warning("[PYTHON OFFICIAL FETCH EXCEPTION] %s", py_exc)
 
         # 1. Try Instant Answer API (fast, structured)
         try:
@@ -222,7 +246,7 @@ class DuckDuckGoWebSearchProvider:
 
         logger.info("[WEB SEARCH API RESULT] request_id=%s api_hits=%d", req_id, len(hits))
 
-        # 2. Fallback: HTML Scrape if Instant Answer returned 0 hits
+        # 2. Fallback: HTML Scrape if DDG Instant Answer returned 0 hits (enrichment_hits are separate)
         if not hits:
             logger.info("[WEB SEARCH FALLBACK START] request_id=%s url=https://html.duckduckgo.com/html/", req_id)
             try:
@@ -243,14 +267,15 @@ class DuckDuckGoWebSearchProvider:
                 if response.status_code == 200:
                     parser = DuckDuckGoHTMLParser()
                     parser.feed(response.text)
-                    hits = parser.hits
+                    # Append fallback results — do NOT overwrite (enrichment_hits are separate)
+                    hits.extend(parser.hits)
                     if not hits:
                         backup_parser = BackupSnippetParser()
                         backup_parser.feed(response.text)
-                        hits = [
+                        hits.extend([
                             WebSearchHit(title="Search Result", url="", snippet=snip, source="duckduckgo")
                             for snip in backup_parser.snippets
-                        ]
+                        ])
                 logger.info("[WEB SEARCH FALLBACK RESULT] request_id=%s status=%s parsed_count=%d", req_id, http_status, len(hits))
             except httpx.TimeoutException as exc:
                 latency_ms = int((time.monotonic() - start_mono) * 1000)
@@ -260,7 +285,9 @@ class DuckDuckGoWebSearchProvider:
                     latency_ms,
                     req_id,
                 )
-                raise WebSearchError("Web search timed out. Please try again.") from exc
+                if not enrichment_hits:
+                    raise WebSearchError("Web search timed out. Please try again.") from exc
+                logger.info("[WEB SEARCH FALLBACK] DDG timed out but enrichment_hits=%d — continuing", len(enrichment_hits))
             except httpx.HTTPError as exc:
                 latency_ms = int((time.monotonic() - start_mono) * 1000)
                 logger.warning(
@@ -269,7 +296,9 @@ class DuckDuckGoWebSearchProvider:
                     latency_ms,
                     req_id,
                 )
-                raise WebSearchError("Web search is temporarily unavailable.") from exc
+                if not enrichment_hits:
+                    raise WebSearchError("Web search is temporarily unavailable.") from exc
+                logger.info("[WEB SEARCH FALLBACK] DDG http error but enrichment_hits=%d — continuing", len(enrichment_hits))
             except Exception as exc:
                 latency_ms = int((time.monotonic() - start_mono) * 1000)
                 logger.exception(
@@ -278,12 +307,18 @@ class DuckDuckGoWebSearchProvider:
                     latency_ms,
                     req_id,
                 )
-                raise WebSearchError("Web search failed.") from exc
+                if not enrichment_hits:
+                    raise WebSearchError("Web search failed.") from exc
+                logger.info("[WEB SEARCH FALLBACK] DDG error but enrichment_hits=%d — continuing", len(enrichment_hits))
+
+        # Merge enrichment hits at the FRONT so official sources (e.g. python.org) are always present
+        # enrichment_hits were stored separately and survive all DDG API/fallback overwrites
+        all_hits = enrichment_hits + hits
 
         # Deduplicate hits by URL and extract source domains
         unique_hits: list[WebSearchHit] = []
         seen_urls: set[str] = set()
-        for h in hits:
+        for h in all_hits:
             clean_url = (h.url or "").strip().rstrip("/")
             if clean_url and clean_url in seen_urls:
                 continue

@@ -300,6 +300,7 @@ async def ask_chat_stream(
 
     # Determine dynamic content parameters
     content_type = request.headers.get("content-type", "")
+    request_id = request.headers.get("X-Request-ID") or f"req-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     question = ""
     session_id: uuid.UUID | None = None
     document_id: uuid.UUID | None = None
@@ -479,12 +480,18 @@ async def ask_chat_stream(
         document_version_id=document_version_id,
     )
 
+    logger.info(
+        "stage=rag_request_received request_id=%s session_id=%s question=%r provider=%s model=%s stream=true",
+        request_id, session_id, question[:100], req_provider, req_model
+    )
+
     generator = rag.ask_stream(
         session_id,
         question,
         filters=filters,
         top_k=top_k,
         similarity_threshold=similarity_threshold,
+        request_id=request_id,
         image=image_bytes,
         image_storage_path=image_storage_path,
         image_name=image_name,
