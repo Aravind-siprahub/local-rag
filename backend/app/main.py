@@ -223,6 +223,14 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Application shutting down")
+    
+    # Clean up the global persistent LLM client
+    try:
+        from app.llm.ollama_client import get_global_ollama_client
+        client = get_global_ollama_client()
+        await client.close()
+    except Exception as exc:
+        logger.warning("Error closing global OllamaLLMClient: %s", exc)
 
     # Silence asyncio task-destruction noise during shutdown.
     # Once we begin shutting down, Python's logging streams may already be

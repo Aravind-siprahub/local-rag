@@ -306,6 +306,12 @@ export function ChatInput({
         </div>
       )}
 
+      {editingMessage && preservedImageUrl && !selectedFile && (
+        <div className="text-[11px] text-amber-500 px-3 py-1 bg-amber-500/10 rounded-lg border border-amber-500/20 max-w-fit self-start animate-in fade-in-0">
+          <strong>Note:</strong> To include the original image in your resubmission, you must re-attach it.
+        </div>
+      )}
+
       <div
         className={cn(
           'relative flex flex-col w-full rounded-xl border border-border/40 bg-card/50 p-2 shadow-xs transition-all duration-200 focus-within:border-primary/40 focus-within:ring-1 focus-within:ring-primary/30',

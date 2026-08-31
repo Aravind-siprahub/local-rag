@@ -707,6 +707,22 @@ class RAGService:
             if unrestricted_chunks:
                 retrieved_chunks = unrestricted_chunks
 
+        if not retrieved_chunks and retrieval_filters.user_id is not None:
+            logger.info("[RETRIEVAL FALLBACK stream] 0 chunks found for user_id=%s. Retrying globally without user_id filter.", retrieval_filters.user_id)
+            unrestricted_chunks = await self._retrieve_safely(
+                search_query,
+                filters=SearchFilters(
+                    user_id=None,
+                    document_id=None,
+                    document_ids=None,
+                    document_version_id=None,
+                ),
+                top_k=top_k,
+                similarity_threshold=0.10,
+            )
+            if unrestricted_chunks:
+                retrieved_chunks = unrestricted_chunks
+
         # NOTE: Do NOT re-apply cosine similarity_threshold to cross-encoder-reranked scores.
         # The reranker already selected and re-scored the best candidates; scores are not cosine values.
         settings = get_settings()
@@ -1341,6 +1357,15 @@ class RAGService:
                     route=route,
                 )
         elif route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT) and not image:
+            res = await self._ask_general_knowledge(
+                session_id=session_id,
+                question=question,
+                user_message_id=user_message_id,
+                start_mono=start_mono,
+                norm_q=norm_q,
+                image=image,
+            )
+        elif route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT):
             res = await self._ask_general_knowledge(
                 session_id=session_id,
                 question=question,

@@ -426,7 +426,7 @@ export function ChatPage() {
               className="lg:hidden shrink-0"
               onClick={() => setIsMobileSidebarOpen(true)}
             >
-              <Menu className="h-5 w-5" />
+              <Menu className="h-4 w-4" />
             </Button>
             <h1 className="text-base font-semibold truncate">
               {activeConversation?.title || 'New Chat'}

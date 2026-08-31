@@ -21,7 +21,7 @@ interface ChatMessageProps {
 
 export function ChatMessage({
   message,
-  citations,
+  citations: _citations,
   onEdit,
   onRegenerate,
   isSending,
