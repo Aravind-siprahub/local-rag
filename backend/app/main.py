@@ -153,7 +153,7 @@ async def lifespan(app: FastAPI):
                         "Swagger example session_id set to %s",
                         app.state.swagger_example_session_id,
                     )
-        except SQLAlchemyError as exc:
+        except Exception as exc:
             logger.warning("Could not load Swagger example ids: %s", exc)
 
         # Warm up Ollama chat model in background ONLY if Ollama is the selected provider
@@ -180,21 +180,25 @@ async def lifespan(app: FastAPI):
 
                     stmt = select(Document).where(
                         Document.deleted_at.is_(None),
-                        Document.status.in_([DocumentStatus.UPLOADED, DocumentStatus.PROCESSING, DocumentStatus.FAILED]),
+                        Document.status.in_([DocumentStatus.UPLOADED, DocumentStatus.PROCESSING]),
                     )
                     docs = list((await session.execute(stmt)).scalars().all())
                     doc_ids = [d.id for d in docs]
                     if doc_ids:
-                        logger.info("Startup: found %d pending/uploaded/failed document(s) to ingest", len(doc_ids))
+                        logger.info("Startup: found %d pending/uploaded document(s) to ingest", len(doc_ids))
                         for doc_id in doc_ids:
                             try:
                                 async with AsyncSessionLocal() as ing_session:
-                                    ingestion = IngestionService(ing_session)
-                                    logger.info("Startup auto-ingesting document %s...", doc_id)
-                                    await ingestion.run_pipeline(doc_id)
-                                    await ing_session.commit()
-                            except Exception as exc:
-                                logger.warning("Startup ingestion error for doc %s: %s", doc_id, exc)
+                                    try:
+                                        ingestion = IngestionService(ing_session)
+                                        logger.info("Startup auto-ingesting document %s...", doc_id)
+                                        await ingestion.run_pipeline(doc_id)
+                                        await ing_session.commit()
+                                    except Exception as exc:
+                                        await ing_session.rollback()
+                                        logger.warning("Startup ingestion error for doc %s: %s", doc_id, exc)
+                            except Exception as outer_exc:
+                                logger.warning("Startup ingestion session error for doc %s: %s", doc_id, outer_exc)
 
             except Exception as exc:
                 if "storage_provider" in str(exc) or "UndefinedColumn" in str(exc):
@@ -219,7 +223,30 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Application shutting down")
-    
+
+    # Silence asyncio task-destruction noise during shutdown.
+    # Once we begin shutting down, Python's logging streams may already be
+    # closing, causing 'ValueError: I/O operation on closed file' when asyncio
+    # tries to log 'Task was destroyed but it is pending!'.
+    try:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda _loop, _ctx: None)
+    except RuntimeError:
+        pass
+
+    # Clean up background tasks before closing DB pool
+    try:
+        from app.memory.manager import shutdown_memory_tasks
+        await shutdown_memory_tasks()
+    except Exception as exc:
+        logger.warning("Error shutting down memory background tasks: %s", exc)
+
+    try:
+        from app.processing.background_runner import stop_background_runner
+        await stop_background_runner()
+    except Exception as exc:
+        logger.warning("Error stopping background runner: %s", exc)
+
     # Clean up the global persistent LLM client
     try:
         from app.llm.ollama_client import get_global_ollama_client
@@ -227,6 +254,14 @@ async def lifespan(app: FastAPI):
         await client.close()
     except Exception as exc:
         logger.warning("Error closing global OllamaLLMClient: %s", exc)
+
+    # Cleanly dispose SQLAlchemy database engine and connection pool
+    try:
+        from app.db.session import engine
+        await engine.dispose()
+        logger.info("Database engine connections closed successfully.")
+    except Exception as exc:
+        logger.warning("Error disposing database engine: %s", exc)
 
 
 from fastapi.middleware.cors import CORSMiddleware

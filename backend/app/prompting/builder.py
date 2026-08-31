@@ -64,8 +64,15 @@ class PromptBuilder:
         working_memory_summary: str | None = None,
         *,
         is_vision: bool = False,
+        long_term_memory_context: str | None = None,
     ) -> Prompt:
-        """Build a prompt from a user question, chat history, and ranked retrieval results."""
+        """Build a prompt from a user question, chat history, and ranked retrieval results.
+
+        Args:
+            long_term_memory_context: Pre-formatted memory section from MemoryContextBuilder.
+                Injected into the user prompt as a clearly-labelled DATA block.
+                Never modifies the system prompt.
+        """
         if not question or not question.strip():
             raise PromptBuilderError("Question must not be empty.")
         if self.max_context_chars <= 0:
@@ -77,6 +84,7 @@ class PromptBuilder:
             question.strip(),
             chat_history=chat_history,
             working_memory_summary=working_memory_summary,
+            long_term_memory_context=long_term_memory_context,
         )
 
         from datetime import datetime, timezone

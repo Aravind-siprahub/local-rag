@@ -271,7 +271,14 @@ class SemanticChunker:
         char_start: int,
         char_end: int,
     ) -> Chunk:
-        chunk_id = self._generate_chunk_id(document.document_id, text, char_start)
+        heading_prefix = ""
+        if hierarchy.breadcrumb and not text.lower().startswith(hierarchy.breadcrumb.lower()):
+            heading_prefix = f"[{hierarchy.breadcrumb}]\n"
+        elif hierarchy.section and not text.lower().startswith(hierarchy.section.lower()):
+            heading_prefix = f"[{hierarchy.section}]\n"
+
+        chunk_text = f"{heading_prefix}{text}" if heading_prefix else text
+        chunk_id = self._generate_chunk_id(document.document_id, chunk_text, char_start)
         return Chunk(
             id=chunk_id,
             document_id=document.document_id,
@@ -282,10 +289,10 @@ class SemanticChunker:
             breadcrumb=hierarchy.breadcrumb,
             content_type=content_type,
             language=document.language,
-            text=text,
+            text=chunk_text,
             char_start=char_start,
             char_end=char_end,
-            token_count=self._token_counter.count(text),
+            token_count=self._token_counter.count(chunk_text),
         )
 
     def _validate_chunks(self, chunks: list[Chunk]) -> list[Chunk]:

@@ -26,7 +26,7 @@ def detect_requested_attributes(query: str) -> set[RequestedAttribute]:
         attrs.add(RequestedAttribute.PORT_NETWORKING)
 
     # Framework / tech stack attribute check (when ports are not explicitly requested)
-    if any(kw in q_low for kw in ("frontend", "backend", "fronted", "tech stack", "technology stack", "architecture", "framework", "library", "built with")) and RequestedAttribute.PORT_NETWORKING not in attrs:
+    if any(kw in q_low for kw in ("frontend", "backend", "fronted", "tech stack", "technology stack", "software framework", "web framework", "library", "built with")) and RequestedAttribute.PORT_NETWORKING not in attrs:
         attrs.add(RequestedAttribute.FRAMEWORK_TECH_STACK)
 
     # Deployment process attribute check

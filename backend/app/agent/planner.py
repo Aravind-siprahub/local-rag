@@ -41,7 +41,10 @@ class Planner:
             )
 
         is_web = route == Route.WEB or _is_explicit_web_query(query)
-        is_doc = (route in (Route.DOCUMENT_QA, Route.RAG) or has_doc_filter or _has_document_keywords(query))
+        if has_image:
+            is_doc = has_doc_filter or _has_document_keywords(query)
+        else:
+            is_doc = (route in (Route.DOCUMENT_QA, Route.RAG) or has_doc_filter or _has_document_keywords(query))
 
         if is_web:
             plan.append(

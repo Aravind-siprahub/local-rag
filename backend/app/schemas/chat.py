@@ -92,6 +92,9 @@ class ChatCitationResponse(BaseModel):
     page_number: int | None = None
     similarity_score: float
     rank: int
+    url: str | None = None
+    domain: str | None = None
+    source_type: str = "local"
 
 
 class ChatResponse(BaseModel):
@@ -104,3 +107,5 @@ class ChatResponse(BaseModel):
     processing_time_ms: Annotated[int, Field(ge=0)]
     user_message_id: uuid.UUID
     assistant_message_id: uuid.UUID
+    retrieval_mode: str | None = Field(default="local", description="Mode used: local, web, or hybrid")
+

@@ -39,24 +39,20 @@ def _build_engine() -> AsyncEngine:
       statements, since PgBouncer already pools upstream and transaction
       mode doesn't support prepared statements across pooled connections.
     """
-    is_pgbouncer = ":6543" in settings.async_database_url
+    is_pgbouncer = ":6543" in settings.async_database_url or "pooler.supabase.com" in settings.async_database_url
 
     engine_kwargs: dict = {
         "pool_pre_ping": True,
         "echo": settings.DB_ECHO,
         "connect_args": {"sslmode": "require"},
+        "pool_size": getattr(settings, "DB_POOL_SIZE", 5),
+        "max_overflow": getattr(settings, "DB_MAX_OVERFLOW", 10),
+        "pool_timeout": getattr(settings, "DB_POOL_TIMEOUT", 30),
+        "pool_recycle": 120,
     }
 
     if is_pgbouncer:
-        from sqlalchemy.pool import NullPool
-
-        engine_kwargs["poolclass"] = NullPool
         engine_kwargs["connect_args"]["prepare_threshold"] = None
-    else:
-        engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
-        engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
-        engine_kwargs["pool_timeout"] = settings.DB_POOL_TIMEOUT
-        engine_kwargs["pool_recycle"] = settings.DB_POOL_RECYCLE
 
     return create_async_engine(settings.async_database_url, **engine_kwargs)
 
@@ -83,9 +79,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-        except SQLAlchemyError:
-            await session.rollback()
-            logger.exception("Database error during request; transaction rolled back")
+        except SQLAlchemyError as exc:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            logger.exception("Database error during request; transaction rolled back: %s", exc)
             raise
         except (GeneratorExit, Exception):
             try:

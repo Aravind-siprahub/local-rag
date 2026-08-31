@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Bot, User, Copy, Check, X, Maximize2, FileText, Pencil, RefreshCw, Cpu } from 'lucide-react'
+import { Bot, User, Copy, Check, X, FileText, Globe, Layers, Pencil, RefreshCw, Cpu } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Message, Citation } from '../types/chat'
 import { Button } from '@/components/ui/button'
 import { AttachmentCard } from './AttachmentCard'
+import { CitationsSection } from './CitationsSection'
+
+
 
 interface ChatMessageProps {
   message: Message
@@ -18,7 +21,7 @@ interface ChatMessageProps {
 
 export function ChatMessage({
   message,
-  citations: _citations,
+  citations,
   onEdit,
   onRegenerate,
   isSending,
@@ -45,11 +48,6 @@ export function ChatMessage({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isLightboxOpen])
-
-  // Resolve image source: local object URL or attachment metadata
-  const imageAttachment = message.attachments?.find((att) =>
-    att.mime_type.startsWith('image/'),
-  )
 
   return (
     <>
@@ -184,7 +182,12 @@ export function ChatMessage({
               </div>
             )}
 
-            {/* Citations section hidden per user preference */}
+            {/* Render Citations / Sources for assistant messages */}
+            {!isUser && (
+              <CitationsSection
+                citations={message.citations && message.citations.length > 0 ? message.citations : citations}
+              />
+            )}
           </div>
 
           {/* Action Bar & Model Used Badge */}
@@ -277,7 +280,40 @@ export function ChatMessage({
                 ) : null}
               </span>
             )}
+
+            {/* Retrieval Mode Badge (Assistant only) */}
+            {!isUser && message.retrieval_mode && (
+              <span
+                className={cn(
+                  "text-[10px] font-medium px-2 py-1 rounded-md border inline-flex items-center gap-1.5 cursor-default transition-colors",
+                  message.retrieval_mode === 'web'
+                    ? "bg-blue-500/10 text-blue-500 border-blue-500/20"
+                    : message.retrieval_mode === 'hybrid'
+                    ? "bg-purple-500/10 text-purple-500 border-purple-500/20"
+                    : "bg-muted/40 text-muted-foreground border-border/40"
+                )}
+                title={`Retrieval Mode: ${message.retrieval_mode}`}
+              >
+                {message.retrieval_mode === 'web' ? (
+                  <>
+                    <Globe className="h-3 w-3 shrink-0" />
+                    <span>Web Search</span>
+                  </>
+                ) : message.retrieval_mode === 'hybrid' ? (
+                  <>
+                    <Layers className="h-3 w-3 shrink-0" />
+                    <span>Hybrid Search</span>
+                  </>
+                ) : (
+                  <>
+                    <FileText className="h-3 w-3 shrink-0" />
+                    <span>Local RAG</span>
+                  </>
+                )}
+              </span>
+            )}
           </div>
+
         </div>
 
         {isUser && (

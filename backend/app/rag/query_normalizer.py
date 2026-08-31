@@ -33,15 +33,46 @@ _FILENAME_PATTERN = re.compile(
 )
 
 
-def normalize_query(query: str) -> tuple[str, str, str]:
+class NormalizedQueryResult(tuple):
+    """Tuple subclass (original_query, normalized_query, retrieval_query) supporting dict & attr access."""
+
+    def __new__(cls, original_query: str, normalized_query: str, retrieval_query: str):
+        return super().__new__(cls, (original_query, normalized_query, retrieval_query))
+
+    @property
+    def original_query(self) -> str:
+        return self[0]
+
+    @property
+    def normalized_query(self) -> str:
+        return self[1]
+
+    @property
+    def retrieval_query(self) -> str:
+        return self[2]
+
+    def __getitem__(self, item):
+        if isinstance(item, str):
+            mapping = {
+                "original_query": self[0],
+                "normalized_query": self[1],
+                "retrieval_query": self[2],
+            }
+            if item in mapping:
+                return mapping[item]
+            raise KeyError(item)
+        return super().__getitem__(item)
+
+
+def normalize_query(query: str) -> NormalizedQueryResult:
     """Normalize user query while preserving the original query.
     
     Returns:
-        (original_query, normalized_query, retrieval_query)
+        NormalizedQueryResult(original_query, normalized_query, retrieval_query)
     """
     raw = (query or "").strip().strip('"\'`')
     if not raw:
-        return "", "", ""
+        return NormalizedQueryResult("", "", "")
 
     # Preserve original filenames
     protected_tokens: dict[str, str] = {}
@@ -65,7 +96,7 @@ def normalize_query(query: str) -> tuple[str, str, str]:
         norm = norm.replace(placeholder, original_token)
         cleaned = cleaned.replace(placeholder, original_token)
 
-    # Construct retrieval_query by formatting common broken English phrasing
+    # Construct retrieval_query by formatting common broken English phrasing and conversational lead-ins
     retrieval_q = norm
     norm_lower = norm.lower()
     
@@ -98,7 +129,7 @@ def normalize_query(query: str) -> tuple[str, str, str]:
             else:
                 norm = "What frontend and backend technologies and frameworks are used?"
                 retrieval_q = norm
-    elif re.search(r"\bearth\s+(?:is\s+)?2\s+planet\s+or\s+3\s+planet\b", norm_lower):
+    elif re.search(r"\bearth\s+(?:is\s+)?2nd?\s+planet\s+or\s+3rd?\s+planet\b|\bearth\s+(?:is\s+)?2\s+planet\s+or\s+3\s+planet\b", norm_lower):
         norm = "Is Earth the 2nd or 3rd planet from the Sun?"
         retrieval_q = norm
     elif re.search(r"\bearth\s+(?:which|number)\s+planet\b|\bwhich\s+planet\s+is\s+earth\b", norm_lower):
@@ -108,5 +139,30 @@ def normalize_query(query: str) -> tuple[str, str, str]:
         retrieval_q = "What is the company leave policy?"
     elif "leave" in norm_lower and ("how many" in norm_lower or "count" in norm_lower):
         retrieval_q = "How many leave days are provided in the leave policy?"
+    else:
+        # Generic conversational lead-in cleaning for RAG retrieval query
+        clean_search = re.sub(
+            r"^(?:tell\s+about|tell\s+me\s+about|tell\s+me|explain\s+about|explain|give\s+details\s+on|give\s+details\s+about|give\s+details|give\s+me\s+details|show\s+me\s+about|show\s+me|what\s+can\s+you\s+tell\s+me\s+about|can\s+you\s+tell\s+me\s+about|can\s+you\s+tell\s+about)\s+",
+            "",
+            norm,
+            flags=re.IGNORECASE,
+        ).strip()
+        if len(clean_search.split()) >= 2:
+            retrieval_q = clean_search
 
-    return raw, norm, retrieval_q
+        # Generic compound entity expansion for any two-word title (e.g. "Tech Corp" <-> "TechCorp", "Sipra Hub" <-> "SipraHub")
+        title_matches = re.findall(r"\b([A-Z][a-z0-9]+)\s+([A-Z][a-z0-9]+)\b", retrieval_q)
+        for w1, w2 in title_matches:
+            combined = f"{w1}{w2}"
+            if combined.lower() not in retrieval_q.lower():
+                retrieval_q += f" {combined}"
+
+        # Expand single camelCase compound terms to separated words (e.g. "SipraHub" -> "Sipra Hub")
+        camel_matches = re.findall(r"\b([A-Z][a-z0-9]+)([A-Z][a-z0-9]+)\b", retrieval_q)
+        for w1, w2 in camel_matches:
+            split_words = f"{w1} {w2}"
+            if split_words.lower() not in retrieval_q.lower():
+                retrieval_q += f" {split_words}"
+
+    return NormalizedQueryResult(raw, norm, retrieval_q)
+

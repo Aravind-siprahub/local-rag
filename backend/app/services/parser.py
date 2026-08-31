@@ -134,7 +134,8 @@ class DocumentParser:
         if not blocks:
             raise CorruptedFileError(f"No extractable content from {filename!r}.")
 
-        cleaned_blocks = self._remove_noise(blocks)
+        merged_blocks = self._merge_consecutive_lists(blocks)
+        cleaned_blocks = self._remove_noise(merged_blocks)
         if not cleaned_blocks:
             raise CorruptedFileError(f"All content filtered as noise from {filename!r}.")
 
@@ -151,7 +152,7 @@ class DocumentParser:
     def _parse_with_docling(
         self, content: bytes, filename: str
     ) -> tuple[list[DocumentBlock], int, str]:
-        from docling.document_converter import DocumentConverter
+        from docling.document_converter import DocumentConverter  # type: ignore
 
         converter = DocumentConverter()
         result = converter.convert(io.BytesIO(content))
@@ -194,7 +195,7 @@ class DocumentParser:
     def _parse_with_markitdown(
         self, content: bytes, filename: str
     ) -> tuple[list[DocumentBlock], int, str]:
-        from markitdown import MarkItDown
+        from markitdown import MarkItDown  # type: ignore
 
         md = MarkItDown()
         result = md.convert_stream(io.BytesIO(content), file_extension=Path(filename).suffix)
@@ -347,6 +348,8 @@ class DocumentParser:
         self, content: bytes, filename: str
     ) -> tuple[list[DocumentBlock], int, str]:
         from docx import Document as DocxDocument
+        from docx.text.paragraph import Paragraph
+        from docx.table import Table
 
         try:
             document = DocxDocument(io.BytesIO(content))
@@ -357,39 +360,49 @@ class DocumentParser:
         heading_style_names = {"Title", "Heading 1", "Heading 2", "Heading 3",
                                "Heading 4", "Heading 5", "Heading 6"}
 
-        for paragraph in document.paragraphs:
-            text = paragraph.text.strip()
-            if not text:
-                continue
-            style_name = paragraph.style.name if paragraph.style else ""
-            if style_name in heading_style_names or style_name.startswith("Heading"):
-                level = self._heading_level_from_style(style_name)
-                block_type = BlockType.HEADING if level <= 1 else BlockType.SUBHEADING
-                blocks.append(DocumentBlock(
-                    block_type=block_type, text=text, level=level
-                ))
-            elif self._looks_like_list(text):
-                blocks.append(DocumentBlock(block_type=BlockType.LIST, text=text))
-            else:
-                blocks.append(DocumentBlock(block_type=BlockType.PARAGRAPH, text=text))
+        for element in document.element.body:
+            if element.tag.endswith("p"):
+                paragraph = Paragraph(element, document)
+                text = paragraph.text.strip()
+                if not text:
+                    continue
+                style_name = paragraph.style.name if paragraph.style and paragraph.style.name else ""
+                if style_name and (style_name in heading_style_names or style_name.startswith("Heading")):
+                    level = self._heading_level_from_style(style_name)
+                    block_type = BlockType.HEADING if level <= 1 else BlockType.SUBHEADING
+                    blocks.append(DocumentBlock(
+                        block_type=block_type, text=text, level=level
+                    ))
+                elif self._looks_like_list(text):
+                    blocks.append(DocumentBlock(block_type=BlockType.LIST, text=text))
+                else:
+                    blocks.append(DocumentBlock(block_type=BlockType.PARAGRAPH, text=text))
+            elif element.tag.endswith("tbl"):
+                table = Table(element, document)
+                rows: list[str] = []
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        deduped = self._dedupe_adjacent(cells)
+                        rows.append(" | ".join(deduped))
+                if rows:
+                    blocks.append(DocumentBlock(
+                        block_type=BlockType.TABLE,
+                        text="\n".join(rows),
+                        metadata={"row_count": len(rows)},
+                    ))
 
-        for table in document.tables:
-            rows: list[str] = []
-            for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                if cells:
-                    deduped = self._dedupe_adjacent(cells)
-                    rows.append(" | ".join(deduped))
-            if rows:
-                blocks.append(DocumentBlock(
-                    block_type=BlockType.TABLE,
-                    text="\n".join(rows),
-                    metadata={"row_count": len(rows)},
-                ))
+        # Fallback if body iteration produced 0 blocks
+        if not blocks:
+            for paragraph in document.paragraphs:
+                text = paragraph.text.strip()
+                if text:
+                    blocks.append(DocumentBlock(block_type=BlockType.PARAGRAPH, text=text))
 
         if not blocks:
             raise CorruptedFileError(f"DOCX {filename!r} has no extractable text.")
 
+        blocks = self._merge_consecutive_lists(blocks)
         combined = "\n\n".join(b.text for b in blocks)
         return blocks, 0, self._detect_language(combined)
 

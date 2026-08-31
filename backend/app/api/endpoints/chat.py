@@ -1,4 +1,5 @@
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -572,6 +573,9 @@ def _to_chat_response(result: RAGResponse) -> ChatResponse:
                 page_number=source.page_number,
                 similarity_score=source.similarity_score,
                 rank=source.rank,
+                url=getattr(source, "url", None),
+                domain=getattr(source, "domain", None),
+                source_type=getattr(source, "source_type", "local"),
             )
             for source in result.sources
         ],
@@ -580,4 +584,6 @@ def _to_chat_response(result: RAGResponse) -> ChatResponse:
         processing_time_ms=result.processing_time_ms,
         user_message_id=result.user_message_id,
         assistant_message_id=result.assistant_message_id,
+        retrieval_mode=getattr(result, "retrieval_mode", "local") or "local",
     )
+

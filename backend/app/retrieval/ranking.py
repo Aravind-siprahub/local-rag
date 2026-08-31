@@ -89,14 +89,14 @@ def rank_hybrid_rrf(
             hit_map[hit.chunk_id] = hit
         scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + (1.0 / (k + pos))
 
+    fulltext_ids: set[uuid.UUID] = {hit.chunk_id for hit in fulltext_hits}
     sorted_chunk_ids = sorted(scores.keys(), key=lambda cid: scores[cid], reverse=True)
     ranked: list[RankedResult] = []
     rank = 1
-
     for chunk_id in sorted_chunk_ids:
         hit = hit_map[chunk_id]
         sim = cosine_distance_to_similarity(hit.distance)
-        if chunk_id in semantic_ids and sim < similarity_threshold:
+        if chunk_id in semantic_ids and chunk_id not in fulltext_ids and sim < similarity_threshold:
             continue
         ranked.append(
             RankedResult(
@@ -262,6 +262,8 @@ _STOP_WORDS = {
     "did", "do", "does", "for", "from", "had", "has", "have", "in", "is", "it", "its",
     "my", "of", "on", "or", "should", "that", "the", "this", "to", "what", "which",
     "will", "with", "would", "you", "your", "using", "use", "used",
+    "tell", "about", "explain", "give", "show", "details", "information", "info",
+    "please", "want", "need", "find", "know", "get", "me", "us", "how",
 }
 
 
@@ -283,8 +285,16 @@ def _fallback_heuristic_rerank(
         section = (candidate.section_title or "").lower()
 
         # Count match on key content tokens (excluding stop-words and generic corpus words)
-        matching_tokens = sum(1 for token in content_tokens if token in text or token in section or token in title)
+        # Supports compound word matching (e.g. "sipra" + "hub" -> "siprahub")
+        combined_text = f"{text} {title} {section}"
+        compact_combined = combined_text.replace(" ", "")
+        matching_tokens = 0
+        for token in content_tokens:
+            if token in combined_text or token in compact_combined:
+                matching_tokens += 1
+
         token_score = matching_tokens / max(len(content_tokens), 1)
+
 
         # Attribute-specific ranking scoring boost/penalty via QueryIntent
         from app.rag.query_understanding import extract_query_intent, AttributeCategory

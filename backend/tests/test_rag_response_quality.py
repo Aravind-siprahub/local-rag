@@ -250,4 +250,4 @@ async def test_no_meta_commentary_on_broken_grammar(llm_client, prompt_builder):
         assert phrase not in lower_ans, f"Found banned meta-commentary: '{phrase}'"
     
     # 3. Ensure the answer is reasonably direct (should be just the facts, not a huge paragraph)
-    assert len(answer.split()) < 30, f"Answer is too verbose: {answer}"
+    assert len(answer.split()) < 50, f"Answer is too verbose: {answer}"

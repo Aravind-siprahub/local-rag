@@ -136,12 +136,22 @@ class AgentOrchestrator:
             if session_id:
                 mem_input = ToolInput(
                     query=query,
-                    parameters={"session_id": session_id, "history_limit": 4},
+                    parameters={"session_id": session_id, "history_limit": getattr(settings, "MEMORY_MAX_RECENT_MESSAGES", 10)},
                 )
                 mem_out = await self.memory_tool.execute(mem_input)
                 if mem_out.success:
                     state.conversation_context = mem_out.data.get("history", [])
                     state.working_memory = mem_out.data.get("working_memory")
+
+            if user_id and self.session is not None:
+                try:
+                    from app.memory.manager import MemoryManager
+                    mem_mgr = MemoryManager(self.session)
+                    sec_text, retrieved_mems = await mem_mgr.before_query(user_id=user_id, query=query)
+                    state.long_term_memory_context = sec_text
+                    state.retrieved_memories = retrieved_mems
+                except Exception as mem_err:
+                    logger.warning("[AGENT MEMORY RETRIEVAL FAILED] %s", mem_err)
 
             # 2. Planning step
             state.transition_to(AgentStatus.PLANNING)
@@ -355,6 +365,7 @@ class AgentOrchestrator:
                 state.retrieved_documents,
                 chat_history=state.conversation_context,
                 working_memory_summary=state.working_memory,
+                long_term_memory_context=state.long_term_memory_context,
                 is_vision=bool(image_bytes),
             )
 
@@ -424,6 +435,21 @@ class AgentOrchestrator:
             state.metrics.llm_generation_time_ms = int((time.monotonic() - llm_start) * 1000)
             state.metrics.total_latency_ms = int((time.monotonic() - start_mono) * 1000)
             state.transition_to(AgentStatus.COMPLETED)
+
+            # Schedule asynchronous long-term memory extraction
+            if user_id and self.session is not None and state.final_answer:
+                try:
+                    from app.memory.manager import MemoryManager
+                    mem_mgr = MemoryManager(self.session)
+                    mem_mgr.schedule_extraction(
+                        user_id=user_id,
+                        question=query,
+                        answer=state.final_answer,
+                        conversation_id=session_id,
+                        existing_memories=state.retrieved_memories,
+                    )
+                except Exception as mem_ext_err:
+                    logger.warning("[AGENT MEMORY EXTRACTION FAILED] %s", mem_ext_err)
 
             logger.info(
                 "[AGENT ORCHESTRATOR COMPLETED] trace_id=%s iterations=%d total_ms=%d models=%s tools=%s",

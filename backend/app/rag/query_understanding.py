@@ -76,14 +76,14 @@ def extract_query_intent(raw_query: str) -> QueryIntent:
             attributes.add("port")
 
     # Framework / Tech Stack check
-    has_tech_kw = any(kw in q_norm for kw in ("frontend", "backend", "tech stack", "technology stack", "architecture", "framework", "library", "built with"))
+    has_tech_kw = any(kw in q_norm for kw in ("frontend", "backend", "tech stack", "technology stack", "software framework", "web framework", "built with"))
     if has_tech_kw and not has_port:
         category = AttributeCategory.TECHNOLOGY
         if "frontend" in q_norm:
             attributes.add("frontend")
         if "backend" in q_norm:
             attributes.add("backend")
-        if "tech stack" in q_norm or "technology" in q_norm or "framework" in q_norm:
+        if "tech stack" in q_norm or "technology" in q_norm:
             attributes.add("tech stack")
         if not attributes:
             attributes.add("technology")
@@ -94,12 +94,12 @@ def extract_query_intent(raw_query: str) -> QueryIntent:
         attributes.add("deployment")
 
     # Construct clean normalized query for vector search
-    if entity and category == AttributeCategory.TECHNOLOGY:
+    # Only rewrite query when explicitly asking about frontend/backend tech stack or ports
+    is_explicit_tech_stack_query = any(kw in q_norm for kw in ("frontend", "backend", "tech stack", "technology stack", "built with"))
+    if entity and category == AttributeCategory.TECHNOLOGY and is_explicit_tech_stack_query:
         normalized_q = f"What frontend and backend technologies and frameworks are used in {entity}?"
-    elif entity and category == AttributeCategory.CONFIGURATION:
+    elif entity and category == AttributeCategory.CONFIGURATION and has_port:
         normalized_q = f"What ports do frontend and backend use in {entity}?"
-    elif entity:
-        normalized_q = f"Information about {entity}"
     else:
         normalized_q = q_clean
 

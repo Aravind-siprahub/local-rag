@@ -53,6 +53,7 @@ class TestIntentRouter:
         assert classify("What is the SipraOne deployment process?", document_titles=titles) == Route.DOCUMENT_QA
         assert classify("How is SipraOne deployed?", document_titles=titles) == Route.DOCUMENT_QA
         assert classify("Tell me about SipraOne", document_titles=titles) == Route.DOCUMENT_QA
+        assert classify("what is SipraOne?", document_titles=titles) == Route.DOCUMENT_QA
         
         # Test VM setup in project
         vm_titles = ["VM Setup.docx"]
@@ -61,7 +62,11 @@ class TestIntentRouter:
         # Without corpus evidence (empty titles), it falls back to GENERAL_KNOWLEDGE
         assert classify("Tell me about SipraOne", document_titles=[]) == Route.GENERAL_KNOWLEDGE
 
-        # Generic question stays GENERAL_KNOWLEDGE even with corpus
-        assert classify("what is SipraOne?", document_titles=titles) == Route.GENERAL_KNOWLEDGE
+    def test_camelcase_and_spaced_entity_matching(self) -> None:
+        titles = ["SipraHub_Policy.pdf"]
+        assert classify("tell about working hours in Sipra hub", document_titles=titles) == Route.DOCUMENT_QA
+        assert classify("what is SipraHub?", document_titles=titles) == Route.DOCUMENT_QA
+        assert classify("working hours in SipraHub", document_titles=titles) == Route.DOCUMENT_QA
+
 
 

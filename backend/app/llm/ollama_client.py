@@ -317,6 +317,7 @@ class OllamaLLMClient:
         user_prompt: str,
         *,
         num_predict: int | None = None,
+        temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
         request_id: str | None = None,

@@ -21,6 +21,7 @@ from app.embeddings.worker import EmbeddingWorker
 logger = logging.getLogger(__name__)
 
 _ACTIVE_DOCUMENT_IDS: set[uuid.UUID] = set()
+_BACKGROUND_DOC_TASKS: set[asyncio.Task[Any]] = set()
 _RUNNER_TASK: asyncio.Task | None = None
 
 
@@ -30,7 +31,12 @@ class BackgroundJobRunner:
     @staticmethod
     def enqueue_document(document_id: uuid.UUID) -> None:
         """Trigger background ingestion task for document_id non-blockingly."""
-        asyncio.create_task(BackgroundJobRunner._process_document_safely(document_id))
+        task = asyncio.create_task(
+            BackgroundJobRunner._process_document_safely(document_id),
+            name=f"IngestDoc-{document_id}",
+        )
+        _BACKGROUND_DOC_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_DOC_TASKS.discard)
 
     @staticmethod
     async def _process_document_safely(document_id: uuid.UUID) -> None:
@@ -110,6 +116,8 @@ class BackgroundJobRunner:
                 await session.commit()
                 logger.info("[BACKGROUND RUNNER] Completed ingestion pipeline for document %s", document_id)
 
+        except asyncio.CancelledError:
+            logger.info("[BACKGROUND RUNNER] Ingestion task cancelled for document %s", document_id)
         except Exception as exc:
             logger.warning("[BACKGROUND RUNNER] Error ingesting document %s: %s", document_id, exc, exc_info=True)
             try:
@@ -158,4 +166,26 @@ def start_background_runner() -> None:
     """Start background runner task if not already running."""
     global _RUNNER_TASK
     if _RUNNER_TASK is None or _RUNNER_TASK.done():
-        _RUNNER_TASK = asyncio.create_task(BackgroundJobRunner.start_loop())
+        _RUNNER_TASK = asyncio.create_task(BackgroundJobRunner.start_loop(), name="BackgroundRunnerLoop")
+
+
+async def stop_background_runner(timeout: float = 5.0) -> None:
+    """Stop the background runner task and await any pending document tasks."""
+    global _RUNNER_TASK
+    if _RUNNER_TASK and not _RUNNER_TASK.done():
+        _RUNNER_TASK.cancel()
+        try:
+            await _RUNNER_TASK
+        except asyncio.CancelledError:
+            pass
+
+    if _BACKGROUND_DOC_TASKS:
+        tasks = list(_BACKGROUND_DOC_TASKS)
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        try:
+            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        _BACKGROUND_DOC_TASKS.clear()

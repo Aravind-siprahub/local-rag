@@ -81,6 +81,8 @@ class AgentState:
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     conversation_context: list[dict[str, str]] = field(default_factory=list)
     working_memory: str | None = None
+    long_term_memory_context: str | None = None
+    retrieved_memories: list[Any] = field(default_factory=list)
     intent: str | None = None
     plan: list[PlanStep] = field(default_factory=list)
     current_step_index: int = 0

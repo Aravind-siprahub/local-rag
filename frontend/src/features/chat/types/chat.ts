@@ -2,12 +2,15 @@ export interface Citation {
   chunk_id: string
   chunk_text: string
   document_id: string
-  document_version_id: string
+  document_version_id?: string
   similarity_score: number
   rank: number
   document_title?: string
   section_title?: string
   page_number?: number
+  url?: string
+  domain?: string
+  source_type?: 'local' | 'web'
 }
 
 export interface ChatTokenUsageResponse {
@@ -24,6 +27,7 @@ export interface ChatResponse {
   processing_time_ms: number
   user_message_id: string
   assistant_message_id: string
+  retrieval_mode?: 'local' | 'web' | 'hybrid'
 }
 
 export interface ChatRequest {
@@ -80,4 +84,6 @@ export interface Message {
   attachments?: Attachment[]
   citations?: Citation[]
   localImageUrl?: string
+  retrieval_mode?: 'local' | 'web' | 'hybrid'
 }
+

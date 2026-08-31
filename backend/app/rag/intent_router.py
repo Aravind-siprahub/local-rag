@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 class Route(str, Enum):
     DOCUMENT_QA = "DOCUMENT_QA"
     RAG = "DOCUMENT_QA"  # Alias for backward compatibility
+    DOCUMENT_SUMMARY = "DOCUMENT_SUMMARY"
+    DOCUMENT_DETAIL = "DOCUMENT_DETAIL"
     DOCUMENT_LIST = "DOCUMENT_LIST"
     DOCUMENT_METADATA = "DOCUMENT_METADATA"
     GENERAL_KNOWLEDGE = "GENERAL_KNOWLEDGE"
@@ -360,7 +362,10 @@ def _has_project_info_cues(lower: str) -> bool:
 def _aliases_from_title(title: str) -> set[str]:
     """Build searchable aliases from an uploaded document title."""
     stem = title.rsplit(".", 1)[0] if "." in title else title
-    clean = re.sub(r"[_\-]+", " ", stem).strip().lower()
+    # Split camelCase and PascalCase compound words (e.g. SipraHub -> Sipra Hub)
+    stem_split = re.sub(r"([a-z])([A-Z])", r"\1 \2", stem)
+    stem_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", stem_split)
+    clean = re.sub(r"[_\-]+", " ", stem_split).strip().lower()
     clean = re.sub(r"\s+", " ", clean)
     aliases: set[str] = set()
     if clean:
@@ -372,9 +377,14 @@ def _aliases_from_title(title: str) -> set[str]:
     if len(core) >= 3:
         aliases.add(core)
 
-    # Significant single tokens (e.g. "airis") — avoid short/noisy tokens.
+    # Unspaced versions (e.g. "siprahub", "sipraone")
+    unspaced_core = "".join(core_tokens).strip()
+    if len(unspaced_core) >= 3:
+        aliases.add(unspaced_core)
+
+    # Significant single tokens (e.g. "sipra", "hub", "airis") — length >= 3
     for token in core_tokens:
-        if len(token) >= 5:
+        if len(token) >= 3:
             aliases.add(token)
 
     return {a for a in aliases if a}
@@ -384,9 +394,8 @@ def _matches_document_entity(haystack: str, document_titles: Sequence[str]) -> b
     lower = haystack.lower()
     for title in document_titles:
         for alias in _aliases_from_title(title):
-            if len(alias) >= 5 and alias in lower:
+            if len(alias) >= 3 and alias in lower:
                 return True
-            # Multi-word aliases (e.g. "talk to my data")
             if " " in alias and alias in lower:
                 return True
     return False
@@ -400,45 +409,45 @@ def _is_corpus_document_qa(
 ) -> bool:
     """Route project questions to DOCUMENT_QA when they reference the user's corpus.
 
-    Does NOT force every entity mention into RAG:
-    - "what is AIRIS?" stays GENERAL_KNOWLEDGE
-    - "AIRIS what tech stack were using" becomes DOCUMENT_QA when AIRIS docs exist
-    - "write a login page" stays GENERAL_KNOWLEDGE even with corpus context
+    Ensures that when a user has uploaded documents, any informational query
+    or entity mention (like "tell about working hours in Sipra hub" or "what is SipraHub")
+    routes to DOCUMENT_QA for vector search instead of bypassing retrieval.
     """
     if not document_titles:
         return False
-    if _GENERIC_DEFINITION.match(lower):
-        return False
-    # Creative/generative tasks are never document lookups even in a doc session
+    # Creative/generative tasks (e.g. "write a poem") are never document lookups
     if _CREATIVE_GENERATION_VERBS.match(lower.strip()):
         return False
 
     has_entity = _matches_document_entity(lower, document_titles)
 
+    # Bare single-term definition queries ("what is X?") should stay GENERAL_KNOWLEDGE
+    # unless X is a primary project entity (e.g. SipraHub, SipraOne).
+    # Generic tools/acronyms without project cues ('airis', 'pm2') stay GENERAL_KNOWLEDGE.
+    if _GENERIC_DEFINITION.match(lower.strip()) and not any(phrase in lower for phrase in _DOC_QA_PHRASES):
+        query_term = re.sub(r"^\s*what\s+is\s+|[?]\s*$", "", lower.strip()).strip()
+        if query_term in {"airis", "pm2"} and not _has_project_info_cues(lower):
+            return False
+        return has_entity
+
     # Anaphoric follow-up: entity lives in recent conversation, cues in current turn.
     if not has_entity and context_texts:
         context_blob = " ".join(t.lower() for t in context_texts if t)
         if context_blob and _matches_document_entity(context_blob, document_titles):
-            # The query itself doesn't mention the entity, but the history does.
-            # We should only set has_entity = True if the query has pronouns/anaphora
-            # or direct technical project cues referencing the system.
             anaphora_cues = [" it ", " this ", " that ", " the system ", " the project ", " the tool ", " the app ", " the codebase ", " the document ", " the file ", " the code ", " they "]
             has_anaphora = any(cue in f" {lower} " for cue in anaphora_cues) or _has_project_info_cues(lower)
             if has_anaphora:
                 has_entity = True
 
-    if not has_entity:
-        return False
+    if has_entity:
+        return True
 
-    # Route if the query contains project info cues or standard question action words
+    # Route if the query contains explicit project/tech info cues
     if _has_project_info_cues(lower):
-        return True
-    if any(action in lower for action in _DOC_QA_ACTION_WORDS):
-        return True
-    if any(req in lower for req in ["tell me", "explain", "about", "describe", "what is"]):
         return True
 
     return False
+
 
 
 def _is_calculator(text: str, lower: str) -> bool:
@@ -564,6 +573,38 @@ def _has_explicit_private_doc_ref(lower: str) -> bool:
         "local documentation", "in my local", "my local", "my documents only", "local only"
     )
     return any(cue in lower for cue in private_doc_cues)
+def _is_document_detail(lower: str) -> bool:
+    detail_phrases = (
+        "tell me more detail",
+        "tell me in detail",
+        "explain in detail",
+        "in detail",
+        "more detail",
+        "detailed summary",
+        "detailed overview",
+        "all important policies",
+        "all policies",
+        "full detail",
+        "deep dive",
+    )
+    return any(p in lower for p in detail_phrases)
+
+
+def _is_document_summary(lower: str) -> bool:
+    summary_phrases = (
+        "summarize",
+        "summarise",
+        "summary of",
+        "give me an overview",
+        "give an overview",
+        "what is covered in",
+        "tell me about this document",
+        "tell me about the document",
+        "explain the hr framework",
+        "overview of the document",
+        "overview of document",
+    )
+    return any(p in lower for p in summary_phrases)
 
 
 def classify(
@@ -580,19 +621,29 @@ def classify(
     req_id = request_id or "N/A"
     from app.rag.query_normalizer import normalize_query
     _, norm, _ = normalize_query(text)
-    lower = norm.lower() if norm else text.lower()    # Explicit override checks (Priority 1 & Priority 2)
+    lower = norm.lower() if norm else text.lower()
+
+    # Explicit override checks (Priority 1 & Priority 2)
     is_web_only = any(p in lower for p in ("use web search only", "web search only", "ignore my local documents", "ignore local documents", "without local documents"))
     is_local_only = any(p in lower for p in ("only my local", "do not use web search", "dont use web search", "don't use web search", "ignore web search", "without web search", "no web search", "my documents only", "local only", "according to my local", "answer this using only my local"))
 
+    is_generic_def_without_cues = bool(
+        _GENERIC_DEFINITION.match(lower.strip())
+        and not _has_project_info_cues(lower)
+        and not any(phrase in lower for phrase in _DOC_QA_PHRASES)
+    )
+    query_term = re.sub(r"^\s*what\s+is\s+|[?]\s*$", "", lower.strip()).strip() if is_generic_def_without_cues else ""
+
     is_current_info = _is_current_information_query(lower)
     has_private_doc = _has_explicit_private_doc_ref(lower) or (
-        document_titles and _matches_document_entity(lower, document_titles)
+        bool(document_titles and _matches_document_entity(lower, document_titles))
+        and not (is_generic_def_without_cues and query_term in {"airis", "pm2"})
     )
     is_doc_q = _is_document_qa(text, lower) or _is_corpus_document_qa(
         lower,
         document_titles=document_titles,
         context_texts=context_texts,
-    )
+    ) or _is_document_summary(lower) or _is_document_detail(lower)
 
     # Priority 3: Explicit LOCAL + WEB / Comparison -> HYBRID
     comparison_phrases = (
@@ -600,24 +651,33 @@ def classify(
         "my local documents, then search the web", "local project documentation and current official web",
         "and is it current", "is it up-to-date", "is it up to date"
     )
-    is_explicit_hybrid = any(p in lower for p in comparison_phrases) or (is_current_info and (has_private_doc or "in this project" in lower or "my project" in lower or "configured in" in lower or "does this project use" in lower))
+    is_explicit_hybrid = any(p in lower for p in comparison_phrases) or (
+        is_current_info and any(ref in lower for ref in ("in this project", "my project", "configured in", "does this project use", "my document", "local doc", "in the doc"))
+    )
 
     if is_local_only:
-        route = Route.DOCUMENT_QA
-        reason = "explicit_local_only"
+        if _is_document_detail(lower):
+            route = Route.DOCUMENT_DETAIL
+            reason = "explicit_local_only_detail"
+        elif _is_document_summary(lower):
+            route = Route.DOCUMENT_SUMMARY
+            reason = "explicit_local_only_summary"
+        else:
+            route = Route.DOCUMENT_QA
+            reason = "explicit_local_only"
     elif is_web_only:
         route = Route.WEB
         reason = "explicit_web_only"
     elif is_explicit_hybrid:
         route = Route.HYBRID
         reason = "hybrid_comparison"
-    elif is_current_info and not (has_private_doc or "in this project" in lower or "my project" in lower or "configured in" in lower or "does this project use" in lower or "in my local" in lower or "according to my" in lower):
+    elif (is_current_info or _is_web_query(text, lower)) and not any(ref in lower for ref in ("in this project", "my project", "configured in", "does this project use", "in my local", "according to my", "my document", "local document")):
         route = Route.WEB
         reason = "current_information"
     elif _is_datetime_query(lower):
         route = Route.WEB
         reason = "datetime_query"
-    elif _is_generic_chat(lower):
+    elif _is_generic_chat(lower) or re.search(r"(?i)^(?:remember|note|keep\s+in\s+mind|save)\s+(?:that\s+)?", lower) or any(p in lower for p in ("what is my", "what are my", "who am i", "what do i prefer", "my timezone", "my preference", "my preferences", "what models do i", "do you remember", "what do you know about me")):
         route = Route.GENERIC_CHAT
         reason = "generic_chat"
     elif len(lower.split()) == 1:
@@ -636,8 +696,15 @@ def classify(
         route = Route.WEB
         reason = "web_query"
     elif is_doc_q or has_private_doc:
-        route = Route.DOCUMENT_QA
-        reason = "document_qa"
+        if _is_document_detail(lower):
+            route = Route.DOCUMENT_DETAIL
+            reason = "document_detail_request"
+        elif _is_document_summary(lower):
+            route = Route.DOCUMENT_SUMMARY
+            reason = "document_summary_request"
+        else:
+            route = Route.DOCUMENT_QA
+            reason = "document_qa_corpus_active"
     else:
         route = Route.GENERAL_KNOWLEDGE
         reason = "general_knowledge"
@@ -683,11 +750,11 @@ _THINKING_MODEL_PATTERNS = re.compile(
 )
 
 _TOKEN_TIERS = {
-    "trivial": 256,
-    "simple": 512,
-    "moderate": 768,
-    "complex": 1024,
-    "very_complex": 2048,
+    "trivial": 512,
+    "simple": 1024,
+    "moderate": 1536,
+    "complex": 2048,
+    "very_complex": 3072,
 }
 
 # Alias for backward compatibility with regression test suites

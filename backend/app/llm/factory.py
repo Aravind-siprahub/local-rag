@@ -73,8 +73,6 @@ def get_llm_client(
 
     elif effective_provider == "omniroute":
         target_model = model or settings.OMNIROUTE_MODEL
-        if target_model == "auto/fast":
-            target_model = settings.OMNIROUTE_MODEL
         client_instance = OmniRouteLLMClient(model=target_model)
 
     else:

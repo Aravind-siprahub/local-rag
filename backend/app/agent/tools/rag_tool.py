@@ -49,17 +49,33 @@ class DocumentRAGTool(Tool):
             document_version_id=document_version_id,
         )
 
-        try:
-            # Stage 1: Hybrid Retrieval
-            retrieved_chunks = await self.retriever.retrieve(
-                query,
-                filters=filters,
-                top_k=top_k,
-                similarity_threshold=similarity_threshold,
-            )
+        route_str = params.get("route")
+        from app.rag.intent_router import _is_document_summary, _is_document_detail, Route
+        is_summary_or_detail = (
+            route_str in (Route.DOCUMENT_SUMMARY.value, Route.DOCUMENT_DETAIL.value, "DOCUMENT_SUMMARY", "DOCUMENT_DETAIL")
+            or _is_document_summary(query.lower())
+            or _is_document_detail(query.lower())
+        )
 
-            # Fallback 1: Retrive without document_id restriction if 0 chunks hit
-            if not retrieved_chunks and (document_id or document_version_id):
+        try:
+            # Stage 1: Hybrid or Section-Aware Retrieval
+            if is_summary_or_detail:
+                logger.info("[RAG TOOL] Executing section-aware retrieval for summary/detail query=%r", query)
+                retrieved_chunks = await self.retriever.retrieve_section_aware(
+                    query,
+                    filters=filters,
+                    max_total_chunks=35 if (_is_document_detail(query.lower()) or route_str == "DOCUMENT_DETAIL") else 25,
+                )
+            else:
+                retrieved_chunks = await self.retriever.retrieve(
+                    query,
+                    filters=filters,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                )
+
+            # Fallback 1: Retrieve without document_id restriction if 0 chunks hit
+            if not retrieved_chunks and (document_id or document_ids or document_version_id):
                 logger.info("[RAG TOOL] 0 chunks with document filter. Retrying with global filters.")
                 relaxed_filters = SearchFilters(user_id=user_id)
                 retrieved_chunks = await self.retriever.retrieve(
@@ -82,6 +98,10 @@ class DocumentRAGTool(Tool):
 
             # Stage 2: Relevance Gate Filtering
             relevant_chunks = _filter_relevant_chunks(query, retrieved_chunks)
+            if not relevant_chunks and retrieved_chunks:
+                logger.info("[RAG TOOL] Relevance filter dropped all chunks. Preserving raw retrieved chunks as fallback.")
+                relevant_chunks = retrieved_chunks
+
 
             # Stage 3: Evidence Extraction
             evidence_items = []

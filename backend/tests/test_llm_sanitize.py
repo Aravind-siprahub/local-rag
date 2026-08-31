@@ -297,3 +297,33 @@ async def test_stream_filter_end_to_end_like_ollama() -> None:
     if tail:
         out.append(tail)
     assert "".join(out) == "Safe."
+
+
+def test_important_note_not_truncated() -> None:
+    text = (
+        "Summary of the HR Framework Document\n\n"
+        "Key Details from the Document:\n"
+        "* HR Escalation Process: The document specifies escalating to HR.\n\n"
+        "Important Note:\n"
+        "Employees must follow the guidelines."
+    )
+    sanitized = sanitize_response(text)
+    assert "Important Note:" in sanitized
+    assert "Employees must follow the guidelines." in sanitized
+
+
+def test_stream_filter_important_note_preserved() -> None:
+    filt = ThinkingStreamFilter()
+    out: list[str] = []
+    tokens = ["HR Escalation Process: Escalation to HR.\n\n", "Important Note:\n", "All guidelines apply."]
+    for token in tokens:
+        safe = filt.feed(token)
+        if safe:
+            out.append(safe)
+    tail = filt.flush()
+    if tail:
+        out.append(tail)
+    result = "".join(out)
+    assert "Important Note:" in result
+    assert "All guidelines apply." in result
+

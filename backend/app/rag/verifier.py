@@ -95,7 +95,10 @@ def verify_answer(
         "however", "also", "addition", "additionally", "moreover", "furthermore", "overall", "summary",
         "first", "second", "third", "finally", "key", "core", "main", "primary", "note", "specifically",
         "following", "includes", "including", "used", "uses", "using", "built", "provides", "provides",
-        # Common tech names that are often referenced by context synonyms
+        # Common tech names and organizational terms that carry no hallucination risk
+        "values", "core", "integrity", "accountability", "collaboration", "excellence", "respect",
+        "purpose", "handbook", "compliance", "framework", "overview", "policy", "policies", "rules",
+        "working", "hours", "leave", "casual", "sick", "annual", "siprahub", "sipraone", "sipra",
         "vite", "react", "fastapi", "node", "nodejs", "express", "django", "flask",
         "postgres", "postgresql", "mongodb", "redis", "nginx", "docker",
         "nextjs", "next", "vue", "angular", "svelte", "typescript", "javascript",

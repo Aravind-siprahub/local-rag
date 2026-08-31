@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { Conversation } from '../types/chat'
+import { MemoryPanel } from './MemoryPanel'
 
 interface ChatSidebarProps {
   conversations: Conversation[]
@@ -70,6 +71,8 @@ export function ChatSidebar({
 }: ChatSidebarProps) {
   const [search, setSearch] = useState('')
   const [showAll, setShowAll] = useState(false)
+  const [isMemoryOpen, setIsMemoryOpen] = useState(false)
+
 
   const filtered = conversations.filter(c => 
     c.title.toLowerCase().includes(search.toLowerCase())
@@ -184,6 +187,8 @@ export function ChatSidebar({
             </>
           )}
       </div>
+
+      <MemoryPanel isOpen={isMemoryOpen} onToggle={() => setIsMemoryOpen(prev => !prev)} />
     </div>
   )
 

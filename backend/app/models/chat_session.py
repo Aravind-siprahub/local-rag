@@ -33,6 +33,8 @@ class ChatSession(TimestampMixin, Base):
     last_message_at: Mapped[datetime | None]
     deleted_at: Mapped[datetime | None]
     working_memory_summary: Mapped[str | None] = mapped_column(nullable=True)
+    conversation_summary: Mapped[str | None] = mapped_column(nullable=True)
+    summary_updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     owner: Mapped[User] = relationship(back_populates="chat_sessions")
     messages: Mapped[list[ChatMessage]] = relationship(

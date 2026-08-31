@@ -123,3 +123,23 @@ def test_factory_omniroute_model_autodetect():
         assert isinstance(client, OmniRouteLLMClient)
         assert client.model == "omniroute/claude-3-5-sonnet"
         assert client.provider == "omniroute"
+
+
+def test_factory_autofast_model_selection():
+    """Verify model 'auto/fast' with provider 'omniroute' correctly instantiates OmniRouteLLMClient."""
+    with patch("app.llm.factory.get_settings") as mock_settings:
+        mock_settings.return_value = MagicMock(
+            LLM_PROVIDER="ollama",
+            OMNIROUTE_MODEL="omniroute/auto",
+            OMNIROUTE_BASE_URL="http://localhost:20128/v1",
+            OMNIROUTE_API_KEY=None,
+            LLM_TEMPERATURE=0.1,
+            LLM_TIMEOUT_SECONDS=120.0,
+            LLM_MAX_RETRIES=3,
+        )
+
+        client = get_llm_client(provider="omniroute", model="auto/fast")
+        assert isinstance(client, OmniRouteLLMClient)
+        assert client.model == "auto/fast"
+        assert client.provider == "omniroute"
+

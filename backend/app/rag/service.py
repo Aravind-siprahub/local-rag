@@ -19,7 +19,7 @@ from app.embeddings.client import EmbeddingClientError
 from app.llm.client import LLMClient
 from app.llm.ollama_client import OllamaLLMClient
 from app.llm.response import LLMResponse, TokenUsage
-from app.models.enums import MessageRole
+from app.models.enums import DocumentStatus, MessageRole
 from app.prompting.builder import Prompt, PromptBuilder
 from app.rag.intent_router import Route, classify
 from app.rag.response import RAGResponse, RAGTokenUsage, SourceCitation
@@ -55,50 +55,27 @@ def _validate_web_answer(
     concise_text: str,
     original_query: str,
 ) -> str:
-    """Validate LLM answer for a web-search-routed query.
-
-    1. If raw response looks like JSON → try to extract 'answer' field.
-       If malformed or 'answer' is missing/empty → return concise_text.
-    2. If clean_answer is empty → return concise_text.
-    3. If clean_answer is unrelated to the query topic → return concise_text.
-    4. Otherwise return clean_answer.
-    """
+    """Validate LLM answer for a web-search-routed query."""
     import json as _json
-    import re as _re
 
     raw = (raw_answer or "").strip()
+    clean = (clean_answer or raw).strip()
 
-    # Step 1: JSON detection (reject serialized JSON if missing or empty 'answer' field)
+    # 1. JSON detection (extract 'answer' field if LLM output raw JSON)
     if raw.startswith("{"):
         try:
             parsed = _json.loads(raw)
             if isinstance(parsed, dict):
                 extracted = (parsed.get("answer") or "").strip()
                 if extracted:
-                    return extracted
-                logger.info("[WEB ANSWER FALLBACK] JSON 'answer' field missing or empty. Using concise_text.")
-                return concise_text
-        except (_json.JSONDecodeError, ValueError):
-            logger.info("[WEB ANSWER FALLBACK] Malformed JSON from LLM. Using concise_text.")
-            return concise_text
+                    clean = extracted
+        except Exception:
+            pass
 
-    # Step 2: Empty answer
-    if not clean_answer:
+    if not clean:
         return concise_text
 
-    # Step 3: Relevance check against query + web result tokens
-    stopwords = {"what", "when", "where", "which", "that", "with", "from", "this", "they", "have", "here", "found"}
-    query_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", original_query.lower())) - stopwords
-    web_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", concise_text.lower())) - stopwords
-    topic_tokens = query_tokens | web_tokens
-
-    if topic_tokens:
-        answer_tokens = set(_re.findall(r"\b[A-Za-z]{4,}\b", clean_answer.lower())) - stopwords
-        if not (answer_tokens & topic_tokens):
-            logger.info("[WEB ANSWER FALLBACK] Answer has no topic overlap with query/results. Using concise_text.")
-            return concise_text
-
-    # Step 4: Disallow LLM disclaimer responses when real web search results are available
+    # 2. Check for LLM disclaimers ("cannot access internet")
     disclaimer_phrases = (
         "cannot perform external search",
         "cannot perform live internet",
@@ -110,11 +87,11 @@ def _validate_web_answer(
         "cannot search the web",
         "cannot browse the web",
     )
-    if any(phrase in clean_answer.lower() for phrase in disclaimer_phrases):
-        logger.info("[WEB ANSWER FALLBACK] Replaced LLM disclaimer answer with concise web search results.")
+    if any(phrase in clean.lower() for phrase in disclaimer_phrases):
+        logger.info("[WEB ANSWER FALLBACK] Disallowed disclaimer response. Using web summary.")
         return concise_text
 
-    return clean_answer
+    return clean
 
 
 class RAGError(Exception):
@@ -212,6 +189,8 @@ class RAGService:
         self.citations = citation_service or CitationService(session)
         self.sessions = session_service or ChatSessionService(session)
         self.web_search = web_search or get_web_search_provider()
+        from app.services.web_search_service import WebSearchService
+        self.web_search_service = WebSearchService(provider=self.web_search)
 
     async def ask(
         self,
@@ -231,8 +210,7 @@ class RAGService:
         provider: str | None = None,
         model: str | None = None,
     ) -> RAGResponse:
-        """Run the full RAG flow for one user question in a chat session."""
-        if (provider or model) and not self._custom_llm_client:
+        if (provider or model) or getattr(self, "llm_client", None) is None:
             from app.llm.factory import get_llm_client
             self.llm_client = get_llm_client(provider=provider, model=model)
 
@@ -328,7 +306,7 @@ class RAGService:
             exclude_message_id=user_message.id,
         )
         route = classify(
-            question.strip(),
+            norm_q or question.strip(),
             document_titles=document_titles,
             context_texts=context_texts,
             request_id=req_id,
@@ -341,7 +319,7 @@ class RAGService:
         if image or image_storage_path:
             route = Route.DIRECT
         elif resolved_filters and (resolved_filters.document_id or resolved_filters.document_ids or resolved_filters.document_version_id):
-            if route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT, Route.WEB):
+            if route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT):
                 route = Route.DOCUMENT_QA
 
 
@@ -513,9 +491,8 @@ class RAGService:
         model: str | None = None,
         request_id: str | None = None,
     ):
-        """Run RAG pipeline and yield Server-Sent Events (SSE) formatting for real-time streaming."""
         req_id = request_id or str(uuid.uuid4())
-        if (provider or model) and not self._custom_llm_client:
+        if (provider or model) or getattr(self, "llm_client", None) is None:
             from app.llm.factory import get_llm_client
             self.llm_client = get_llm_client(provider=provider, model=model, request_id=req_id)
 
@@ -604,12 +581,29 @@ class RAGService:
             context_texts=context_texts,
             request_id=req_id,
         )
+        retrieval_filters = filters or SearchFilters()
+        if retrieval_filters.user_id is None:
+            retrieval_filters = SearchFilters(
+                user_id=chat_session.user_id,
+                document_id=retrieval_filters.document_id,
+                document_version_id=retrieval_filters.document_version_id,
+                search_mode=retrieval_filters.search_mode,
+            )
+
+        retrieval_filters = await self._resolve_entity_filters(
+            chat_session.user_id, question, retrieval_filters, attachments=attachments
+        )
+
+        if retrieval_filters and (retrieval_filters.document_id or getattr(retrieval_filters, "document_ids", None) or retrieval_filters.document_version_id):
+            if route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT):
+                route = Route.DOCUMENT_QA
+
         logger.info(
             "stage=rag_request_received request_id=%s route=%s web_search=%s local_rag=%s",
             req_id, route.value, str(route == Route.HYBRID).lower(), "true"
         )
 
-        if route not in (Route.DOCUMENT_QA, Route.RAG, Route.HYBRID):
+        if route not in (Route.DOCUMENT_QA, Route.RAG, Route.HYBRID, Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
             res = await self._ask_non_rag(
                 route=route,
                 session_id=session_id,
@@ -620,22 +614,25 @@ class RAGService:
                 norm_q=norm_q,
                 image=image,
             )
-            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
+            sources_payload = [
+                {
+                    "chunk_id": str(s.chunk_id),
+                    "document_id": str(s.document_id),
+                    "similarity_score": s.similarity_score,
+                    "rank": s.rank,
+                    "document_title": s.document_title,
+                    "section_title": s.section_title,
+                    "url": s.url,
+                    "domain": s.domain,
+                    "source_type": getattr(s, "source_type", "local"),
+                }
+                for s in (res.sources or [])
+            ]
+            retrieval_mode_val = getattr(res, "retrieval_mode", "local")
+            yield f"data: {json.dumps({'type': 'meta', 'sources': sources_payload, 'user_message_id': str(user_message.id), 'retrieval_mode': retrieval_mode_val})}\n\n"
             yield f"data: {json.dumps({'type': 'token', 'content': res.answer})}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(res.assistant_message_id), 'processing_time_ms': res.processing_time_ms})}\n\n"
             return
-
-        retrieval_filters = filters or SearchFilters()
-        if retrieval_filters.user_id is None:
-            retrieval_filters = SearchFilters(
-                user_id=chat_session.user_id,
-                document_id=retrieval_filters.document_id,
-                document_version_id=retrieval_filters.document_version_id,
-            )
-
-        retrieval_filters = await self._resolve_entity_filters(
-            chat_session.user_id, question, retrieval_filters, attachments=attachments
-        )
 
         # If scoped to a document that is currently processing in background, wait for processing to complete
         if retrieval_filters.document_id and self.session is not None:
@@ -655,12 +652,20 @@ class RAGService:
         yield f"data: {json.dumps({'type': 'status', 'message': 'Searching knowledge base...'})}\n\n"
         
         search_query = ret_q or norm_q or question.strip()
-        retrieved_chunks = await self._retrieve_safely(
-            search_query,
-            filters=retrieval_filters,
-            top_k=top_k,
-            similarity_threshold=similarity_threshold,
-        )
+        if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
+            logger.info("[SECTION AWARE RETRIEVAL stream] route=%s executing retrieve_section_aware for document_id=%s", route, retrieval_filters.document_id)
+            retrieved_chunks = await self.retriever.retrieve_section_aware(
+                search_query,
+                filters=retrieval_filters,
+                max_total_chunks=35 if route == Route.DOCUMENT_DETAIL else 25,
+            )
+        else:
+            retrieved_chunks = await self._retrieve_safely(
+                search_query,
+                filters=retrieval_filters,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+            )
 
         logger.info(
             "stage=retrieval_complete request_id=%s chunks=%d search_query=%r document_id=%s",
@@ -707,11 +712,12 @@ class RAGService:
         settings = get_settings()
         seen_keys: set[uuid.UUID] = set()
         deduped_chunks = []
+        max_context_chunks = 35 if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL) else getattr(settings, "FINAL_CONTEXT", 3)
         for c in retrieved_chunks:
             if c.chunk_id not in seen_keys:
                 seen_keys.add(c.chunk_id)
                 deduped_chunks.append(c)
-                if len(deduped_chunks) >= getattr(settings, "FINAL_CONTEXT", 3):
+                if len(deduped_chunks) >= max_context_chunks:
                     break
 
         for r_idx, c in enumerate(deduped_chunks, start=1):
@@ -741,17 +747,62 @@ class RAGService:
 
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
 
-        if not deduped_chunks and not image and not image_storage_path:
-            fallback_ans = "I could not find this information in the uploaded documents."
+        long_term_memory_context = ""
+        if self.session is not None and chat_session.user_id:
+            try:
+                from app.memory.manager import MemoryManager
+                mem_mgr = MemoryManager(self.session)
+                long_term_memory_context, _ = await mem_mgr.before_query(
+                    user_id=chat_session.user_id, query=question.strip()
+                )
+            except Exception as mem_ret_exc:
+                logger.warning("[MEMORY MANAGER] before_query error: %s", mem_ret_exc)
+
+        if not deduped_chunks and not image and not image_storage_path and not long_term_memory_context:
+            logger.info(
+                "stage=rag_fallback reason_code=RETRIEVAL_EMPTY request_id=%s user_id=%s query=%r -> performing web search & general knowledge fallback",
+                req_id, chat_session.user_id, question.strip()
+            )
+            web_hits = []
+            if self.web_search:
+                try:
+                    yield f"data: {json.dumps({'type': 'status', 'message': 'Searching web for live information...'})}\n\n"
+                    focused_web_q = self._generate_focused_web_query(question, [])
+                    web_res = await self.web_search.search(focused_web_q or question, request_id=req_id)
+                    if web_res and web_res.hits:
+                        web_hits = web_res.hits[:5]
+                except Exception as w_err:
+                    logger.warning("[WEB SEARCH FALLBACK ERROR] %s", w_err)
+
+            if web_hits:
+                web_snippets = [f"Web Source {i+1}: {h.title} ({h.url})\nSnippet: {h.snippet}" for i, h in enumerate(web_hits)]
+                web_context_str = "\n\n".join(web_snippets)
+                gen_prompt = (
+                    f"=== WEB SEARCH RESULTS ===\n\n{web_context_str}\n\n"
+                    f"=== USER QUESTION ===\n\n{question}\n\n"
+                    f"Instructions: Provide a clear, thorough, and factual answer to the user's question using the web search results above."
+                )
+            else:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Synthesizing response...'})}\n\n"
+                gen_prompt = (
+                    f"=== USER QUESTION ===\n\n{question}\n\n"
+                    f"Instructions: You are a knowledgeable, helpful AI assistant. Answer the user's question clearly, thoroughly, and accurately using your general knowledge."
+                )
+
+            full_content = ""
+            async for token in self.llm_client.generate_stream(system_prompt="You are a helpful AI assistant.", user_prompt=gen_prompt):
+                full_content += token
+                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+
             total_ms = int((time.monotonic() - start_mono) * 1000)
             assistant_msg = await self.messages.create_message(
                 session_id=session_id,
                 role=MessageRole.ASSISTANT,
-                content=fallback_ans,
-                model_used=getattr(self.llm_client, "model", "ollama"),
+                content=full_content,
+                model_used=getattr(self.llm_client, "model", "omniroute"),
                 latency_ms=total_ms,
             )
-            yield f"data: {json.dumps({'type': 'token', 'content': fallback_ans})}\n\n"
+            self._trigger_memory_extraction(chat_session.user_id, session_id, question, full_content)
             yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
             return
 
@@ -763,8 +814,8 @@ class RAGService:
             # The LLM will now determine relevance itself.
             if top_reranker_score < -999.0:
                 logger.warning(
-                    "[STREAM RELEVANCE GUARD] Top reranker score=%.4f is below threshold=0.01. Abstaining.",
-                    top_reranker_score,
+                    "stage=rag_fallback reason_code=RETRIEVAL_LOW_SCORE request_id=%s score=%.4f threshold=-999.0 query=%r",
+                    req_id, top_reranker_score, question.strip()
                 )
                 fallback_ans = "I couldn't find enough information in the uploaded documents to answer this accurately."
                 total_ms = int((time.monotonic() - start_mono) * 1000)
@@ -775,6 +826,7 @@ class RAGService:
                     model_used=getattr(self.llm_client, "model", "ollama"),
                     latency_ms=total_ms,
                 )
+                self._trigger_memory_extraction(chat_session.user_id, session_id, question, fallback_ans)
                 yield f"data: {json.dumps({'type': 'token', 'content': fallback_ans})}\n\n"
                 yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
                 return
@@ -833,6 +885,7 @@ class RAGService:
             search_query,
             deduped_chunks,
             is_vision=bool(image or image_storage_path),
+            long_term_memory_context=long_term_memory_context,
         )
 
         web_hits = []
@@ -844,7 +897,7 @@ class RAGService:
             focused_web_query = self._generate_focused_web_query(question, deduped_chunks)
             logger.info("stage=web_search_started request_id=%s provider=duckduckgo focused_query=%r", req_id, focused_web_query)
             try:
-                web_res = await self.web_search.search(focused_web_query, request_id=req_id)
+                web_res = await self.web_search_service.search_web(focused_web_query, request_id=req_id, fetch_pages=True)
                 if web_res and web_res.hits:
                     def _hybrid_hit_authority_score(h):
                         u = (getattr(h, "url", "") or "").lower()
@@ -866,27 +919,27 @@ class RAGService:
 
                     web_hits = sorted(web_res.hits, key=_hybrid_hit_authority_score, reverse=True)
                     logger.info("stage=web_search_results request_id=%s result_count=%d top_url=%s", req_id, len(web_hits), getattr(web_hits[0], "url", "N/A"))
-                    web_snippets = []
+                    from app.services.web_search_service import format_web_context
+                    web_context_str = format_web_context(web_hits[:5])
+
                     for i, h in enumerate(web_hits[:5], 1):
                         title = getattr(h, "title", "Web Result")
                         url = getattr(h, "url", "")
-                        snippet = getattr(h, "snippet", "").strip()
-                        logger.info(
-                            "stage=web_result request_id=%s rank=%d url=%s title=%s snippet=%s",
-                            req_id, i, url, title, snippet[:120]
-                        )
-                        web_snippets.append(f"Web Source {i}: {title} ({url})\nSnippet: {snippet}")
-                        url_val = url or f"https://duckduckgo.com/?q={urllib.parse.quote(focused_web_query)}"
-                        doc_uuid = uuid.uuid5(uuid.NAMESPACE_URL, url_val)
+                        if not url:
+                            continue
+                        domain = h.source or urllib.parse.urlparse(url).netloc.replace("www.", "")
+                        doc_uuid = uuid.uuid5(uuid.NAMESPACE_URL, url)
                         sources_data.append({
                             "chunk_id": str(doc_uuid),
                             "document_id": str(doc_uuid),
                             "similarity_score": 0.95,
                             "rank": len(sources_data) + 1,
-                            "document_title": f"[Web] {title}",
-                            "section_title": url,
+                            "document_title": title,
+                            "section_title": domain,
+                            "url": url,
+                            "domain": domain,
+                            "source_type": "web",
                         })
-                    web_context_str = "\n\n".join(web_snippets)
                     
                     combined_prompt_user = (
                         f"=== LOCAL DOCUMENTS ===\n\n"
@@ -907,20 +960,43 @@ class RAGService:
                         user_prompt=combined_prompt_user,
                         retrieved_chunks=prompt.retrieved_chunks,
                     )
+                    yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id), 'retrieval_mode': 'hybrid'})}\n\n"
             except Exception as w_exc:
                 logger.warning("[HYBRID WEB SEARCH FAILED] request_id=%s: %s", req_id, w_exc)
 
         # Enforce explicit context headers for local-only RAG requests
-        if route in (Route.DOCUMENT_QA, Route.RAG) and assembled_context and "=== LOCAL DOCUMENTS ===" not in prompt.user_prompt:
+        if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL) and assembled_context:
+            detail_desc = "detailed section-by-section breakdown" if route == Route.DOCUMENT_DETAIL else "comprehensive overview"
+            summary_user_prompt = (
+                f"=== LOCAL DOCUMENTS ===\n\n"
+                f"{assembled_context}\n\n"
+                f"=== USER QUESTION ===\n\n"
+                f"{question}\n\n"
+                f"CRITICAL DOCUMENT SUMMARY RULES:\n"
+                f"1. Provide a broad, thorough, and structured {detail_desc} covering ALL sections present in the local document excerpts above.\n"
+                f"2. Detail each major policy section (such as Employee Handbook Purpose, Probation Period, Role Clarity, Working Hours & Attendance, Leave Policy, Casual Leave, Leave Application Process, Public Holidays, Leave Without Pay, WFH / Remote Work, Performance Management, BGV, POSH, Code of Conduct, Grievance Redressal, Exit & Termination, IT Security) with its specific rules, numbers, limits, and guidelines.\n"
+                f"3. Do NOT state that a policy or section is missing if it is supported by the document excerpts above.\n"
+                f"4. Preserve exact policy numbers, limits, rules, and terminology used in the original document.\n"
+                f"5. Clearly distinguish what information IS stated in the document context versus what specific numbers or details are omitted.\n"
+            )
+            prompt = Prompt(
+                system_prompt=prompt.system_prompt,
+                user_prompt=summary_user_prompt,
+                retrieved_chunks=prompt.retrieved_chunks,
+            )
+        elif route in (Route.DOCUMENT_QA, Route.RAG) and assembled_context and "=== LOCAL DOCUMENTS ===" not in prompt.user_prompt:
             local_only_user_prompt = (
                 f"=== LOCAL DOCUMENTS ===\n\n"
                 f"{assembled_context}\n\n"
                 f"=== USER QUESTION ===\n\n"
                 f"{question}\n\n"
                 f"CRITICAL GROUNDING RULES:\n"
-                f"1. Answer strictly using ONLY the provided local document excerpts above.\n"
-                f"2. If the answer cannot be found in the provided context, state: \"I could not find this information in the local documents.\"\n"
-                f"3. Do NOT invent facts or use unverified external knowledge.\n"
+                f"1. Give a direct, helpful, factual, and complete response summarizing all relevant details present in the local document excerpts above.\n"
+                f"2. If the question asks to explain or define a general concept, acronym, or industry term (such as 'POC' / 'Proof of Concept'), first define the general concept clearly, and then explain how that concept is specifically used or applied in the local document excerpts above.\n"
+                f"3. State all verified facts, tracking rules, policies, and metrics present in the document context accurately. If the question asks for specific details (such as fixed shift start/end times, lunch breaks, or exact hours) that are NOT explicitly mentioned in the context, state what the document DOES record while clarifying that exact fixed times or figures are not explicitly specified.\n"
+                f"4. Inspect the uploaded document context for matching keywords or concepts from the question. When matching keywords or sections are found, extract and state the full answer directly based on those matching document details.\n"
+                f"5. Do NOT invent or infer unstated facts, shift times, figures, or policies not present in the document context.\n"
+                f"6. If the context contains NO relevant facts whatsoever for the question, state: \"I could not find this information in the local documents.\"\n"
             )
             prompt = Prompt(
                 system_prompt=prompt.system_prompt,
@@ -929,9 +1005,9 @@ class RAGService:
             )
 
         # Fail-fast assertions for DOCUMENT_QA and HYBRID routes in ask_stream
-        if route in (Route.DOCUMENT_QA, Route.RAG):
-            assert len(web_hits) == 0, f"DOCUMENT_QA route must have 0 web_hits, got {len(web_hits)}"
-            assert len(deduped_chunks) > 0, f"DOCUMENT_QA route must have local_chunks > 0, got {len(deduped_chunks)}"
+        if route in (Route.DOCUMENT_QA, Route.RAG, Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
+            assert len(web_hits) == 0, f"DOCUMENT_QA/SUMMARY route must have 0 web_hits, got {len(web_hits)}"
+            assert len(deduped_chunks) > 0, f"DOCUMENT_QA/SUMMARY route must have local_chunks > 0, got {len(deduped_chunks)}"
         elif route == Route.HYBRID:
             assert len(deduped_chunks) > 0, f"HYBRID route must have local_chunks > 0, got {len(deduped_chunks)}"
             assert len(web_hits) > 0, f"HYBRID route must have web_hits > 0, got {len(web_hits)}"
@@ -1046,6 +1122,28 @@ class RAGService:
             except Exception as cit_exc:
                 logger.warning("[CITATION PERSISTENCE SKIPPED] message_id=%s: %s", assistant_message.id, cit_exc)
 
+        # Trigger non-blocking long-term memory extraction pass
+        if self.session is not None and chat_session.user_id:
+            try:
+                from app.memory.manager import MemoryManager
+                mem_mgr = MemoryManager(self.session)
+                mem_mgr.schedule_extraction(
+                    user_id=chat_session.user_id,
+                    question=question.strip(),
+                    answer=full_answer,
+                    conversation_id=session_id,
+                    existing_memories=[],
+                )
+            except Exception as mem_ext_exc:
+                logger.warning("[MEMORY EXTRACTION SCHEDULING SKIPPED] session_id=%s: %s", session_id, mem_ext_exc)
+
+            try:
+                from app.memory.conversation_memory import ConversationMemory
+                conv_mem = ConversationMemory(self.session)
+                await conv_mem.update_session_summary_if_needed(session_id)
+            except Exception as sum_exc:
+                logger.warning("[SESSION SUMMARY SCHEDULING SKIPPED] session_id=%s: %s", session_id, sum_exc)
+
         yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_message.id), 'processing_time_ms': total_ms, 'ttft_ms': ttft_ms, 'token_count': token_count})}\n\n"
 
     async def _resolve_entity_filters(
@@ -1064,6 +1162,8 @@ class RAGService:
             from app.repositories.document_repository import DocumentRepository
             repo = DocumentRepository(self.session)
             all_docs = await repo.list_by_user(user_id)
+            if not all_docs:
+                all_docs = await repo.list(include_deleted=False)
 
             # 1. Check attachment metadata or filename matches first
             if attachments:
@@ -1097,7 +1197,9 @@ class RAGService:
             # 2. Match document title in query text
             q_lower = question.strip().lower()
             q_clean = re.sub(r"[^\w\s]", "", q_lower)
+            q_words = set(re.findall(r"\b\w+\b", q_clean))
             matched_doc_ids: list[uuid.UUID] = []
+
             for d in all_docs:
                 d_title_lower = d.title.lower()
                 stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
@@ -1106,16 +1208,18 @@ class RAGService:
                 core_phrase = " ".join(core_words).strip()
 
                 is_match = False
-                if "talk to my data" in q_clean:
-                    if any(k in d_title_lower for k in ("talk", "data", "ttmd")):
-                        is_match = True
-                elif any(s in q_clean for s in ("sipraone", "siprahub", "sipra one", "sipra hub", "sipra")):
-                    if any(s in d_title_lower for s in ("sipraone", "siprahub", "sipra")):
-                        is_match = True
-                elif d_title_lower in q_lower or clean_stem in q_clean:
+                if d_title_lower in q_lower or clean_stem in q_clean:
                     is_match = True
-                elif core_phrase and len(core_phrase) >= 3 and core_phrase in q_clean:
+                elif core_phrase and len(core_phrase) >= 4 and core_phrase in q_clean:
                     is_match = True
+                elif core_words:
+                    # Match multi-word subphrases (e.g. "hr framework" from "siprahub hr framework")
+                    significant_words = [w for w in core_words if len(w) >= 2 and w not in {"the", "and", "for", "with", "pdf", "docx", "txt"}]
+                    matching_word_count = sum(1 for w in significant_words if w in q_words)
+                    if matching_word_count >= 2:
+                        is_match = True
+                    elif significant_words and any(w in q_clean for w in significant_words if len(w) >= 4 and w not in {"frontend", "backend", "system", "service", "app", "guide", "prd"}):
+                        is_match = True
 
                 if is_match:
                     logger.info("[PROJECT/DOCUMENT ENTITY DETECTED] Question references document '%s' (%s)", d.title, d.id)
@@ -1129,6 +1233,27 @@ class RAGService:
                     document_version_id=base_filters.document_version_id,
                     search_mode=base_filters.search_mode,
                 )
+
+            # 3. Fallback for document summary / detail queries when document ID is unspecified
+            from app.rag.intent_router import _is_document_summary, _is_document_detail
+            if _is_document_summary(q_lower) or _is_document_detail(q_lower):
+                ready_docs = [d for d in all_docs if getattr(d, "status", None) == DocumentStatus.READY or getattr(d, "status", None) == "READY"]
+                if not ready_docs:
+                    ready_docs = list(all_docs)
+                if ready_docs:
+                    # Pick ready document matching highest number of query terms or most recent
+                    def _doc_match_score(d_item):
+                        t_words = set(re.findall(r"\b\w+\b", d_item.title.lower()))
+                        return (len(t_words & q_words), getattr(d_item, "created_at", None))
+
+                    best_doc = max(ready_docs, key=_doc_match_score)
+                    logger.info("[SUMMARY DOCUMENT FALLBACK RESOLVED] Selected target document '%s' (%s) for summary query", best_doc.title, best_doc.id)
+                    return SearchFilters(
+                        user_id=base_filters.user_id,
+                        document_id=best_doc.id,
+                        document_version_id=base_filters.document_version_id,
+                        search_mode=base_filters.search_mode,
+                    )
         except Exception as d_exc:
             logger.warning("[PROJECT ENTITY MATCH FAILED] %s", d_exc)
 
@@ -1501,7 +1626,7 @@ class RAGService:
                     queries.append(part_clean)
             if not queries:
                 queries.append(q_str)
-
+            
             logger.info("stage=web_search_started request_id=%s provider=%s query=%r", req_id, provider_name, queries[0])
 
             all_hits: list[WebSearchHit] = []
@@ -1509,13 +1634,18 @@ class RAGService:
             last_sub_exc: Exception | None = None
             for q_item in queries[:3]:
                 try:
-                    res_q = await self.web_search.search(q_item, request_id=req_id)
+                    res_q = await self.web_search_service.search_web(
+                        q_item,
+                        request_id=req_id,
+                        fetch_pages=True,
+                    )
                     for h in res_q.hits:
-                        c_url = (h.url or "").strip().rstrip("/")
-                        if c_url and c_url in seen_urls:
+                        if not h.url or not h.url.startswith("http"):
                             continue
-                        if c_url:
-                            seen_urls.add(c_url)
+                        c_url = h.url.strip().rstrip("/")
+                        if c_url in seen_urls:
+                            continue
+                        seen_urls.add(c_url)
                         all_hits.append(h)
                 except Exception as sq_exc:
                     last_sub_exc = sq_exc
@@ -1543,71 +1673,53 @@ class RAGService:
                         sc += 15
                     return sc
 
-                ranked_hits = sorted(all_hits, key=_hit_authority_score, reverse=True)
+                ranked_hits = sorted(all_hits, key=_hit_authority_score, reverse=True)[:6]
 
                 logger.info("stage=web_search_results request_id=%s result_count=%d top_url=%s", req_id, len(ranked_hits), getattr(ranked_hits[0], "url", "N/A"))
 
-                # Format web snippets with title, snippet, and URL
-                snippets_list = []
-                for idx, h in enumerate(ranked_hits[:6], start=1):
-                    title = getattr(h, "title", "") or "Web Result"
-                    url = getattr(h, "url", "")
-                    snippet = h.snippet.strip()
-                    logger.info(
-                        "stage=web_result request_id=%s rank=%d url=%s title=%s snippet=%s",
-                        req_id, idx, url, title, snippet[:120]
-                    )
-                    if snippet:
-                        item_str = f"Source {idx}: {title} ({url})\nSnippet: {snippet}" if url else f"Snippet: {snippet}"
-                        snippets_list.append(item_str)
+                # Format web snippets with title, content/snippet, and URL
+                from app.services.web_search_service import format_web_context
+                web_context = format_web_context(ranked_hits)
 
-                    # Build SourceCitation for web hit
-                    url_val = url or f"https://duckduckgo.com/?q={urllib.parse.quote(queries[0])}"
-                    doc_uuid = uuid.uuid5(uuid.NAMESPACE_URL, url_val)
+                logger.info("RAG_CONTEXT_DEBUG: web_results_added=true web_context_length=%d", len(web_context))
+
+                for idx, h in enumerate(ranked_hits, start=1):
+                    doc_uuid = uuid.uuid5(uuid.NAMESPACE_URL, h.url)
+                    domain = h.source or urllib.parse.urlparse(h.url).netloc.replace("www.", "")
                     sources.append(
                         SourceCitation(
                             chunk_id=doc_uuid,
-                            chunk_text=snippet,
+                            chunk_text=h.content or h.snippet,
                             document_id=doc_uuid,
                             similarity_score=1.0,
                             rank=idx,
-                            document_title=title,
-                            section_title=getattr(h, "source", "web"),
+                            document_title=h.title,
+                            section_title=domain,
+                            url=h.url,
+                            domain=domain,
+                            source_type="web",
                         )
                     )
 
-                web_context = "\n\n".join(snippets_list)
-                web_system_prompt = (
-                    "You are an authoritative search assistant.\n"
-                    "CRITICAL GROUNDING RULES:\n"
-                    "1. Use the retrieved web search results as the authoritative evidence for current information.\n"
-                    "2. Do NOT substitute your pretrained model memory for current retrieved evidence.\n"
-                    "3. Prefer primary/official sources (e.g., python.org, official vendor documentation).\n"
-                    "4. Every factual claim must be directly supported by the retrieved web context.\n"
-                    "5. If retrieved evidence conflicts with your pretrained memory, use the retrieved evidence.\n"
-                    "6. Extract and state the exact version numbers directly from the retrieved official source.\n"
-                    "7. Do NOT invent, guess, or output outdated version numbers."
-                )
+                # Check if live enrichment data (Open-Meteo weather, python.org) is available
+                live_data_section = ""
+                live_hit = next((h for h in ranked_hits if h.source in ("open-meteo.com", "python.org") and h.snippet), None)
+                if live_hit:
+                    live_data_section = f"=== LIVE REAL-TIME DATA (USE THIS AS PRIMARY SOURCE) ===\n{live_hit.snippet}\n\n"
+                    logger.info("LLM_CONTEXT_DEBUG: live_enrichment_hit_available=true source=%s", live_hit.source)
 
                 web_user_prompt = (
+                    f"{live_data_section}"
                     f"=== WEB SEARCH RESULTS ===\n\n{web_context}\n\n"
                     f"=== USER QUESTION ===\n\n{question}\n\n"
                     f"INSTRUCTIONS:\n"
-                    f"Answer the user's question accurately using ONLY the retrieved web search results above. "
-                    f"Extract the exact version number, release name, or facts directly from the retrieved official source. "
-                    f"If an official source (e.g., python.org) is present, use its information as the primary truth."
+                    f"Write a direct, factual answer in 2-4 sentences.\n"
+                    f"If LIVE REAL-TIME DATA is present above, use those exact numbers and facts as your primary answer.\n"
+                    f"Do NOT output URLs, bullet lists, or source names in your answer text — citations are shown separately below.\n"
+                    f"Do NOT say 'I recommend checking sources' if live data is available above."
                 )
 
-                # Diagnostic validation logs (no asserts - AssertionError would be swallowed as generic web search error)
-                if route != Route.WEB:
-                    logger.warning("stage=route_mismatch request_id=%s expected=WEB got=%s", req_id, route)
-                if len(ranked_hits) == 0:
-                    logger.warning("stage=web_results_empty request_id=%s ranked_hits=0", req_id)
-                if "=== WEB SEARCH RESULTS ===" not in web_user_prompt:
-                    logger.warning("stage=prompt_missing_web_header request_id=%s", req_id)
-                if "python" in question.lower() and "python.org" not in web_context:
-                    logger.warning("stage=python_org_missing request_id=%s web_context_snippet=%r", req_id, web_context[:200])
-
+                logger.info("LLM_CONTEXT_DEBUG: web_context_present=true")
                 logger.info(
                     "stage=context_constructed request_id=%s web_context_chars=%d web_results=%d final_prompt_chars=%d web_context_in_final_prompt=true",
                     req_id, len(web_context), len(ranked_hits), len(web_user_prompt)
@@ -1616,56 +1728,49 @@ class RAGService:
                 prov_name = getattr(self.llm_client, "provider_name", getattr(self.llm_client, "name", "omniroute"))
                 mod_name = getattr(self.llm_client, "model", "auto/fast")
 
-                logger.info(
-                    "stage=provider_request_started request_id=%s route=WEB provider=%s model=%s local_chunks=0 web_results=%d",
-                    req_id, prov_name, mod_name, len(ranked_hits)
-                )
-                logger.info(
-                    "stage=final_prompt_constructed request_id=%s route=WEB provider=%s model=%s web_results=%d local_chunks=0 web_context_chars=%d final_prompt_chars=%d",
-                    req_id, prov_name, mod_name, len(ranked_hits), len(web_context), len(web_user_prompt)
-                )
-
                 gen_start = time.monotonic()
                 try:
                     llm_resp = await self.llm_client.generate(
-                        web_system_prompt,
+                        get_settings().WEB_SEARCH_SYSTEM_PROMPT,
                         web_user_prompt,
-                        num_predict=512,
-                        temperature=0.2,
+                        num_predict=768,
                         request_id=req_id,
                     )
-                    gen_ms = int((time.monotonic() - gen_start) * 1000)
-                    p_toks = getattr(llm_resp, "prompt_tokens", 0)
-                    c_toks = getattr(llm_resp, "completion_tokens", 0)
-                    logger.info(
-                        "stage=provider_response_received request_id=%s provider=%s model=%s status=SUCCESS duration_ms=%d prompt_tokens=%d completion_tokens=%d",
-                        req_id, prov_name, mod_name, gen_ms, p_toks, c_toks
-                    )
-                    raw_text = llm_resp.answer.strip()
-                    logger.info("[WEB SEARCH LLM RAW RESPONSE] request_id=%s %r", req_id, raw_text)
+                    raw_text = (llm_resp.answer or "").strip()
+                    logger.info("stage=raw_llm_response request_id=%s len=%d snippet=%r", req_id, len(raw_text), raw_text[:200])
                     clean_text = sanitize_response(raw_text, question=question).strip()
-                    concise_ans = "\n".join(f"- {h.title}: {h.snippet} ({h.url})" for h in all_hits[:5])
-                    answer_text = _validate_web_answer(
-                        raw_answer=raw_text,
-                        clean_answer=clean_text,
-                        concise_text=concise_ans,
-                        original_query=question,
-                    )
-                    logger.info("[WEB SEARCH VALIDATED ANSWER] request_id=%s %r", req_id, answer_text[:100])
-                    logger.info("[WEB SEARCH ANSWER] grounded=true")
 
-                    # Attach markdown source links to answer if not present
-                    if all_hits and "**Sources:**" not in answer_text and "http" not in answer_text:
-                        src_links = [
-                            f"- [{h.title or 'Link'}]({h.url})"
-                            for h in all_hits[:5]
-                            if getattr(h, "url", "")
-                        ]
-                        if src_links:
-                            answer_text = answer_text + "\n\n**Sources:**\n" + "\n".join(src_links)
+                    # Detect if LLM echoed a URL list instead of synthesizing prose
+                    url_list_lines = [
+                        l for l in clean_text.splitlines()
+                        if l.strip().startswith(("http://", "https://", "www.", "- http", "- www"))
+                        or ("http" in l and l.strip().startswith("-"))
+                    ]
+                    is_url_list = len(url_list_lines) >= 2 or (len(clean_text) > 0 and len(url_list_lines) / max(len(clean_text.splitlines()), 1) > 0.5)
+
+                    if is_url_list or not clean_text:
+                        logger.warning("[WEB SEARCH] LLM returned URL list instead of prose. Using synthesized answer. len=%d url_lines=%d", len(clean_text), len(url_list_lines))
+                        # Build a proper prose answer from enrichment hits (Open-Meteo weather data, python.org, etc.)
+                        best_hit = next((h for h in ranked_hits if h.source and h.source in ("open-meteo.com", "python.org") and h.snippet), None) or (ranked_hits[0] if ranked_hits else None)
+                        if best_hit and best_hit.snippet and ":" in best_hit.snippet:
+                            answer_text = best_hit.snippet
+                        else:
+                            domains = ", ".join({h.source or urllib.parse.urlparse(h.url).netloc.replace("www.", "") for h in ranked_hits[:3] if h.url})
+                            answer_text = (
+                                f"I found current web search results for your query from {domains}. "
+                                f"However, the page content could not be fully extracted. "
+                                f"Please use the source links below to view the latest information directly."
+                            )
+                    else:
+                        answer_text = _validate_web_answer(
+                            raw_answer=raw_text,
+                            clean_answer=clean_text,
+                            concise_text=clean_text,
+                            original_query=question,
+                        )
                 except Exception as llm_exc:
-                    logger.error("[WEB SEARCH LLM ERROR] request_id=%s failed to generate answer using LLM: %s", req_id, llm_exc, exc_info=True)
-                    answer_text = "\n".join(f"- {h.title}: {h.snippet} ({h.url})" for h in all_hits[:5])
+                    logger.error("[WEB SEARCH LLM ERROR] request_id=%s error: %s", req_id, llm_exc, exc_info=True)
+                    answer_text = "I retrieved current web search results for your query, but encountered an issue generating the summary. Please use the source links below."
             else:
                 logger.warning("[WEB SEARCH EMPTY] request_id=%s provider=%s queries=%r empty results", req_id, provider_name, queries)
                 if last_sub_exc:
@@ -1697,7 +1802,6 @@ class RAGService:
             else:
                 error_type = "search_failed"
                 answer_text = "Web search failed. Please try again shortly."
-                logger.info("[WEB SEARCH RESPONSE] status=WEB_SEARCH_ERROR answer_contains_timeout=false")
 
             logger.error("[WEB SEARCH ERROR] type=%s message=%s", error_type, msg)
             model_name = f"web-search:error:{error_type}"
@@ -1726,6 +1830,7 @@ class RAGService:
             processing_time_ms=total_ms,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message.id,
+            retrieval_mode="web",
         )
 
     async def _ask_calculator(
@@ -1891,6 +1996,23 @@ class RAGService:
         else:
             direct_sys_prompt = get_settings().GENERAL_CHAT_SYSTEM_PROMPT
 
+        long_term_memory_context = ""
+        if self.session is not None:
+            try:
+                from sqlalchemy import select
+                from app.models.chat_session import ChatSession
+                from app.memory.manager import MemoryManager
+                stmt_s = select(ChatSession.user_id).where(ChatSession.id == session_id)
+                u_res = (await self.session.execute(stmt_s)).scalar_one_or_none()
+                if u_res:
+                    mem_mgr = MemoryManager(self.session)
+                    long_term_memory_context, _ = await mem_mgr.before_query(user_id=u_res, query=question.strip())
+            except Exception as mem_gk_exc:
+                logger.warning("[MEMORY GENERAL KNOWLEDGE] before_query error: %s", mem_gk_exc)
+
+        if long_term_memory_context:
+            query_text = f"{long_term_memory_context}\n\nUser Question:\n{query_text}"
+
         llm_response = await self.llm_client.generate(
             direct_sys_prompt,
             query_text,
@@ -1917,6 +2039,25 @@ class RAGService:
             latency_ms=total_ms,
             generation_time_ms=llm_ms,
         )
+
+        if self.session is not None:
+            try:
+                from sqlalchemy import select
+                from app.models.chat_session import ChatSession
+                from app.memory.manager import MemoryManager
+                stmt_s = select(ChatSession.user_id).where(ChatSession.id == session_id)
+                u_res = (await self.session.execute(stmt_s)).scalar_one_or_none()
+                if u_res:
+                    mem_mgr = MemoryManager(self.session)
+                    mem_mgr.schedule_extraction(
+                        user_id=u_res,
+                        question=question.strip(),
+                        answer=answer_text,
+                        conversation_id=session_id,
+                        existing_memories=[],
+                    )
+            except Exception as mem_gk_exc:
+                logger.warning("[MEMORY EXTRACTION SCHEDULING SKIPPED GK] session_id=%s: %s", session_id, mem_gk_exc)
         logger.info("[RESPONSE RETURNED] total_ms=%d route=GENERAL_KNOWLEDGE", total_ms)
         return RAGResponse(
             answer=answer_text,
@@ -1945,17 +2086,17 @@ class RAGService:
                 from app.repositories.document_repository import DocumentRepository
                 repo = DocumentRepository(self.session)
                 docs = await repo.list_by_user(user_id)
-                titles = [d.title for d in docs if d.title]
+                titles = [str(d.title or d.original_filename) for d in docs if (d.title or d.original_filename)]
                 if not titles:
                     from app.models.enums import DocumentStatus
                     stmt = (
-                        select(Document.title)
+                        select(Document.title, Document.original_filename)
                         .where(Document.deleted_at.is_(None))
                         .where(Document.status == DocumentStatus.READY)
                         .limit(100)
                     )
                     res = await self.session.execute(stmt)
-                    titles = [r[0] for r in res.all() if r[0]]
+                    titles = [str(r[0] or r[1]) for r in res.all() if (r[0] or r[1])]
             except Exception as exc:
                 logger.warning("[ROUTING HINTS] failed to load document titles: %s", exc)
 
@@ -1999,12 +2140,39 @@ class RAGService:
             logger.exception("Retrieval failed in _retrieve_safely: %s", exc)
             raise
 
+    def _trigger_memory_extraction(
+        self,
+        user_id: uuid.UUID | None,
+        session_id: uuid.UUID,
+        question: str,
+        answer: str,
+    ) -> None:
+        """Trigger background memory extraction safely."""
+        if self.session is not None and user_id is not None:
+            try:
+                from app.memory.manager import MemoryManager
+                mem_mgr = MemoryManager(self.session)
+                mem_mgr.schedule_extraction(
+                    user_id=user_id,
+                    question=question.strip(),
+                    answer=answer,
+                    conversation_id=session_id,
+                    existing_memories=[],
+                )
+            except Exception as exc:
+                logger.warning("[MEMORY EXTRACTION SCHEDULING SKIPPED] session_id=%s: %s", session_id, exc)
+
     async def close(self) -> None:
         await self.retriever.close()
         await self.llm_client.close()
         close_web = getattr(self.web_search, "close", None)
         if close_web is not None:
             await close_web()
+        if self.session is not None and hasattr(self.session, "close"):
+            try:
+                await self.session.close()
+            except Exception:
+                pass
 
 
 def _sources_from_chunks(chunks: list[RankedResult]) -> list[SourceCitation]:
@@ -2022,6 +2190,7 @@ def _sources_from_chunks(chunks: list[RankedResult]) -> list[SourceCitation]:
         )
         for chunk in chunks
     ]
+
 
 
 def _sources_from_prompt(prompt: Prompt) -> list[SourceCitation]:

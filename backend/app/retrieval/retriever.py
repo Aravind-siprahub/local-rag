@@ -86,8 +86,14 @@ class Retriever:
         filters_obj = filters or SearchFilters()
         mode = getattr(filters_obj, "search_mode", "hybrid")
 
-        # Generate sub-queries for multi-aspect questions (e.g. queries containing "and")
+        from app.rag.query_normalizer import normalize_query
+        _, _, ret_q = normalize_query(question.strip())
+
+        # Generate sub-queries for multi-aspect questions and clean retrieval query
         sub_queries = [question.strip()]
+        if ret_q and ret_q.strip() and ret_q.strip().lower() != question.strip().lower():
+            sub_queries.append(ret_q.strip())
+
         q_clean = question.strip().lower()
         if " and " in q_clean:
             parts = [p.strip() for p in q_clean.split(" and ") if len(p.strip()) >= 3]
@@ -140,6 +146,9 @@ class Retriever:
                             clean_sem_hits.append(hit)
                             
             candidate_results = rank_results(clean_sem_hits, effective_threshold)[:candidate_top_k]
+            if not candidate_results and clean_sem_hits:
+                logger.info("[RETRIEVER THRESHOLD FALLBACK] 0 candidates at threshold=%.3f. Retrying at threshold=0.10", effective_threshold)
+                candidate_results = rank_results(clean_sem_hits, 0.10)[:candidate_top_k]
             hits = clean_sem_hits
         else:
             sem_tasks = [
@@ -179,6 +188,10 @@ class Retriever:
 
             hits = clean_sem_hits + clean_ft_hits
             candidate_results = rank_hybrid_rrf(clean_sem_hits, clean_ft_hits, similarity_threshold=effective_threshold)[:candidate_top_k]
+            if not candidate_results and (clean_sem_hits or clean_ft_hits):
+                logger.info("[RETRIEVER THRESHOLD FALLBACK] 0 hybrid candidates at threshold=%.3f. Retrying at threshold=0.10", effective_threshold)
+                candidate_results = rank_hybrid_rrf(clean_sem_hits, clean_ft_hits, similarity_threshold=0.10)[:candidate_top_k]
+
 
         retrieval_time_ms = int((time.monotonic() - retrieval_search_start) * 1000)
 
@@ -208,6 +221,87 @@ class Retriever:
             )
 
         return results
+
+    async def retrieve_section_aware(
+        self,
+        question: str,
+        *,
+        filters: SearchFilters | None = None,
+        max_total_chunks: int = 40,
+    ) -> list[RankedResult]:
+        """Section-aware document retrieval for document summary and detail queries.
+
+        Retrieves representative chunks from ALL major sections/pages of the target document
+        to guarantee comprehensive whole-document coverage.
+        """
+        from app.retrieval.search import search_document_chunks_structured, SearchHit
+
+        hits = await search_document_chunks_structured(
+            self.session,
+            filters=filters,
+            max_chunks=150,
+        )
+
+        if not hits:
+            logger.info("[SECTION AWARE RETRIEVAL] 0 hits for filters=%s, falling back to standard retrieve", filters)
+            return await self.retrieve(question, filters=filters)
+
+        # Group hits by section_title (or page_number)
+        sections: dict[str, list[SearchHit]] = {}
+        for hit in hits:
+            sec_name = (hit.section_title or "").strip() or f"Page {hit.page_number or 1}"
+            sections.setdefault(sec_name, []).append(hit)
+
+        selected_hits: list[SearchHit] = []
+        # First pass: pick up to 2-3 representative chunks from EVERY section
+        for sec_name, sec_hits in sections.items():
+            selected_hits.extend(sec_hits[:3])
+
+        # If total exceeds max_total_chunks, sample evenly across sections
+        if len(selected_hits) > max_total_chunks:
+            per_section = max(1, max_total_chunks // max(1, len(sections)))
+            selected_hits = []
+            for sec_name, sec_hits in sections.items():
+                selected_hits.extend(sec_hits[:per_section])
+
+        # Dedup and preserve document index order (chunk sequence order)
+        seen_hit_ids: set[uuid.UUID] = set()
+        deduped_selected: list[SearchHit] = []
+        for hit in selected_hits:
+            if hit.chunk_id not in seen_hit_ids:
+                seen_hit_ids.add(hit.chunk_id)
+                deduped_selected.append(hit)
+
+        # Sort by chunk_index / document order
+        deduped_selected.sort(key=lambda h: getattr(h, "chunk_index", 0) if hasattr(h, "chunk_index") else 0)
+
+        ranked: list[RankedResult] = []
+        for idx, hit in enumerate(deduped_selected[:max_total_chunks], 1):
+            ranked.append(
+                RankedResult(
+                    chunk_id=hit.chunk_id,
+                    chunk_text=hit.chunk_text,
+                    document_id=hit.document_id,
+                    similarity_score=1.0,
+                    rank=idx,
+                    document_version_id=hit.document_version_id,
+                    document_title=hit.document_title,
+                    section_title=hit.section_title,
+                    page_number=hit.page_number,
+                )
+            )
+
+        logger.info(
+            "[SECTION AWARE METRICS]\nQUERY: %r\nINTENT: DOCUMENT_SUMMARY/DETAIL\nDOCUMENT_ID: %s\nTOTAL_RAW_CHUNKS: %d\nSECTIONS_FOUND: %d\nFINAL_CHUNKS_SELECTED: %d\nSECTIONS: %s",
+            question,
+            filters.document_id if filters else "N/A",
+            len(hits),
+            len(sections),
+            len(ranked),
+            list(sections.keys()),
+        )
+
+        return ranked
 
 
 
@@ -256,7 +350,7 @@ class Retriever:
             if filters.document_version_id is not None:
                 stmt = stmt.where(DocumentVersion.id == filters.document_version_id)
             else:
-                stmt = stmt.where(DocumentChunk.document_version_id == Document.current_version_id)
+                stmt = stmt.where((Document.current_version_id.is_(None)) | (DocumentChunk.document_version_id == Document.current_version_id))
             if filters.filename is not None:
                 stmt = stmt.where(Document.title.ilike(f"%{filters.filename}%"))
             if filters.date_from is not None:

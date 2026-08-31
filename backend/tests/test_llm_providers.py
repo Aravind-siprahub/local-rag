@@ -183,7 +183,7 @@ async def test_openai_compatible_streaming():
 
 def test_factory_missing_api_key_errors():
     """Verify exact error messages when required API keys are missing for openrouter and nvidia providers."""
-    with patch("app.llm.factory.get_settings") as mock_settings:
+    with patch("app.llm.factory.get_settings") as mock_settings, patch("app.llm.openai_client.get_settings", mock_settings):
         mock_settings.return_value = MagicMock(
             LLM_PROVIDER="openrouter",
             OPENROUTER_API_KEY="",
