@@ -18,6 +18,9 @@ class SourceCitation:
     document_title: str | None = None
     section_title: str | None = None
     page_number: int | None = None
+    url: str | None = None
+    domain: str | None = None
+    source_type: str = "local"
 
 
 @dataclass(frozen=True)
@@ -40,3 +43,5 @@ class RAGResponse:
     processing_time_ms: int
     user_message_id: uuid.UUID
     assistant_message_id: uuid.UUID
+    retrieval_mode: str | None = "local"
+

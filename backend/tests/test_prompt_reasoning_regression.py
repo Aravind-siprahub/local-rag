@@ -12,4 +12,4 @@ def test_user_prompt_forbids_reasoning():
     user_prompt = format_user_prompt("Mock Context", "What port does the frontend use?")
     user_prompt_lower = user_prompt.lower()
     
-    assert "if the answer is not in the above context, say" in user_prompt_lower
+    assert "if the context contains no relevant facts" in user_prompt_lower

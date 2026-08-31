@@ -16,6 +16,15 @@ class ChatDocumentFilters(BaseModel):
     document_version_id: OptionalUUID = None
 
 
+class ChatAttachment(BaseModel):
+    id: str | None = None
+    filename: str
+    mime_type: str
+    size: int | None = None
+    url: str | None = None
+    document_id: OptionalUUID = None
+
+
 class ChatRequest(BaseModel):
     """POST /chat body."""
 
@@ -43,6 +52,10 @@ class ChatRequest(BaseModel):
     document_version_id: OptionalUUID = None
     top_k: Annotated[int, Field(ge=1, le=100)] | None = None
     similarity_threshold: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
+    attachments: list[ChatAttachment] | None = None
+    provider: str | None = None
+    model: str | None = None
+
 
     model_config = ConfigDict(json_schema_extra={"example": CHAT_REQUEST_OPENAPI_EXAMPLE})
 
@@ -79,6 +92,9 @@ class ChatCitationResponse(BaseModel):
     page_number: int | None = None
     similarity_score: float
     rank: int
+    url: str | None = None
+    domain: str | None = None
+    source_type: str = "local"
 
 
 class ChatResponse(BaseModel):
@@ -91,3 +107,5 @@ class ChatResponse(BaseModel):
     processing_time_ms: Annotated[int, Field(ge=0)]
     user_message_id: uuid.UUID
     assistant_message_id: uuid.UUID
+    retrieval_mode: str | None = Field(default="local", description="Mode used: local, web, or hybrid")
+

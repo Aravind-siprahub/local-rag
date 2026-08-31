@@ -13,16 +13,22 @@ USER_PROMPT_WITH_CONTEXT = (
     "{context}\n\n"
     "{question_header} {question}\n\n"
     "CRITICAL RULES FOR YOUR RESPONSE:\n"
-    "1. Give ONLY the direct factual answer immediately (e.g. \"Frontend: React, Backend: FastAPI\").\n"
-    "2. Do NOT list documents, section numbers, or page numbers.\n"
-    "3. Do NOT output self-talk, reasoning, or phrases like 'Let's write', 'We are to be', 'Note that', or 'The key is'.\n"
-    "4. If information is not found in the context, reply ONLY: \"The requested information is not found in the documents.\"\n"
+    "1. Give a direct, helpful, factual, and complete response summarizing all relevant details present in the context related to the user's question.\n"
+    "2. If the question asks to explain or define a general concept, acronym, or industry term (such as 'POC' / 'Proof of Concept'), first define the general concept clearly, and then explain how that concept is specifically used or applied in the document context above.\n"
+    "3. State all verified facts, tracking rules, policies, and metrics present in the document context accurately. If the question asks for specific details (such as fixed shift start/end times, lunch breaks, or exact hours) that are NOT explicitly mentioned in the context, state what the document DOES record while clarifying that exact fixed times or figures are not explicitly specified.\n"
+    "4. Inspect the uploaded document context for matching keywords or concepts from the question. When matching keywords or sections are found, extract and state the full answer directly based on those matching document details.\n"
+    "5. Do NOT invent or infer unstated facts, shift times, figures, or policies not present in the document context.\n"
+    "6. Do NOT list documents, section numbers, or page numbers.\n"
+    "7. Do NOT output self-talk, reasoning, or phrases like 'Let's write', 'We are to be', 'Note that', or 'The key is'.\n"
+    "8. If the context contains NO relevant facts whatsoever for the question, say: \"The requested information is not found in the documents.\"\n"
 )
 
 USER_PROMPT_WITHOUT_CONTEXT = (
+    "Retrieved Document Context:\n\n"
+    "No document excerpts were available.\n\n"
     "Question:\n\n{question}\n\n"
-    "---------------------------------\n\n"
-    "Retrieved Document Context\n\nNo document excerpts were available."
+    "CRITICAL GROUNDING RULES:\n"
+    "No document context was retrieved for this query. If the question asks for information from uploaded documents or project specifications, or if no relevant context exists, respond: \"Information not found in document excerpts.\""
 )
 
 
@@ -48,9 +54,17 @@ def format_user_prompt(
     question: str,
     chat_history: list[dict[str, str]] | None = None,
     working_memory_summary: str | None = None,
+    long_term_memory_context: str | None = None,
     max_history_chars: int = 1000,
 ) -> str:
-    """Compose the user message from context blocks, working memory summary, and the question."""
+    """Compose the user message from context blocks, working memory summary, and the question.
+
+    Order of sections (all optional):
+        1. Working memory summary (short-term rolling summary)
+        2. Long-term memory context (DATA block, prompt-injection safe)
+        3. RAG document context
+        4. Question + grounding rules
+    """
     question = question.strip()
     history_text = ""
 
@@ -85,6 +99,7 @@ def format_user_prompt(
         if formatted_history:
             history_text = "Recent Conversation:\n" + "\n".join(formatted_history) + "\n\n---------------------------------\n\n"
 
+    # Build the base prompt from RAG context
     if context.strip():
         base = USER_PROMPT_WITH_CONTEXT.format(
             question=question,
@@ -95,7 +110,15 @@ def format_user_prompt(
     else:
         base = USER_PROMPT_WITHOUT_CONTEXT.format(question=question)
 
+    # Assemble sections in order: history → long-term memory → base
+    parts: list[str] = []
     if history_text:
-        return f"{history_text}{base}"
-    return base
+        parts.append(history_text)
+
+    if long_term_memory_context and long_term_memory_context.strip():
+        parts.append(long_term_memory_context.strip())
+        parts.append("\n")  # spacer before RAG context
+
+    parts.append(base)
+    return "".join(parts)
 

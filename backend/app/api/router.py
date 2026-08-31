@@ -12,9 +12,11 @@ from app.api.endpoints import (
     chat_messages,
     chat_sessions,
     debug,
+    debug_rag,
     document_versions,
     documents,
     health,
+    memory,
     metrics,
     processing_jobs,
     system_settings,
@@ -29,8 +31,10 @@ api_router.include_router(metrics.router)
 api_router.include_router(auth.router)
 api_router.include_router(admin.router)
 api_router.include_router(debug.router)
+api_router.include_router(debug_rag.router)
 api_router.include_router(users.router)
 api_router.include_router(documents.router)
+
 api_router.add_api_route(
     "/upload",
     endpoint=documents.upload_document,
@@ -44,5 +48,7 @@ api_router.include_router(document_versions.router)
 api_router.include_router(chat_sessions.router)
 api_router.include_router(chat_messages.router)
 api_router.include_router(chat.router)
+api_router.include_router(memory.router)
 api_router.include_router(processing_jobs.router)
 api_router.include_router(system_settings.router)
+

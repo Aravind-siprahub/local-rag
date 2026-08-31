@@ -12,8 +12,9 @@ import {
   DRAFT_CONVERSATION_KEY,
 } from '@/features/chat/store/chatRequest.store'
 import { useConversationRequestState } from '@/features/chat/hooks/useChatRequestStore'
-import type { Message, Citation } from '@/features/chat/types/chat'
+import type { Message, Citation, Attachment } from '@/features/chat/types/chat'
 import { chatService } from '@/features/chat/services/chat.service'
+import { AVAILABLE_MODELS } from '@/features/chat/constants/models'
 import { Button } from '@/components/ui/button'
 
 interface ConversationOverlayState {
@@ -48,7 +49,14 @@ function setOverlay(id: string, state: ConversationOverlayState) {
 export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
-  const [selectedModel, setSelectedModel] = useState<string>('qwen3:4b')
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    return localStorage.getItem('SELECTED_CHAT_MODEL') || 'auto/fast'
+  })
+
+  const handleSelectModel = (modelId: string) => {
+    setSelectedModel(modelId)
+    localStorage.setItem('SELECTED_CHAT_MODEL', modelId)
+  }
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [, setOverlayVersion] = useState(0)
   const queryClient = useQueryClient()
@@ -97,17 +105,39 @@ export function ChatPage() {
     const optimisticTemps = existing.messages.filter((m) => m.id.startsWith('temp-'))
     const isSending = chatRequestStore.isSending(activeSessionId)
 
+    // Helper to preserve local attachments & preview URLs across server hydration
+    const mergeServerAndLocal = (serverMsgs: Message[], localMsgs: Message[]): Message[] => {
+      const localMap = new Map<string, Message>()
+      localMsgs.forEach((m) => {
+        localMap.set(m.id, m)
+        if (m.content) {
+          localMap.set(`${m.role}:${m.content.trim()}`, m)
+        }
+      })
+
+      return serverMsgs.map((s) => {
+        const matched = localMap.get(s.id) || localMap.get(`${s.role}:${s.content?.trim()}`)
+        return {
+          ...s,
+          attachments: (s.attachments && s.attachments.length > 0) ? s.attachments : matched?.attachments,
+          localImageUrl: matched?.localImageUrl || s.localImageUrl,
+        }
+      })
+    }
+
+    const reconciledSorted = mergeServerAndLocal(sorted, existing.messages)
+
     if (isSending && optimisticTemps.length > 0) {
-      const serverIds = new Set(sorted.map((m) => m.id))
+      const serverIds = new Set(reconciledSorted.map((m) => m.id))
       const stillMissing = optimisticTemps.filter((m) => !serverIds.has(m.id))
       setOverlay(activeSessionId, {
         ...existing,
-        messages: [...sorted, ...stillMissing],
+        messages: [...reconciledSorted, ...stillMissing],
       })
     } else if (!isSending) {
       setOverlay(activeSessionId, {
         ...existing,
-        messages: sorted,
+        messages: reconciledSorted,
         latestCitations: existing.latestCitations,
       })
     }
@@ -171,45 +201,60 @@ export function ChatPage() {
     const idx = msgs.findIndex((m) => m.id === assistantMsg.id)
     if (idx > 0 && msgs[idx - 1]?.role === 'user') {
       const userMsg = msgs[idx - 1]
-      // Backend does not support re-submitting images by ID/URL.
-      // We explicitly drop the localImageUrl to avoid falsely showing an image in the new user bubble that the backend never received.
-      void handleSend(userMsg.content, undefined, undefined)
+      void handleSend(userMsg.content, userMsg.attachments, undefined, userMsg.localImageUrl, userMsg)
     }
   }
 
-  const handleSend = async (content: string, file?: File, preservedImageUrl?: string) => {
+  const handleSend = async (
+    content: string,
+    attachments?: Attachment[],
+    primaryFile?: File,
+    preservedImageUrl?: string,
+    existingUserMsg?: Message
+  ) => {
     const keyAtStart = activeSessionId ?? DRAFT_CONVERSATION_KEY
     if (chatRequestStore.isSending(keyAtStart)) return
 
     setErrorForActive(null)
 
-    const resolvedImageUrl = file
-      ? URL.createObjectURL(file)
-      : preservedImageUrl || undefined
-
-    const tempUserMsg: Message = {
-      id: `temp-${Date.now()}`,
-      session_id: activeSessionId || 'temp',
-      role: 'user',
-      content,
-      created_at: new Date().toISOString(),
-      localImageUrl: resolvedImageUrl,
-    }
-
     const before = getOverlay(keyAtStart)
-
-    // If editing a historical user message, truncate messages from that point onward
     let baseMessages = before.messages
-    if (editingMessage) {
-      const editIdx = baseMessages.findIndex((m) => m.id === editingMessage.id)
-      if (editIdx >= 0) {
-        baseMessages = baseMessages.slice(0, editIdx)
+
+    let tempUserMsg: Message
+    if (existingUserMsg) {
+      tempUserMsg = existingUserMsg
+      const userIdx = baseMessages.findIndex((m) => m.id === existingUserMsg.id)
+      if (userIdx >= 0) {
+        baseMessages = baseMessages.slice(0, userIdx + 1)
       }
+    } else {
+      const firstImg = attachments?.find(a => a.mime_type?.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp'].some(ext => a.filename?.toLowerCase().endsWith(`.${ext}`)))
+      const resolvedImageUrl = primaryFile
+        ? URL.createObjectURL(primaryFile)
+        : firstImg?.previewUrl || preservedImageUrl || undefined
+
+      tempUserMsg = {
+        id: `temp-${Date.now()}`,
+        session_id: activeSessionId || 'temp',
+        role: 'user',
+        content,
+        created_at: new Date().toISOString(),
+        localImageUrl: resolvedImageUrl,
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
+      }
+
+      if (editingMessage) {
+        const editIdx = baseMessages.findIndex((m) => m.id === editingMessage.id)
+        if (editIdx >= 0) {
+          baseMessages = baseMessages.slice(0, editIdx)
+        }
+      }
+      baseMessages = [...baseMessages, tempUserMsg]
     }
 
     setOverlay(keyAtStart, {
       ...before,
-      messages: [...baseMessages, tempUserMsg],
+      messages: baseMessages,
       latestCitations: undefined,
       errorMessage: null,
     })
@@ -228,7 +273,7 @@ export function ChatPage() {
               content.split(' ').slice(0, 5).join(' ') +
               (content.split(' ').length > 5 ? '...' : '')
             const newSession = await createConversation.mutateAsync(
-              title || (file || preservedImageUrl ? 'Image analysis' : 'New chat'),
+              title || (primaryFile || attachments?.length || preservedImageUrl ? 'Analysis chat' : 'New chat'),
             )
             currentSessionId = newSession.id
             ctx.rekeyTo(currentSessionId)
@@ -264,11 +309,15 @@ export function ChatPage() {
             streamingStatus: 'Starting...',
           })
 
+          const selectedModelObj = AVAILABLE_MODELS.find((m) => m.id === selectedModel)
           await chatService.streamMessage(
             {
               session_id: currentSessionId,
               question: content,
-              file,
+              file: primaryFile,
+              attachments: attachments,
+              model: selectedModel,
+              provider: selectedModelObj?.provider,
             },
             {
               onStatus: (message) => {
@@ -368,19 +417,19 @@ export function ChatPage() {
         setMobileOpen={setIsMobileSidebarOpen}
       />
 
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full relative z-0 bg-background/50">
-        <div className="h-13 border-b border-border/35 flex items-center justify-between px-4 bg-background/95 backdrop-blur-md z-10 shrink-0">
-          <div className="flex items-center min-w-0 flex-1">
+      <div className="flex-1 flex flex-col min-w-0 h-full">
+        <header className="h-14 border-b border-border/40 flex items-center justify-between px-4 bg-background/80 backdrop-blur shrink-0 z-10">
+          <div className="flex items-center gap-3 min-w-0">
             <Button
               variant="ghost"
               size="icon"
-              className="md:hidden mr-2 shrink-0 h-8 w-8 text-muted-foreground hover:text-foreground"
+              className="lg:hidden shrink-0"
               onClick={() => setIsMobileSidebarOpen(true)}
             >
               <Menu className="h-4 w-4" />
             </Button>
-            <h1 className="text-sm font-semibold truncate text-foreground/90 font-display">
-              {activeConversation ? activeConversation.title : 'New Chat'}
+            <h1 className="text-base font-semibold truncate">
+              {activeConversation?.title || 'New Chat'}
             </h1>
           </div>
 
@@ -390,7 +439,7 @@ export function ChatPage() {
               <span>Local RAG</span>
             </div>
           </div>
-        </div>
+        </header>
 
         {errorMessage ? (
           <div className="mx-4 mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs flex items-center justify-between gap-3 shrink-0">
@@ -436,7 +485,7 @@ export function ChatPage() {
               sendDisabled={currentMessageSending}
               disabled={false}
               selectedModel={selectedModel}
-              onSelectModel={setSelectedModel}
+              onSelectModel={handleSelectModel}
               editingMessage={editingMessage}
               onCancelEdit={() => setEditingMessage(null)}
             />

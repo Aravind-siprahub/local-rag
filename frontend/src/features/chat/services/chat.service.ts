@@ -84,6 +84,12 @@ export const chatService = {
       if (payload.similarity_threshold) {
         formData.append('similarity_threshold', String(payload.similarity_threshold))
       }
+      if (payload.provider) {
+        formData.append('provider', payload.provider)
+      }
+      if (payload.model) {
+        formData.append('model', payload.model)
+      }
       formData.append('file', payload.file)
 
       console.log('[IMAGE_UPLOAD] multipart_request_sent — letting browser set Content-Type with boundary')
@@ -139,11 +145,23 @@ export const chatService = {
       if (payload.document_version_id) formData.append('document_version_id', payload.document_version_id)
       if (payload.top_k) formData.append('top_k', String(payload.top_k))
       if (payload.similarity_threshold) formData.append('similarity_threshold', String(payload.similarity_threshold))
+      if (payload.provider) formData.append('provider', payload.provider)
+      if (payload.model) formData.append('model', payload.model)
       formData.append('file', payload.file)
       body = formData
     } else {
       headers['Content-Type'] = 'application/json'
-      body = JSON.stringify(payload)
+      const jsonPayload = {
+        ...payload,
+        attachments: payload.attachments?.map((a) => ({
+          id: a.id,
+          filename: a.filename,
+          mime_type: a.mime_type,
+          size: a.size,
+          document_id: a.document_id,
+        })),
+      }
+      body = JSON.stringify(jsonPayload)
     }
 
     try {

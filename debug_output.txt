@@ -1,0 +1,8 @@
+lowered: 'here is the answer. 结果'
+tags: ["'由于'", "'结果'", "'<thinking>'", "'</thinking>'", "'<redacted_thinking>'"]
+any tag in lowered: True
+  '由于' in lowered: False
+  '结果' in lowered: True
+  '<thinking>' in lowered: False
+  '</thinking>' in lowered: False
+  '<redacted_thinking>' in lowered: False

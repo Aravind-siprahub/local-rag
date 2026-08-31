@@ -27,6 +27,7 @@ from app.models.enums import (
     UserRole,
     VectorMetric,
 )
+from app.models.long_term_memory import LongTermMemory
 from app.models.processing_job import ProcessingJob
 from app.models.rag_trace import RAGTrace
 from app.models.system_setting import SystemSetting
@@ -45,6 +46,7 @@ __all__ = [
     "ProcessingJob",
     "RAGTrace",
     "SystemSetting",
+    "LongTermMemory",
     # enums
     "UserRole",
     "DocumentStatus",

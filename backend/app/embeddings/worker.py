@@ -93,6 +93,8 @@ class EmbeddingWorker:
                 raise ValueError(f"Document version {version.id} has no chunks to embed.")
 
             generation = await generator.embed_chunks(document_chunks)
+            if generation.embedded_count == 0 and generation.skipped_count == 0:
+                raise ValueError(f"Document version {version.id} produced 0 vector embeddings across {len(document_chunks)} chunks.")
 
             now = datetime.now(timezone.utc)
             await self.versions.update(

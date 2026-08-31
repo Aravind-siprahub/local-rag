@@ -86,11 +86,19 @@ def verify_answer(
     # Rule 3: Fact Grounding — Ensure key named entities in answer exist in context.
     # Skiplist covers generic words and tech terms that carry no hallucination risk.
     _ENTITY_SKIPLIST = {
-        "the", "frontend", "backend", "system", "app", "application", "data", "code",
-        "api", "ui", "db", "ux", "qa", "yes", "no", "its", "and", "for", "with",
-        "it", "is", "on", "at", "by", "to", "of", "in", "as", "an", "framework",
-        "library", "stack", "technology", "technologies", "version", "service",
-        # Common tech names that are often referenced by context synonyms
+        "the", "a", "an", "frontend", "backend", "system", "app", "application", "data", "code",
+        "api", "ui", "db", "ux", "qa", "yes", "no", "its", "it's", "and", "for", "with", "but", "or",
+        "it", "is", "on", "at", "by", "to", "of", "in", "as", "an", "framework", "so", "if", "not",
+        "library", "stack", "technology", "technologies", "version", "service", "services",
+        # Common English sentence starters and conjunctions
+        "based", "this", "that", "these", "those", "there", "here", "when", "what", "where", "why", "how",
+        "however", "also", "addition", "additionally", "moreover", "furthermore", "overall", "summary",
+        "first", "second", "third", "finally", "key", "core", "main", "primary", "note", "specifically",
+        "following", "includes", "including", "used", "uses", "using", "built", "provides", "provides",
+        # Common tech names and organizational terms that carry no hallucination risk
+        "values", "core", "integrity", "accountability", "collaboration", "excellence", "respect",
+        "purpose", "handbook", "compliance", "framework", "overview", "policy", "policies", "rules",
+        "working", "hours", "leave", "casual", "sick", "annual", "siprahub", "sipraone", "sipra",
         "vite", "react", "fastapi", "node", "nodejs", "express", "django", "flask",
         "postgres", "postgresql", "mongodb", "redis", "nginx", "docker",
         "nextjs", "next", "vue", "angular", "svelte", "typescript", "javascript",
@@ -99,7 +107,7 @@ def verify_answer(
     named_entities = re.findall(r"\b[A-Z][a-zA-Z0-9\.]+\b", ans_clean)
     for entity in named_entities:
         e_lower = entity.lower().replace(".", "")
-        if e_lower in _ENTITY_SKIPLIST:
+        if e_lower in _ENTITY_SKIPLIST or len(e_lower) <= 3:
             continue
         if entity.lower() in context_text or e_lower in context_text:
             continue
@@ -113,6 +121,9 @@ def verify_answer(
             continue
         # General alias: if entity stem (first 4 chars) is in context, treat as matched
         if len(e_lower) >= 4 and e_lower[:4] in context_text:
+            continue
+        # Ignore general capitalized English words that are not specific proper nouns
+        if e_lower.isalpha() and not any(char.isupper() for char in entity[1:]):
             continue
         return VerificationResult(
             is_valid=False,

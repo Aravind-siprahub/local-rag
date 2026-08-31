@@ -66,7 +66,7 @@ function HealthItem({
   return (
     <li className="flex items-center justify-between">
       <div className="flex items-center gap-3">
-        <div className={`size-2 rounded-full ${isOk ? 'bg-[hsl(var(--success))]' : 'bg-destructive'}`} />
+        <div className={`size-2 rounded-full ${isOk ? 'bg-success' : 'bg-destructive'}`} />
         <span className="text-sm text-muted-foreground">{label}</span>
       </div>
       <span className={`text-sm font-medium ${isOk ? 'text-foreground' : 'text-destructive'}`}>

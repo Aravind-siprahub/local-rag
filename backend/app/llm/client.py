@@ -1,7 +1,7 @@
 """LLM provider interface and shared errors."""
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import AsyncGenerator, Protocol, runtime_checkable
 
 from app.llm.response import LLMResponse
 
@@ -59,6 +59,19 @@ class LLMClient(Protocol):
         temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
+        request_id: str | None = None,
     ) -> LLMResponse: ...
+
+    def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+        temperature: float | None = None,
+        images: list[bytes] | None = None,
+        model: str | None = None,
+        request_id: str | None = None,
+    ) -> AsyncGenerator[str, None]: ...
 
     async def close(self) -> None: ...

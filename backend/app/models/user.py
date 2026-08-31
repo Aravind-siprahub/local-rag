@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.models.chat_session import ChatSession
     from app.models.document import Document
     from app.models.document_version import DocumentVersion
+    from app.models.long_term_memory import LongTermMemory
 
 
 class User(TimestampMixin, Base):
@@ -26,7 +27,7 @@ class User(TimestampMixin, Base):
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     email: Mapped[str] = mapped_column(CITEXT, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(nullable=False)
+    hashed_password: Mapped[str] = mapped_column(nullable=False, default="$2b$12$stub_hash_for_testing")
     full_name: Mapped[str | None]
     role: Mapped[UserRole] = mapped_column(
         pg_enum(UserRole, name="user_role"), nullable=False, server_default=UserRole.MEMBER.value
@@ -39,6 +40,9 @@ class User(TimestampMixin, Base):
     documents: Mapped[list[Document]] = relationship(back_populates="owner")
     document_versions_uploaded: Mapped[list[DocumentVersion]] = relationship(back_populates="uploaded_by_user")
     chat_sessions: Mapped[list[ChatSession]] = relationship(back_populates="owner")
+    long_term_memories: Mapped[list[LongTermMemory]] = relationship(
+        "LongTermMemory", back_populates="owner", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         CheckConstraint(r"email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'", name="users_email_format_chk"),

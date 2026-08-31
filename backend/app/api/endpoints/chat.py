@@ -1,12 +1,15 @@
-"""Unified chat API — RAG Q&A and session transcript access."""
+import logging
+import time
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status, Request
 
+logger = logging.getLogger(__name__)
+
 from app.api.dependencies import PaginationParams, get_chat_message_service, get_chat_session_service, get_current_user, get_rag_service
 from app.api.security import verify_ownership
-from app.core.swagger_constants import OPENAPI_PLACEHOLDER_UUID
+from app.core.swagger_constants import OPENAPI_PLACEHOLDER_UUID, is_demo_placeholder
 from app.llm.client import LLMClientError, LLMTimeoutError, LLMUnavailableError
 from app.models.user import User
 from app.rag.response import RAGResponse
@@ -76,6 +79,7 @@ async def ask_chat(
     image_mime: str | None = None
     image_size: int | None = None
     image_storage_path: str | None = None
+    attachments_meta: list[dict[str, Any]] | None = None
 
     logger.info(
         '[CHAT REQUEST] request_id=%s content_type=%r content_length=%s is_multipart=%s',
@@ -89,12 +93,17 @@ async def ask_chat(
     from fastapi.exceptions import RequestValidationError
     from fastapi import UploadFile
 
+    req_provider: str | None = None
+    req_model: str | None = None
+
     try:
         if "multipart/form-data" in content_type:
             form = await request.form()
             form_keys = list(form.keys())
             logger.info('[CHAT REQUEST] form_keys=%s file_present=%s', form_keys, 'file' in form_keys)
             question = str(form.get("question", "")).strip()
+            req_provider = str(form.get("provider", "")).strip() or None
+            req_model = str(form.get("model", "")).strip() or None
             
             session_id_str = form.get("session_id")
             if session_id_str and isinstance(session_id_str, str):
@@ -129,6 +138,8 @@ async def ask_chat(
                 "document_version_id": doc_ver_str if isinstance(doc_ver_str, str) else None,
                 "top_k": top_k_str if isinstance(top_k_str, str) else None,
                 "similarity_threshold": sim_threshold_str if isinstance(sim_threshold_str, str) else None,
+                "provider": req_provider,
+                "model": req_model,
             }
             params = {k: v for k, v in params.items() if v is not None}
             ChatRequest.model_validate(params)
@@ -176,17 +187,24 @@ async def ask_chat(
             document_version_id = payload.document_version_id
             top_k = payload.top_k
             similarity_threshold = payload.similarity_threshold
+            attachments_meta = [att.model_dump(mode="json") for att in payload.attachments] if payload.attachments else None
+            req_provider = payload.provider
+            req_model = payload.model
     except ValidationError as err:
         raise RequestValidationError(err.errors())
 
     logger.info('[CHAT START] request_id=%s query="%s" module_file="%s"', request_id, question, module_file)
 
-    if session_id is None or session_id == OPENAPI_PLACEHOLDER_UUID:
+    if is_demo_placeholder(session_id):
         session_id = await get_or_create_swagger_demo_session(
             users=UserRepository(session_service.session),
             sessions=ChatSessionRepository(session_service.session),
             session_service=session_service,
+            user_id=current_user.id,
         )
+
+    if session_id is None:
+        raise HTTPException(status_code=400, detail="Session ID is required.")
 
     chat_session = await session_service.get(session_id)
     if not chat_session:
@@ -220,6 +238,17 @@ async def ask_chat(
             logger.error("[IMAGE] supabase_upload_failed request_id=%s error=%s", request_id, e)
             raise HTTPException(status_code=500, detail="Image upload failed. Please try again.")
 
+    if document_id is None and attachments_meta:
+        for att in attachments_meta:
+            doc_id_val = att.get("document_id")
+            if doc_id_val:
+                try:
+                    document_id = uuid.UUID(str(doc_id_val))
+                    logger.info("[CHAT API] Extracted document_id=%s from attachments_meta", document_id)
+                    break
+                except ValueError:
+                    pass
+
     filters = SearchFilters(
         user_id=current_user.id,
         document_id=document_id,
@@ -239,7 +268,11 @@ async def ask_chat(
             image_name=image_name,
             image_mime=image_mime,
             image_size=image_size,
+            attachments=attachments_meta,
+            provider=req_provider,
+            model=req_model,
         )
+
         total_ms = int((time.monotonic() - start_time) * 1000)
         logger.info('[CHAT END] request_id=%s status=200 total_ms=%d', request_id, total_ms)
     except RAGError as exc:
@@ -268,6 +301,7 @@ async def ask_chat_stream(
 
     # Determine dynamic content parameters
     content_type = request.headers.get("content-type", "")
+    request_id = request.headers.get("X-Request-ID") or f"req-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     question = ""
     session_id: uuid.UUID | None = None
     document_id: uuid.UUID | None = None
@@ -279,6 +313,9 @@ async def ask_chat_stream(
     image_mime: str | None = None
     image_size: int | None = None
     image_storage_path: str | None = None
+    attachments_meta: list[dict[str, Any]] | None = None
+    req_provider: str | None = None
+    req_model: str | None = None
 
     from pydantic import ValidationError
     from fastapi.exceptions import RequestValidationError
@@ -308,7 +345,15 @@ async def ask_chat_stream(
             sim_threshold_str = form.get("similarity_threshold")
             if sim_threshold_str is not None and isinstance(sim_threshold_str, str):
                 similarity_threshold = float(sim_threshold_str)
-                
+
+            provider_str = form.get("provider")
+            if provider_str and isinstance(provider_str, str):
+                req_provider = provider_str
+
+            model_str = form.get("model")
+            if model_str and isinstance(model_str, str):
+                req_model = model_str
+
             file_val = form.get("file")
             has_file = hasattr(file_val, "filename") and bool(getattr(file_val, "filename", None))
             
@@ -372,15 +417,21 @@ async def ask_chat_stream(
             document_version_id = payload.document_version_id
             top_k = payload.top_k
             similarity_threshold = payload.similarity_threshold
+            attachments_meta = [att.model_dump(mode="json") for att in payload.attachments] if payload.attachments else None
+            req_provider = payload.provider
+            req_model = payload.model
     except ValidationError as err:
         raise RequestValidationError(err.errors())
 
-    if session_id is None or session_id == OPENAPI_PLACEHOLDER_UUID:
+    if is_demo_placeholder(session_id):
         session_id = await get_or_create_swagger_demo_session(
             users=UserRepository(session_service.session),
             sessions=ChatSessionRepository(session_service.session),
             session_service=session_service,
         )
+
+    if session_id is None:
+        raise HTTPException(status_code=400, detail="Session ID is required.")
 
     chat_session = await session_service.get(session_id)
     if not chat_session:
@@ -414,9 +465,25 @@ async def ask_chat_stream(
             _stream_logger.error("[IMAGE] supabase_upload_failed (stream) error=%s", e)
             raise HTTPException(status_code=500, detail="Image upload failed. Please try again.")
 
+    if document_id is None and attachments_meta:
+        for att in attachments_meta:
+            doc_id_val = att.get("document_id")
+            if doc_id_val:
+                try:
+                    document_id = uuid.UUID(str(doc_id_val))
+                    logger.info("[CHAT API stream] Extracted document_id=%s from attachments_meta", document_id)
+                    break
+                except ValueError:
+                    pass
+
     filters = SearchFilters(
         document_id=document_id,
         document_version_id=document_version_id,
+    )
+
+    logger.info(
+        "stage=rag_request_received request_id=%s session_id=%s question=%r provider=%s model=%s stream=true",
+        request_id, session_id, question[:100], req_provider, req_model
     )
 
     generator = rag.ask_stream(
@@ -425,11 +492,15 @@ async def ask_chat_stream(
         filters=filters,
         top_k=top_k,
         similarity_threshold=similarity_threshold,
+        request_id=request_id,
         image=image_bytes,
         image_storage_path=image_storage_path,
         image_name=image_name,
         image_mime=image_mime,
         image_size=image_size,
+        attachments=attachments_meta,
+        provider=req_provider,
+        model=req_model,
     )
 
     return StreamingResponse(
@@ -502,6 +573,9 @@ def _to_chat_response(result: RAGResponse) -> ChatResponse:
                 page_number=source.page_number,
                 similarity_score=source.similarity_score,
                 rank=source.rank,
+                url=getattr(source, "url", None),
+                domain=getattr(source, "domain", None),
+                source_type=getattr(source, "source_type", "local"),
             )
             for source in result.sources
         ],
@@ -510,4 +584,6 @@ def _to_chat_response(result: RAGResponse) -> ChatResponse:
         processing_time_ms=result.processing_time_ms,
         user_message_id=result.user_message_id,
         assistant_message_id=result.assistant_message_id,
+        retrieval_mode=getattr(result, "retrieval_mode", "local") or "local",
     )
+

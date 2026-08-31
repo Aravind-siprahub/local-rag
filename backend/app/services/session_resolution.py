@@ -65,14 +65,16 @@ async def resolve_chat_session_id(
     if existing is not None and existing.deleted_at is None:
         return session_id
 
-    if session_id == OPENAPI_PLACEHOLDER_UUID:
+    from app.core.swagger_constants import is_demo_placeholder
+    if is_demo_placeholder(session_id):
         resolved = await get_or_create_swagger_demo_session(
             users=users,
             sessions=sessions,
             session_service=session_service,
         )
         logger.info(
-            "Resolved OpenAPI placeholder session_id to demo session %s",
+            "Resolved placeholder session_id %s to demo session %s",
+            session_id,
             resolved,
         )
         return resolved

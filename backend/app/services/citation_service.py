@@ -40,14 +40,18 @@ class CitationService(BaseService[Citation, uuid.UUID, CitationRepository]):
         if message is None:
             raise NotFoundError(f"ChatMessage with id={message_id!r} was not found.")
 
+        valid_citations = []
         for citation in citations:
             chunk = await self._chunks.get(citation["chunk_id"])
-            if chunk is None:
-                raise NotFoundError(f"DocumentChunk with id={citation['chunk_id']!r} was not found.")
+            if chunk is not None:
+                valid_citations.append(citation)
+
+        if not valid_citations:
+            return []
 
         try:
             created = [
-                await self.repository.create(message_id=message_id, **citation) for citation in citations
+                await self.repository.create(message_id=message_id, **citation) for citation in valid_citations
             ]
         except Exception:
             await self.session.rollback()

@@ -64,8 +64,15 @@ class PromptBuilder:
         working_memory_summary: str | None = None,
         *,
         is_vision: bool = False,
+        long_term_memory_context: str | None = None,
     ) -> Prompt:
-        """Build a prompt from a user question, chat history, and ranked retrieval results."""
+        """Build a prompt from a user question, chat history, and ranked retrieval results.
+
+        Args:
+            long_term_memory_context: Pre-formatted memory section from MemoryContextBuilder.
+                Injected into the user prompt as a clearly-labelled DATA block.
+                Never modifies the system prompt.
+        """
         if not question or not question.strip():
             raise PromptBuilderError("Question must not be empty.")
         if self.max_context_chars <= 0:
@@ -77,7 +84,12 @@ class PromptBuilder:
             question.strip(),
             chat_history=chat_history,
             working_memory_summary=working_memory_summary,
+            long_term_memory_context=long_term_memory_context,
         )
+
+        from datetime import datetime, timezone
+        now_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y (%Y-%m-%d)")
+        date_context = f"\n\nCurrent Temporal Context:\nToday's Date: {now_str}\nIf the user asks for today's date, current time, or day of the week, answer directly using this temporal context."
 
         system_prompt = self.system_prompt
         if is_vision and not self._custom_system_prompt:
@@ -86,9 +98,19 @@ class PromptBuilder:
                 system_prompt = settings.VISION_RAG_SYSTEM_PROMPT
             else:
                 system_prompt = settings.VISION_SYSTEM_PROMPT
+            return Prompt(
+                system_prompt=system_prompt.strip(),
+                user_prompt=user_prompt,
+                retrieved_chunks=included_chunks,
+            )
+
+        if self._custom_system_prompt:
+            full_system_prompt = system_prompt.strip()
+        else:
+            full_system_prompt = (system_prompt.strip() + date_context).strip()
 
         return Prompt(
-            system_prompt=system_prompt.strip(),
+            system_prompt=full_system_prompt,
             user_prompt=user_prompt,
             retrieved_chunks=included_chunks,
         )

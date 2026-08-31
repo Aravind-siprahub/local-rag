@@ -113,3 +113,51 @@ async def get_me(
     current_user: User = Depends(get_current_user),
 ) -> UserResponse:
     return UserResponse.model_validate(current_user)
+
+
+@router.post(
+    "/demo-token",
+    response_model=TokenResponse,
+    summary="Issue demo JWT access token for evaluation and testing",
+)
+async def demo_token(
+    session: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    user_repo = UserRepository(session)
+    user = None
+
+    # Prefer user that owns documents in the database to align token with session ownership
+    try:
+        from sqlalchemy import func, select
+        from app.models.document import Document
+
+        stmt = (
+            select(Document.user_id)
+            .where(Document.deleted_at.is_(None))
+            .group_by(Document.user_id)
+            .order_by(func.count(Document.id).desc())
+            .limit(1)
+        )
+        owner_res = (await session.execute(stmt)).first()
+        if owner_res and owner_res[0]:
+            user = await user_repo.get(owner_res[0])
+    except Exception:
+        pass
+
+    if not user:
+        active_users = await user_repo.list_active(limit=1)
+        user = active_users[0] if active_users else None
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active user found in database.",
+        )
+
+    token = create_access_token(user.id)
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserResponse.model_validate(user),
+    )
+

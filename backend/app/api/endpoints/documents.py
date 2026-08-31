@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.db.session import AsyncSessionLocal
 from app.models.document_chunk import DocumentChunk
 from app.models.embedding import Embedding
-from app.models.enums import DocumentStatus, ProcessingJobType
+from app.models.enums import DocumentStatus, DocumentVersionStatus, ProcessingJobType
 from app.models.user import User
 from app.schemas.actions import SetCurrentVersionRequest
 from app.schemas.document import DocumentCreate, DocumentListResponse, DocumentResponse, DocumentUpdate
@@ -310,6 +310,49 @@ async def set_current_version(
 
     updated_document = await service.set_current_version(document_id, payload.version_id)
     return DocumentResponse.model_validate(updated_document)
+
+
+@router.post(
+    "/{document_id}/reindex",
+    response_model=DocumentResponse,
+    summary="Re-index an existing document",
+    description="Deletes old chunks and embeddings, then re-runs parsing, chunking, embedding, and pgvector indexing.",
+)
+async def reindex_document(
+    document_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> DocumentResponse:
+    service = DocumentService(session)
+    document = await service.get(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail=f"Document {document_id} not found.")
+    verify_ownership(document.user_id, current_user, "document")
+
+    version_service = DocumentVersionService(session)
+    if not document.current_version_id:
+        raise HTTPException(status_code=400, detail="Document has no current version to re-index.")
+    
+    version = await version_service.get(document.current_version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="Current version not found.")
+
+    from sqlalchemy import delete
+    # Delete chunks (which cascades to embeddings via FK)
+    stmt_del = delete(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
+    await session.execute(stmt_del)
+
+    # Reset statuses to trigger full pipeline pass
+    await version_service.update(version.id, status=DocumentVersionStatus.UPLOADED, error_message=None)
+    await service.update(document_id, status=DocumentStatus.PROCESSING)
+    await session.commit()
+
+    # Trigger background ingestion
+    background_tasks.add_task(_run_ingestion_background, document_id)
+
+    updated_doc = await service.get(document_id)
+    return DocumentResponse.model_validate(updated_doc)
 
 
 @router.delete(

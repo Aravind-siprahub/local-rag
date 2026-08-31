@@ -9,6 +9,11 @@ import argparse
 import sys
 from pathlib import Path
 
+# Ensure backend root is in sys.path when running from inside backend/ directory
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 from app.eval.runner import DEFAULT_API_URL, DEFAULT_DATASET_PATH, run_evaluation_suite
 
 
@@ -19,6 +24,8 @@ def main() -> None:
     parser.add_argument("--output-dir", type=str, default=None, help="Output directory for reports")
     parser.add_argument("--save-baseline", type=str, default=None, help="Path to save evaluation baseline JSON")
     parser.add_argument("--compare", type=str, default=None, help="Path to baseline JSON file for BASELINE vs CURRENT comparison")
+    parser.add_argument("--provider", choices=["ollama", "openrouter", "nvidia"], default="ollama", help="LLM provider to evaluate")
+    parser.add_argument("--model", type=str, default=None, help="Target model identifier")
 
     args = parser.parse_args()
 
@@ -28,6 +35,8 @@ def main() -> None:
         output_dir=args.output_dir,
         save_baseline_path=args.save_baseline,
         compare_baseline_path=args.compare,
+        provider=args.provider,
+        model=args.model,
     )
 
 

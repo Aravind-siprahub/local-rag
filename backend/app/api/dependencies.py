@@ -138,6 +138,17 @@ def get_rag_service(session: AsyncSession = Depends(get_db)) -> RAGService:
     return RAGService(session, llm_client=get_global_ollama_client())
 
 
+def get_memory_manager(session: AsyncSession = Depends(get_db)):
+    from app.memory.manager import MemoryManager
+    return MemoryManager(session)
+
+
+def get_long_term_store(session: AsyncSession = Depends(get_db)):
+    from app.memory.long_term_store import LongTermMemoryStore
+    return LongTermMemoryStore(session)
+
+
+
 class PaginationParams:
     """Reusable `limit`/`offset` query params — `Depends(PaginationParams)`
     (or bare `Depends()` on a `PaginationParams`-typed parameter) instead of

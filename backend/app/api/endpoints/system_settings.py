@@ -32,10 +32,41 @@ async def list_system_settings(
     pagination: PaginationParams = Depends(),
     service: SystemSettingService = Depends(get_system_setting_service),
 ) -> SystemSettingListResponse:
-    settings = await service.list(limit=pagination.limit, offset=pagination.offset)
-    total = await service.count()
+    from app.core.config import get_settings
+    conf = get_settings()
+
+    settings_list = await service.list(limit=pagination.limit, offset=pagination.offset)
+    existing_keys = {s.key: s for s in settings_list}
+
+    default_map = {
+        "CHAT_MODEL": {"val": conf.OLLAMA_MODEL or conf.CHAT_MODEL},
+        "LLM_TEMPERATURE": {"val": conf.LLM_TEMPERATURE},
+        "MAX_CONTEXT_TOKENS": {"val": conf.OLLAMA_NUM_CTX},
+        "LLM_TIMEOUT": {"val": conf.LLM_TIMEOUT_SECONDS},
+        "TOP_K": {"val": conf.TOP_K},
+        "FINAL_CONTEXT": {"val": conf.FINAL_CONTEXT},
+        "SIMILARITY_THRESHOLD": {"val": conf.SIMILARITY_THRESHOLD},
+        "CHUNK_SIZE": {"val": conf.CHUNK_SIZE},
+        "CHUNK_OVERLAP": {"val": conf.CHUNK_OVERLAP},
+        "EMBEDDING_MODEL": {"val": conf.EMBEDDING_MODEL},
+        "VECTOR_DIMENSIONS": {"val": conf.EMBEDDING_DIMENSIONS},
+    }
+
+    updated = False
+    for key, def_val in default_map.items():
+        if key not in existing_keys:
+            setting = await service.set_setting(key=key, value=def_val, description=f"Active {key} setting")
+            settings_list.append(setting)
+            existing_keys[key] = setting
+            updated = True
+        elif key == "CHAT_MODEL" and existing_keys[key].value.get("val") == "qwen3:4b":
+            setting = await service.set_setting(key=key, value={"val": "qwen3:8b"}, description="Active CHAT_MODEL setting")
+            existing_keys[key].value = {"val": "qwen3:8b"}
+            updated = True
+
+    total = len(settings_list)
     return SystemSettingListResponse(
-        items=[SystemSettingResponse.model_validate(s) for s in settings],
+        items=[SystemSettingResponse.model_validate(s) for s in settings_list],
         total=total,
         limit=pagination.limit,
         offset=pagination.offset,

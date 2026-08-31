@@ -49,3 +49,13 @@ class ChatSessionService(BaseService[ChatSession, uuid.UUID, ChatSessionReposito
         cascading a hard delete through it.
         """
         await self.update(id_, deleted_at=datetime.now(timezone.utc))
+
+    async def update_summary(self, session_id: uuid.UUID, summary: str) -> ChatSession:
+        """Update session-level conversation summary and update timestamp."""
+        now = datetime.now(timezone.utc)
+        return await self.update(
+            session_id,
+            conversation_summary=summary,
+            working_memory_summary=summary,
+            summary_updated_at=now,
+        )

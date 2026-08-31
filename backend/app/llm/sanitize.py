@@ -46,17 +46,15 @@ _META_SUBJECT_VERBS = [
     r"(?:re-read|reread|re-reading) (?:the|this)",
     r"it doesn't directly mention",
     r"important:\s*must not",
+    r"the document excerpt(?:s)? (?:clearly )?(?:states|state|shows|show|mentions|mention)",
     r"we (?:are given|have to|need to|must|must answer|can synthesize|can say)",
     r"given the constraints",
     r"the question asks for",
     r"which (?:one|passage|chunk) to",
-    r"(?:in|from|according to|based on)\s+[\"']?[a-zA-Z0-9_\-\.]+\.?[a-zA-Z0-9]*[\"']?\s*(?:section|page|document)?",
     r"this (?:tells us|confirms|shows|indicates)",
     r"putting it together",
     r"therefore[,.]?\s*(?:the\s+)?answer",
     r"the (?:key points|main points|summary):?",
-    r"the [a-zA-Z0-9_\-\.]+\s+(?:guide|doc|document)\s+(?:doesn't|does not|gives|provides|mentions|has)",
-    r"the (?:document|documents|doc|docs|passage|passages|chunk|chunks|context|excerpt|excerpts)(?:\s+excerpts?)?\s+(?:also|only)?\s*(?:clearly )?(?:states|state|says|say|shows|show|mentions|mention|gives|give|details|detail|discusses|discuss|contains|contain)",
     r"[-*]?\s*(?:passage|chunk|document)\s*\d+[:\s]*(?:is about|is critical|discusses|has a key)",
     r"looking at the (?:provided\s+)?(?:document|documents|passage|passages|chunk|chunks)(?:\s+excerpts|\s+context)?",
     r"okay[,.]?\s+(?:passage|chunk|document)",
@@ -85,25 +83,26 @@ _META_SUBJECT_VERBS = [
     r"the question (?:asks|is|requires|states):?",
     r"the question is (?:specifically )?(?:about|asking for)",
     r"(?:but|however)[,.]?\s+the question is (?:specifically )?(?:about|asking for)",
-    r"(?:the\s+)?answer (?:should|must|might|will|is) be:?",
+    r"(?:therefore|so)[,.]?\s*(?:the\s+)?answer (?:should|must|might|will|is) be:?",
     r"(?:[^,\n()]+\)?\s*[,:]?\s*)?we (?:know|note|observe|see|find|gather|infer|learn|deduce|conclude)(?:[:\s]+that)?",
-    r"the (?:context|document|documents|passage|passages) (?:tells us|shows|states|mentions|indicates|explains|says|includes|contains|has|provides)(?:\s+that)?:?",
     r"the context (?:includes|contains|has|lists):?",
-    r"let's go through the context.*",
-    r"\d+[\.)]\s+a section about.*",
-    r"\d+[\.)]\s+another section about.*",
-    r"\d+[\.)]\s+a systemd service file.*",
-    r"\d+[\.)]\s+commands for.*",
-    r"\d+[\.)]\s+a curl command.*",
-    r"(?:however|but|note)[,.]?\s+the context (?:does not|doesn't) (?:explicitly )?(?:state|specify|mention|contain).*",
-    r"the backend service is named.*",
-    r"but the context (?:does not|doesn't) specify.*",
-    r"the question:\s*.*",
+    r"let's go through the context",
+    r"\d+[\.)]\s+a section about",
+    r"\d+[\.)]\s+another section about",
+    r"\d+[\.)]\s+a systemd service file",
+    r"\d+[\.)]\s+commands for",
+    r"\d+[\.)]\s+a curl command",
+    r"(?:however|but|note)[,.]?\s+the context (?:does not|doesn't) (?:explicitly )?(?:state|specify|mention|contain)",
+    r"the backend service is named",
+    r"but the context (?:does not|doesn't) specify",
+    r"the question:\s*",
     r"this (?:does not|doesn't) (?:specify|contain|mention)",
     r"this also (?:does not|doesn't) (?:specify|contain|mention)",
     r"\d+[\.)]\s*(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?) document section",
     r"(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?) document section",
     r"discrepancy between the (?:two|three|\d+|several)?\s*(?:documents|sources|chunks|passages)",
+    r"so there(?:'s| is) a discrepancy",
+    r"wait[,.]?\s+the\s+other\s+documents?",
 ]
 
 # Match the FULL reasoning sentence up to its terminating punctuation or newline.
@@ -116,7 +115,7 @@ _REASONING_PREFIX_RE = _FULL_REASONING_SENTENCE_RE
 
 _INLINE_SOURCE_PREFIX_RE = re.compile(
     r"(?i)^(?:"
-    r"(?:looking at|based on|according to|from)\s+(?:the\s+)?(?:provided\s+|retrieved\s+)?(?:context|chunks?|passages?|excerpts?|documents?(?:\s+excerpts?)?|sources?|search results?|web search results?)(?:\s+\d+)?(?:\s+(?:above|provided))?(?:[,.:]*)\s*(?:(?:i can see|we can see|we can infer|we can find|it says|it states|it shows|we see|it is clear)(?:\s+that)?\s*)?|"
+    r"(?:looking at|based on|according to|from|the|in)\s+(?:the\s+)?(?:provided\s+|retrieved\s+)?(?:[a-zA-Z0-9_\-\.\s]{1,35}\s+)?(?:context|chunks?|passages?|excerpts?|documents?(?:\s+excerpts?)?|polic(?:y|ies)|sources?|search results?|web search results?)(?:\s+\d+)?(?:\s+(?:above|provided))?(?:[,.:]*)\s*(?:(?:i can see|we can see|we can infer|we can find|it says|it states|it shows|we see|it is clear|clearly states|clearly shows|states|shows|mentions)(?:\s+that)?\s*)?|"
     r"(?:chunk|passage|document|doc)\s+\d+\s+(?:says|states|shows|mentions|specifies|indicates|contains)(?:\s+that)?\s*"
     r")"
 )
@@ -184,7 +183,15 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
     if text is None or not isinstance(text, str) or not text.strip():
         return ""
 
-    cleaned = text
+    cleaned = text.strip()
+    if cleaned.startswith("{") and "answer" in cleaned:
+        try:
+            import json
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict) and "answer" in parsed and isinstance(parsed["answer"], str):
+                cleaned = parsed["answer"].strip()
+        except Exception:
+            pass
 
     # Strip XML blocks safely
     for _ in range(3):
@@ -198,10 +205,7 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
 
     # Aggressively extract the final answer if the model leaked a concluding phrase anywhere
     concluding_regex = re.compile(
-        r"(?:i think|so|therefore|thus|hence|in conclusion|to summarize|to sum up|overall|in summary)?\s*(?:the\s+)?(?:final\s+)?answer(?:\s+to\s+[^\n:]+)?\s+(?:is|would be)[:\s]*|"
-        r"final answer:\s*|"
-        r"in summary:?\s*|"
-        r"in conclusion:?\s*",
+        r"(?:final\s+answer|in\s+summary|in\s+conclusion)[:\s]*",
         re.IGNORECASE
     )
     matches = list(concluding_regex.finditer(cleaned))
@@ -276,37 +280,6 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
     cleaned = "\n".join(final_lines)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
-    # Safety Guard: Handle meta monologues about missing information ONLY if no direct answer is present
-    if cleaned:
-        lowered_c = cleaned.lower()
-        has_factual_content = any(
-            kw in lowered_c
-            for kw in (
-                "frontend:", "backend:", "react", "fastapi", "next.js", "express",
-                "django", "flask", "pm2", "nginx", "vue", "angular", "svelte",
-                "python", "node", "frontend", "backend", "vite", "typescript",
-                "javascript", "postgres", "postgresql", "framework", "technology"
-            )
-        )
-        if not has_factual_content:
-            missing_phrases = (
-                "the requested information is not found",
-                "the requested information isn't found",
-                "aren't listed in any of the documents",
-                "aren't mentioned anywhere in the context",
-                "don't explicitly state what frontend and backend",
-                "doesn't explicitly state what frontend and backend",
-                "the documents don't explicitly state",
-                "the documents do not explicitly state",
-                "the context provided doesn't",
-                "the context provided does not",
-                "doesn't specify the actual technologies",
-                "don't specify the actual technologies",
-                "aren't specified in any of the documents",
-            )
-            if any(phrase in lowered_c for phrase in missing_phrases):
-                return "The requested information is not found in the documents."
-
     # Echo prevention: if the output is just the user's question, discard it
     if question and isinstance(question, str) and question.strip():
         q_norm = re.sub(r"[^\w\s]", "", question.lower()).strip()
@@ -354,24 +327,24 @@ def _get_potential_close_tag_prefix_len(text: str) -> int:
 
 
 REASONING_CUES = [
-    "let me ", "i'll ", "i will ", "first", "hmm", "looking at", "okay",
-    "wait", "checks ", "the user ", "how to ", "however", "i need to",
-    "the instruction", "reconcil", "re-read", "reread", "that phrasing",
-    "it doesn't", "passage ", "important", "- passage", "i'll write",
-    "based on", "from the", "to answer", "we are given", "let's extract",
-    "chunk ", "we have to", "which one to", "there are ", "this query", "we need to",
+    "let me ", "i'll ", "i will ", "hmm", "looking at the passage", "looking at the chunk",
+    "wait", "checks requirements", "the user asks", "the user is asking", "how to reconcile",
+    "i need to", "the instruction says", "reconcil", "re-read", "reread", "that phrasing",
+    "it doesn't directly mention", "passage 1", "passage 2", "i'll write",
+    "to answer this question", "we are given", "let's extract",
+    "chunk 1", "chunk 2", "we have to", "which one to", "this query asks", "we need to",
     # qwen3-specific leaked monologue patterns
-    "this is under", "so i think", "we output", "alternatively", "but note",
-    "so the answer", "the answer is correct", "the rule says", "the problem says",
-    "the first word", "but that's okay", "so the first", "word must", "words.",
-    "under 50", "so this", "final answer:", "note:", "answer:", "output:",
-    "the third passage", "the second passage", "also, the",
+    "this is under", "so i think", "we output:", "alternatively,", "but note:",
+    "so the answer is", "the answer is correct", "the rule says", "the problem says",
+    "the first word must", "but that's okay", "so the first word",
+    "under 50", "so this is", "final answer:",
+    "the third passage", "the second passage", "also, the third passage",
     # Multi-document reasoning leakage patterns
-    "but wait", "hmm,", "so there's a conflict", "there's a conflict",
-    "the first document", "the second document", "the third document",
-    "the fourth document", "the fifth document",
+    "but wait,", "hmm,", "so there's a conflict", "there's a conflict",
+    "the first document says", "the second document says", "the third document says",
+    "the fourth document says", "the fifth document says",
     "document one says", "document two says", "document a says", "document b says",
-    "comparing the documents", "cross-referencing",
+    "comparing the documents", "cross-referencing documents",
 ]
 
 # Regex to detect standalone reasoning-only lines (lines with NO actual document content)
@@ -393,7 +366,7 @@ _REASONING_LINE_RE = re.compile(
     r"the (first|second|third|fourth|last) (word|passage|document|sentence).*|"  # "The first word must..."
     r"but that'?s okay.*|"  # "But that's okay because..."
     r"so (the first|the answer|this).*|"  # "So the first word is 'N'."
-    r"(final answer|note|answer|output):\s*.*|"  # "Final answer: ..."
+    r"(final answer|internal note|raw output):\s*.*|"  # "Final answer: ..."
     r"also,? the (third|second|first|last) passage.*|"  # "Also, the third passage gives..."
     r"the (answer|rule|problem) (is|says|says that).*"  # "The answer starts with 'N'."
     r")\s*$"

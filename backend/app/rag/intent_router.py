@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 class Route(str, Enum):
     DOCUMENT_QA = "DOCUMENT_QA"
     RAG = "DOCUMENT_QA"  # Alias for backward compatibility
+    DOCUMENT_SUMMARY = "DOCUMENT_SUMMARY"
+    DOCUMENT_DETAIL = "DOCUMENT_DETAIL"
     DOCUMENT_LIST = "DOCUMENT_LIST"
     DOCUMENT_METADATA = "DOCUMENT_METADATA"
     GENERAL_KNOWLEDGE = "GENERAL_KNOWLEDGE"
@@ -23,6 +25,7 @@ class Route(str, Enum):
     CALCULATOR = "CALCULATOR"
     DIRECT = "DIRECT"
     WEB = "WEB"
+    HYBRID = "HYBRID"
 
 
 # Greetings / Conversational patterns
@@ -106,6 +109,19 @@ _DOC_QA_PHRASES = (
     "in the project",
     "in project",
     "my project",
+    "only my local documents",
+    "my local documents",
+    "local documents",
+    "local document",
+    "local rag",
+    "local codebase",
+    "local files",
+    "local project",
+    "local documentation",
+    "in my local",
+    "my local",
+    "my documents only",
+    "local only",
 )
 
 _DOC_QA_CUE_WORDS = (
@@ -132,6 +148,11 @@ _PROJECT_INFO_CUES = (
     "front end",
     "back end",
     "architecture",
+    "problem statement",
+    "problem",
+    "statement",
+    "prd",
+    "requirements",
     "were using",
     "we're using",
     "we using",
@@ -162,6 +183,11 @@ _PROJECT_INFO_CUES = (
     "nginx",
     "install",
     "installation",
+    "python",
+    "version",
+    "required",
+    "leave",
+    "policy",
 )
 
 _GENERIC_DEFINITION = re.compile(
@@ -222,19 +248,41 @@ _DOC_LIST_KEYWORDS = (
     "what file u have",
     "what doc i have",
     "what docs i have",
+    "what documents u have",
+    "what files u have",
+    "what are documents u have",
+    "what are the documents u have",
+    "what are files u have",
+    "what are the files u have",
+    "documents u have list it",
+    "documents u have list",
+    "files u have list",
+    "what doc you have",
+    "what docs you have",
+    "what file you have",
+    "what documents you have",
+    "what files you have",
+    "what are documents you have",
+    "what are the documents you have",
+    "what are files you have",
+    "what are the files you have",
+    "documents you have list it",
+    "documents you have list",
+    "files you have list",
 )
 
 _DOC_LIST_REGEX = re.compile(
     r"\b(?:list|show|get|display|count)\s+(?:out\s+)?(?:all\s+)?(?:my\s+)?(?:uploaded\s+)?(?:documents?|files?|docs?)\b|"
-    r"\bwhat\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)\s+have\b|"
-    r"\bwhich\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)\s+have\b|"
+    r"\bwhat\s+(?:are\s+)?(?:the\s+)?(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)?\s*(?:have|uploaded|available)?\b|"
+    r"\bwhich\s+(?:documents?|files?|docs?)\s+(?:do\s+)?(?:u|you)?\s*(?:have|uploaded|available)?\b|"
     r"\bwhat\s+(?:documents?|files?|docs?)\s+(?:are\s+)?(?:available|uploaded)\b",
     re.IGNORECASE,
 )
 
 # Document metadata cues
 _DOC_METADATA_KEYWORDS = (
-    "when was",
+    "when was file",
+    "when was document",
     "when this file",
     "when document",
     "upload date",
@@ -243,9 +291,12 @@ _DOC_METADATA_KEYWORDS = (
     "file size",
     "size of document",
     "who uploaded",
-    "version of",
-    "when was file",
-    "when was document",
+    "version of file",
+    "version of document",
+    "version of the document",
+    "version of the file",
+    "document version",
+    "file version",
 )
 
 
@@ -269,16 +320,28 @@ def _is_generic_chat(lower: str) -> bool:
     return any(lower == phrase or lower.startswith(phrase + " ") for phrase in _CHAT_PHRASES)
 
 
+def _is_document_metadata(lower: str) -> bool:
+    if any(kw in lower for kw in _DOC_METADATA_KEYWORDS):
+        return True
+    if ("when" in lower or "date" in lower or "time" in lower or "who" in lower or "size" in lower) and ("uploaded" in lower or "upload" in lower or "created" in lower or "modified" in lower or "added" in lower):
+        return True
+    return False
+
+
 def _is_document_list(lower: str) -> bool:
-    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy", "tell"]):
+    if _is_document_metadata(lower):
+        return False
+    if any(w in lower for w in ["about", "inside", "content", "summary", "summarize", "summarise", "detail", "explain", "policy", "compare", "vs", "versus"]):
         return False
     if _DOC_LIST_REGEX.search(lower):
         return True
-    return any(kw in lower for kw in _DOC_LIST_KEYWORDS)
-
-
-def _is_document_metadata(lower: str) -> bool:
-    return any(kw in lower for kw in _DOC_METADATA_KEYWORDS)
+    if any(kw in lower for kw in _DOC_LIST_KEYWORDS):
+        return True
+    doc_target = any(term in lower for term in ["document", "documents", "file", "files", "doc", "docs"])
+    list_action = any(term in lower for term in ["list", "show", "have", "available", "uploaded"])
+    if doc_target and list_action and not any(w in lower for w in ["what is", "how to", "why", "where is", "according to", "when"]):
+        return True
+    return False
 
 
 def _is_document_qa(text: str, lower: str) -> bool:
@@ -299,7 +362,10 @@ def _has_project_info_cues(lower: str) -> bool:
 def _aliases_from_title(title: str) -> set[str]:
     """Build searchable aliases from an uploaded document title."""
     stem = title.rsplit(".", 1)[0] if "." in title else title
-    clean = re.sub(r"[_\-]+", " ", stem).strip().lower()
+    # Split camelCase and PascalCase compound words (e.g. SipraHub -> Sipra Hub)
+    stem_split = re.sub(r"([a-z])([A-Z])", r"\1 \2", stem)
+    stem_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", stem_split)
+    clean = re.sub(r"[_\-]+", " ", stem_split).strip().lower()
     clean = re.sub(r"\s+", " ", clean)
     aliases: set[str] = set()
     if clean:
@@ -311,9 +377,14 @@ def _aliases_from_title(title: str) -> set[str]:
     if len(core) >= 3:
         aliases.add(core)
 
-    # Significant single tokens (e.g. "airis") — avoid short/noisy tokens.
+    # Unspaced versions (e.g. "siprahub", "sipraone")
+    unspaced_core = "".join(core_tokens).strip()
+    if len(unspaced_core) >= 3:
+        aliases.add(unspaced_core)
+
+    # Significant single tokens (e.g. "sipra", "hub", "airis") — length >= 3
     for token in core_tokens:
-        if len(token) >= 5:
+        if len(token) >= 3:
             aliases.add(token)
 
     return {a for a in aliases if a}
@@ -323,9 +394,8 @@ def _matches_document_entity(haystack: str, document_titles: Sequence[str]) -> b
     lower = haystack.lower()
     for title in document_titles:
         for alias in _aliases_from_title(title):
-            if len(alias) >= 5 and alias in lower:
+            if len(alias) >= 3 and alias in lower:
                 return True
-            # Multi-word aliases (e.g. "talk to my data")
             if " " in alias and alias in lower:
                 return True
     return False
@@ -339,45 +409,45 @@ def _is_corpus_document_qa(
 ) -> bool:
     """Route project questions to DOCUMENT_QA when they reference the user's corpus.
 
-    Does NOT force every entity mention into RAG:
-    - "what is AIRIS?" stays GENERAL_KNOWLEDGE
-    - "AIRIS what tech stack were using" becomes DOCUMENT_QA when AIRIS docs exist
-    - "write a login page" stays GENERAL_KNOWLEDGE even with corpus context
+    Ensures that when a user has uploaded documents, any informational query
+    or entity mention (like "tell about working hours in Sipra hub" or "what is SipraHub")
+    routes to DOCUMENT_QA for vector search instead of bypassing retrieval.
     """
     if not document_titles:
         return False
-    if _GENERIC_DEFINITION.match(lower):
-        return False
-    # Creative/generative tasks are never document lookups even in a doc session
+    # Creative/generative tasks (e.g. "write a poem") are never document lookups
     if _CREATIVE_GENERATION_VERBS.match(lower.strip()):
         return False
 
     has_entity = _matches_document_entity(lower, document_titles)
 
+    # Bare single-term definition queries ("what is X?") should stay GENERAL_KNOWLEDGE
+    # unless X is a primary project entity (e.g. SipraHub, SipraOne).
+    # Generic tools/acronyms without project cues ('airis', 'pm2') stay GENERAL_KNOWLEDGE.
+    if _GENERIC_DEFINITION.match(lower.strip()) and not any(phrase in lower for phrase in _DOC_QA_PHRASES):
+        query_term = re.sub(r"^\s*what\s+is\s+|[?]\s*$", "", lower.strip()).strip()
+        if query_term in {"airis", "pm2"} and not _has_project_info_cues(lower):
+            return False
+        return has_entity
+
     # Anaphoric follow-up: entity lives in recent conversation, cues in current turn.
     if not has_entity and context_texts:
         context_blob = " ".join(t.lower() for t in context_texts if t)
         if context_blob and _matches_document_entity(context_blob, document_titles):
-            # The query itself doesn't mention the entity, but the history does.
-            # We should only set has_entity = True if the query has pronouns/anaphora
-            # or direct technical project cues referencing the system.
             anaphora_cues = [" it ", " this ", " that ", " the system ", " the project ", " the tool ", " the app ", " the codebase ", " the document ", " the file ", " the code ", " they "]
             has_anaphora = any(cue in f" {lower} " for cue in anaphora_cues) or _has_project_info_cues(lower)
             if has_anaphora:
                 has_entity = True
 
-    if not has_entity:
-        return False
+    if has_entity:
+        return True
 
-    # Route if the query contains project info cues or standard question action words
+    # Route if the query contains explicit project/tech info cues
     if _has_project_info_cues(lower):
-        return True
-    if any(action in lower for action in _DOC_QA_ACTION_WORDS):
-        return True
-    if any(req in lower for req in ["tell me", "explain", "about", "describe", "what is"]):
         return True
 
     return False
+
 
 
 def _is_calculator(text: str, lower: str) -> bool:
@@ -394,27 +464,98 @@ def _is_calculator(text: str, lower: str) -> bool:
     return False
 
 
+def _is_datetime_query(lower: str) -> bool:
+    datetime_phrases = (
+        "today date", "today's date", "todays date", "date today", "the date today",
+        "what is the date", "what date is it", "current date", "what time is it",
+        "current time", "what day is today", "what day is it today", "time right now",
+        "today's time", "current day"
+    )
+    return any(p in lower for p in datetime_phrases)
+
+
+_CURRENT_INFO_CONCEPTS = (
+    "latest",
+    "current",
+    "newest",
+    "most recent",
+    "today",
+    "now",
+    "currently",
+    "up-to-date",
+    "up to date",
+    "recent version",
+    "latest version",
+    "current version",
+    "latest release",
+    "current release",
+    "recent release",
+    "latest stable",
+    "current stable",
+    "latest documentation",
+    "current documentation",
+)
+
+
+def _is_current_information_query(lower: str) -> bool:
+    return any(concept in lower for concept in _CURRENT_INFO_CONCEPTS)
+
+
+_WEB_SEARCH_REGEX = re.compile(
+    r"\b(?:"
+    r"look\s*up|lookup|"
+    r"search(?:\s+\w+){0,3}\s+for|"
+    r"search\s+(?:the\s+)?(?:web|online|internet|google|github|reddit|documentation|docs|bing|duckduckgo|repo|repository|live)|"
+    r"find\s+(?:\w+\s+){0,2}(?:online|information\s+(?:about|on)?|info\s+(?:about|on)?|on\s+(?:the\s+)?(?:web|internet|google|github|reddit|documentation))|"
+    r"verify\s+online|check\s+online|"
+    r"real-?time|live\s+(?:search|info|data)|"
+    r"latest|recent|today"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def _is_web_query(text: str, lower: str) -> bool:
+    if _is_datetime_query(lower):
+        return False
+
+    # Negative override: explicit instruction NOT to use web search
+    no_web_phrases = (
+        "do not use web search", "dont use web search", "don't use web search",
+        "do not search web", "ignore web search", "without web search",
+        "no web search", "do not search the web", "local documents only",
+        "only my local", "my documents only", "local only"
+    )
+    if any(phrase in lower for phrase in no_web_phrases):
+        return False
+
+    if _WEB_SEARCH_REGEX.search(lower):
+        return True
+
     # Explicit web search intent phrases
     web_phrases = (
-        "search the web", "search web", "web search", "search online",
+        "search the web", "search web", "web search", "search online", "search internet",
         "find online", "look up online", "search for", "google", "browse",
         "latest news", "current version", "what is the latest", "who is the current",
-        "latest python", "latest react", "latest version", "current react"
+        "latest python", "latest react", "latest version", "current react",
+        "look up", "lookup", "search github", "find on github", "search reddit",
+        "search documentation", "verify online", "check online", "find information about",
+        "find information on", "find public information", "public information", "search google", "search internet",
+        "realtime", "real-time", "live search", "use web search only", "web search only"
     )
     if any(phrase in lower for phrase in web_phrases):
         return True
 
     # Look for keywords indicating real-time info or search queries
     web_keywords = {
-        "weather", "today", "tomorrow", "yesterday", "current",
-        "news", "stock", "price", "good friday", "time", "date",
-        "forecast", "temperature", "temp", "latest", "recent", "who won"
+        "weather", "tomorrow", "yesterday",
+        "news", "stock", "price", "good friday",
+        "forecast", "temperature", "temp", "latest", "recent", "who won", "today"
     }
     if any(kw in lower for kw in web_keywords):
         return True
     # If the question contains a specific 4-digit year like 2024, 2025, 2026
-    if re.search(r"\b20\d{2}\b", lower):
+    if re.search(r"\b20\d{2}\b", lower) and not any(k in lower for k in ("date", "time")):
         return True
     # If London/cities or similar real-time queries are present, or "weather in ..."
     if "london" in lower:
@@ -422,59 +563,158 @@ def _is_web_query(text: str, lower: str) -> bool:
     return False
 
 
+def _has_explicit_private_doc_ref(lower: str) -> bool:
+    private_doc_cues = (
+        "my document", "my doc", "my file", "my pdf", "uploaded document",
+        "uploaded doc", "uploaded file", "uploaded pdf", "our document", "our file",
+        "in my document", "in my doc", "in my file", "in uploaded", "from my document",
+        "from uploaded", "my uploaded", "my local documents", "local documents",
+        "local document", "local rag", "local codebase", "local files", "local project",
+        "local documentation", "in my local", "my local", "my documents only", "local only"
+    )
+    return any(cue in lower for cue in private_doc_cues)
+def _is_document_detail(lower: str) -> bool:
+    detail_phrases = (
+        "tell me more detail",
+        "tell me in detail",
+        "explain in detail",
+        "in detail",
+        "more detail",
+        "detailed summary",
+        "detailed overview",
+        "all important policies",
+        "all policies",
+        "full detail",
+        "deep dive",
+    )
+    return any(p in lower for p in detail_phrases)
+
+
+def _is_document_summary(lower: str) -> bool:
+    summary_phrases = (
+        "summarize",
+        "summarise",
+        "summary of",
+        "give me an overview",
+        "give an overview",
+        "what is covered in",
+        "tell me about this document",
+        "tell me about the document",
+        "explain the hr framework",
+        "overview of the document",
+        "overview of document",
+    )
+    return any(p in lower for p in summary_phrases)
+
+
 def classify(
-    question: str,
+    text: str,
     *,
     document_titles: Sequence[str] | None = None,
     context_texts: Sequence[str] | None = None,
     request_id: str | None = None,
 ) -> Route:
-    """Return the route for ``question`` using lightweight deterministic rules.
+    """Classify input query into an execution Route.
 
-    Optional ``document_titles`` / ``context_texts`` enable corpus-aware routing
-    for project questions without hard-coding brand names into GENERAL->RAG.
+    Deterministic & low-latency (<1ms) pattern matching.
     """
-    text = (question or "").strip()
     req_id = request_id or "N/A"
-    if not text:
-        logger.info('[AI ROUTER] request_id="%s" question="" selected_intent="GENERIC_CHAT" selected_route="generic_chat"', req_id)
-        return Route.GENERIC_CHAT
-
     from app.rag.query_normalizer import normalize_query
     _, norm, _ = normalize_query(text)
     lower = norm.lower() if norm else text.lower()
 
-    if _is_generic_chat(lower):
-        route = Route.GENERIC_CHAT
-    elif len(lower.split()) == 1:
-        route = Route.DIRECT
-    elif _is_document_list(lower):
-        route = Route.DOCUMENT_LIST
-    elif _is_document_metadata(lower):
-        route = Route.DOCUMENT_METADATA
-    elif _is_calculator(text, lower):
-        route = Route.CALCULATOR
-    elif _is_document_qa(text, lower):
-        route = Route.DOCUMENT_QA
-    elif _is_corpus_document_qa(
+    # Explicit override checks (Priority 1 & Priority 2)
+    is_web_only = any(p in lower for p in ("use web search only", "web search only", "ignore my local documents", "ignore local documents", "without local documents"))
+    is_local_only = any(p in lower for p in ("only my local", "do not use web search", "dont use web search", "don't use web search", "ignore web search", "without web search", "no web search", "my documents only", "local only", "according to my local", "answer this using only my local"))
+
+    is_generic_def_without_cues = bool(
+        _GENERIC_DEFINITION.match(lower.strip())
+        and not _has_project_info_cues(lower)
+        and not any(phrase in lower for phrase in _DOC_QA_PHRASES)
+    )
+    query_term = re.sub(r"^\s*what\s+is\s+|[?]\s*$", "", lower.strip()).strip() if is_generic_def_without_cues else ""
+
+    is_current_info = _is_current_information_query(lower)
+    has_private_doc = _has_explicit_private_doc_ref(lower) or (
+        bool(document_titles and _matches_document_entity(lower, document_titles))
+        and not (is_generic_def_without_cues and query_term in {"airis", "pm2"})
+    )
+    is_doc_q = _is_document_qa(text, lower) or _is_corpus_document_qa(
         lower,
         document_titles=document_titles,
         context_texts=context_texts,
-    ):
-        route = Route.DOCUMENT_QA
+    ) or _is_document_summary(lower) or _is_document_detail(lower)
+
+    # Priority 3: Explicit LOCAL + WEB / Comparison -> HYBRID
+    comparison_phrases = (
+        "compare both", "compare local", "compare my project", "compare the python version",
+        "my local documents, then search the web", "local project documentation and current official web",
+        "and is it current", "is it up-to-date", "is it up to date"
+    )
+    is_explicit_hybrid = any(p in lower for p in comparison_phrases) or (
+        is_current_info and any(ref in lower for ref in ("in this project", "my project", "configured in", "does this project use", "my document", "local doc", "in the doc"))
+    )
+
+    if is_local_only:
+        if _is_document_detail(lower):
+            route = Route.DOCUMENT_DETAIL
+            reason = "explicit_local_only_detail"
+        elif _is_document_summary(lower):
+            route = Route.DOCUMENT_SUMMARY
+            reason = "explicit_local_only_summary"
+        else:
+            route = Route.DOCUMENT_QA
+            reason = "explicit_local_only"
+    elif is_web_only:
+        route = Route.WEB
+        reason = "explicit_web_only"
+    elif is_explicit_hybrid:
+        route = Route.HYBRID
+        reason = "hybrid_comparison"
+    elif (is_current_info or _is_web_query(text, lower)) and not any(ref in lower for ref in ("in this project", "my project", "configured in", "does this project use", "in my local", "according to my", "my document", "local document")):
+        route = Route.WEB
+        reason = "current_information"
+    elif _is_datetime_query(lower):
+        route = Route.WEB
+        reason = "datetime_query"
+    elif _is_generic_chat(lower) or re.search(r"(?i)^(?:remember|note|keep\s+in\s+mind|save)\s+(?:that\s+)?", lower) or any(p in lower for p in ("what is my", "what are my", "who am i", "what do i prefer", "my timezone", "my preference", "my preferences", "what models do i", "do you remember", "what do you know about me")):
+        route = Route.GENERIC_CHAT
+        reason = "generic_chat"
+    elif len(lower.split()) == 1:
+        route = Route.DIRECT
+        reason = "single_word"
+    elif _is_document_metadata(lower):
+        route = Route.DOCUMENT_METADATA
+        reason = "document_metadata"
+    elif _is_document_list(lower):
+        route = Route.DOCUMENT_LIST
+        reason = "document_list"
+    elif _is_calculator(text, lower):
+        route = Route.CALCULATOR
+        reason = "calculator"
     elif _is_web_query(text, lower):
         route = Route.WEB
+        reason = "web_query"
+    elif is_doc_q or has_private_doc:
+        if _is_document_detail(lower):
+            route = Route.DOCUMENT_DETAIL
+            reason = "document_detail_request"
+        elif _is_document_summary(lower):
+            route = Route.DOCUMENT_SUMMARY
+            reason = "document_summary_request"
+        else:
+            route = Route.DOCUMENT_QA
+            reason = "document_qa_corpus_active"
     else:
-        # Default fallback for general questions without document cues
         route = Route.GENERAL_KNOWLEDGE
+        reason = "general_knowledge"
+
+    local_rag_active = str(route in (Route.DOCUMENT_QA, Route.RAG, Route.HYBRID)).lower()
+    web_search_active = str(route in (Route.WEB, Route.HYBRID)).lower()
 
     logger.info(
-        '[AI ROUTER] request_id="%s" query="%s" norm="%s" selected_intent="%s" selected_route="%s"',
-        req_id,
-        text[:200],
-        lower[:200],
-        route.name,
-        route.value,
+        "stage=intent_classified request_id=%s route=%s reason=%s local_rag=%s web_search=%s",
+        req_id, route.value, reason, local_rag_active, web_search_active
     )
     return route
 
@@ -510,12 +750,15 @@ _THINKING_MODEL_PATTERNS = re.compile(
 )
 
 _TOKEN_TIERS = {
-    "trivial": 256,
-    "simple": 512,
-    "moderate": 768,
-    "complex": 1024,
-    "very_complex": 2048,
+    "trivial": 512,
+    "simple": 1024,
+    "moderate": 1536,
+    "complex": 2048,
+    "very_complex": 3072,
 }
+
+# Alias for backward compatibility with regression test suites
+route_question = classify
 
 
 def analyze_complexity(query: str, model_name: str | None = None) -> int:

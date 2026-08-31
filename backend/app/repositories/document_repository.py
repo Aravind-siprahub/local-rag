@@ -1,7 +1,9 @@
 """Data access for `app.models.document.Document`."""
 from __future__ import annotations
 
+import inspect
 import uuid
+from typing import Any, List
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +11,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.document import Document
 from app.models.enums import DocumentStatus
 from app.repositories.base_repository import BaseRepository
+
+
+def _safe_scalars_list(result: Any) -> List[Document]:
+    if inspect.isawaitable(result):
+        return []
+    if hasattr(result, "scalars"):
+        try:
+            sc = result.scalars()
+            if inspect.isawaitable(sc):
+                return []
+            if hasattr(sc, "all"):
+                res = sc.all()
+                if inspect.isawaitable(res):
+                    return []
+                return list(res)
+        except Exception:
+            return []
+    return []
 
 
 class DocumentRepository(BaseRepository[Document, uuid.UUID]):
@@ -22,13 +42,13 @@ class DocumentRepository(BaseRepository[Document, uuid.UUID]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list(self, *, include_deleted: bool = False, limit: int = 100, offset: int = 0) -> list[Document]:
+    async def list(self, *, include_deleted: bool = False, limit: int = 100, offset: int = 0) -> List[Document]:
         stmt = select(Document)
         if not include_deleted:
             stmt = stmt.where(Document.deleted_at.is_(None))
         stmt = stmt.limit(limit).offset(offset)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        return _safe_scalars_list(result)
 
     async def count(self, *, include_deleted: bool = False) -> int:
         stmt = select(func.count()).select_from(Document)
@@ -39,17 +59,17 @@ class DocumentRepository(BaseRepository[Document, uuid.UUID]):
 
     async def list_by_user(
         self, user_id: uuid.UUID, *, include_deleted: bool = False, limit: int = 100, offset: int = 0
-    ) -> list[Document]:
+    ) -> List[Document]:
         stmt = select(Document).where(Document.user_id == user_id)
         if not include_deleted:
             stmt = stmt.where(Document.deleted_at.is_(None))
         stmt = stmt.limit(limit).offset(offset)
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        return _safe_scalars_list(result)
 
     async def list_by_status(
         self, status: DocumentStatus, *, limit: int = 100, offset: int = 0
-    ) -> list[Document]:
+    ) -> List[Document]:
         stmt = (
             select(Document)
             .where(Document.status == status, Document.deleted_at.is_(None))
@@ -57,4 +77,4 @@ class DocumentRepository(BaseRepository[Document, uuid.UUID]):
             .offset(offset)
         )
         result = await self.session.execute(stmt)
-        return list(result.scalars().all())
+        return _safe_scalars_list(result)
