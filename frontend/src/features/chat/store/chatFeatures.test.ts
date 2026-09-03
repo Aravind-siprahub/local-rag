@@ -96,15 +96,17 @@ describe('Chat Features & Model Selection Rules', () => {
     assert.equal(correspondingUserMsg?.content, 'What is local RAG?')
   })
 
-  it('6. Model Selector: exposes qwen3:8b and qwen3-vl:4b', () => {
+  it('6. Model Selector: exposes qwen3:8b, local-rag, and local-rag-vision', () => {
     const modelIds = AVAILABLE_MODELS.map((m: any) => m.id)
     assert.ok(modelIds.includes('qwen3:8b'))
     assert.ok(modelIds.includes('qwen3-vl:4b'))
+    assert.ok(modelIds.includes('local-rag'))
+    assert.ok(modelIds.includes('local-rag-vision'))
   })
 
   it('7. Available Models display text vs vision badges', () => {
     const textModel = AVAILABLE_MODELS.find((m: any) => m.id === 'qwen3:8b')
-    const visionModel = AVAILABLE_MODELS.find((m: any) => m.id === 'qwen3-vl:4b')
+    const visionModel = AVAILABLE_MODELS.find((m: any) => m.id === 'local-rag-vision')
 
     assert.equal(textModel?.type, 'text')
     assert.equal(visionModel?.type, 'vision')

@@ -25,6 +25,8 @@ _SHORTHAND_MAP: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bfronted\b", re.IGNORECASE), "frontend"),
     (re.compile(r"\bcrt\b", re.IGNORECASE), "correct"),
     (re.compile(r"\bshparp\b", re.IGNORECASE), "sharp"),
+    (re.compile(r"\b(polcies|policie|policys|polices|plocies)\b", re.IGNORECASE), "policies"),
+    (re.compile(r"\bwfh\b", re.IGNORECASE), "work from home WFH remote work"),
 )
 
 # File extensions & filenames pattern protection
@@ -135,10 +137,15 @@ def normalize_query(query: str) -> NormalizedQueryResult:
     elif re.search(r"\bearth\s+(?:which|number)\s+planet\b|\bwhich\s+planet\s+is\s+earth\b", norm_lower):
         norm = "Which planet is Earth from the Sun?"
         retrieval_q = norm
-    elif "leave policy" in norm_lower and "what" in norm_lower:
-        retrieval_q = "What is the company leave policy?"
-    elif "leave" in norm_lower and ("how many" in norm_lower or "count" in norm_lower):
-        retrieval_q = "How many leave days are provided in the leave policy?"
+    elif re.search(r"\b(?:core\s+values?|company\s+values?|culture|principles|code\s+of\s+conduct|standards\s+of\s+behavior|workplace\s+ethics|ethics)\b", norm_lower):
+        # Extract entity if present
+        ent = "SipraHub" if "sipra" in norm_lower else "company"
+        norm = f"What are {ent}'s core values, culture, principles, and code of conduct?"
+        retrieval_q = f"What are {ent}'s core values, culture, principles, code of conduct, integrity, accountability, professionalism, and ethical standards?"
+    elif any(kw in norm_lower for kw in ("leave policy", "leave policies", "leave rules", "leave rule", "leave polices", "casual leave", "casual leaves", "sick leave", "earned leave", "leave entitlement", "how many days are allowed", "days allowed", "how many leave", "how many leaves", "carry forward of leave", "carry forward", "unused leave", "leave days", "leaves")) and not any(comp in norm_lower for comp in ("compare", "versus", " vs ", "standards", "online", "statutory", "detail", "breakdown")):
+        ent = "SipraHub" if "sipra" in norm_lower else "the company"
+        norm = f"What is {ent}'s leave policy, casual leave entitlement, and carry forward rules?"
+        retrieval_q = f"What is {ent}'s leave policy, casual leave entitlement, carry forward of leave, unused leave carry forward, and leave days allowed?"
     else:
         # Generic conversational lead-in cleaning for RAG retrieval query
         clean_search = re.sub(

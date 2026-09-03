@@ -22,6 +22,7 @@ class ChatAttachment(BaseModel):
     mime_type: str
     size: int | None = None
     url: str | None = None
+    storage_path: str | None = None
     document_id: OptionalUUID = None
 
 

@@ -46,5 +46,12 @@ class ChatMessageResponse(ChatMessageBase, CreatedAtSchema, ORMModel):
     error_message: str | None = None
     citations: list[CitationResponse] = Field(default_factory=list)
 
+    @field_validator("citations", mode="before")
+    @classmethod
+    def convert_citations(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [CitationResponse.model_validate(item) for item in value]
+        return value
+
 
 ChatMessageListResponse = PaginatedResponse[ChatMessageResponse]

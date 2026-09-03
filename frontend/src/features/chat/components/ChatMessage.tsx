@@ -21,7 +21,7 @@ interface ChatMessageProps {
 
 export function ChatMessage({
   message,
-  citations: _citations,
+  citations,
   onEdit,
   onRegenerate,
   isSending,
@@ -185,7 +185,13 @@ export function ChatMessage({
             {/* Render Citations / Sources for assistant messages */}
             {!isUser && (
               <CitationsSection
-                citations={message.citations && message.citations.length > 0 ? message.citations : citations}
+                citations={
+                  (message.citations && message.citations.length > 0)
+                    ? message.citations
+                    : ((message as unknown as { sources?: typeof citations }).sources && (message as unknown as { sources?: typeof citations }).sources!.length > 0)
+                      ? (message as unknown as { sources?: typeof citations }).sources!
+                      : citations
+                }
               />
             )}
           </div>

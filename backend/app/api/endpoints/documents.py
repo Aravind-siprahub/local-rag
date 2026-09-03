@@ -49,6 +49,11 @@ async def create_document(
     current_user: User = Depends(get_current_user),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
+    if payload.user_id and str(payload.user_id) != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot create document on behalf of another user.",
+        )
     document = await service.create_document(
         user_id=current_user.id, title=payload.title, description=payload.description, tags=payload.tags
     )

@@ -136,8 +136,12 @@ export const chatService = {
     const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
     headers['X-Request-ID'] = requestId
 
+    const firstImageFile =
+      payload.file ||
+      payload.attachments?.find((a: any) => a.file instanceof File)?.file
+
     let body: FormData | string
-    if (payload.file) {
+    if (firstImageFile) {
       const formData = new FormData()
       formData.append('question', payload.question)
       if (payload.session_id) formData.append('session_id', payload.session_id)
@@ -147,18 +151,20 @@ export const chatService = {
       if (payload.similarity_threshold) formData.append('similarity_threshold', String(payload.similarity_threshold))
       if (payload.provider) formData.append('provider', payload.provider)
       if (payload.model) formData.append('model', payload.model)
-      formData.append('file', payload.file)
+      formData.append('file', firstImageFile)
       body = formData
     } else {
       headers['Content-Type'] = 'application/json'
       const jsonPayload = {
         ...payload,
-        attachments: payload.attachments?.map((a) => ({
+        attachments: payload.attachments?.map((a: any) => ({
           id: a.id,
           filename: a.filename,
           mime_type: a.mime_type,
           size: a.size,
           document_id: a.document_id,
+          storage_path: a.storage_path || a.file_path,
+          url: a.url || a.previewUrl,
         })),
       }
       body = JSON.stringify(jsonPayload)

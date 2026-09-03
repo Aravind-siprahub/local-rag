@@ -13,7 +13,7 @@ from app.schemas.common import CreatedAtSchema, ORMModel, PaginatedResponse
 
 
 class CitationBase(BaseModel):
-    similarity_score: Annotated[float, Field(ge=-1.0, le=1.0)] | None = None
+    similarity_score: float | None = None
     rank: Annotated[int, Field(gt=0)]
 
 

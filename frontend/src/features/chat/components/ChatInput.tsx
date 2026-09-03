@@ -136,7 +136,7 @@ export function ChatInput({
                       ...a,
                       status: 'ready',
                       progress: 100,
-                      document_id: res.document_id || res.id,
+                      document_id: res.document_id || (res as unknown as { id?: string }).id,
                     }
                   : a
               )
@@ -306,7 +306,7 @@ export function ChatInput({
         </div>
       )}
 
-      {editingMessage && preservedImageUrl && !selectedFile && (
+      {editingMessage && preservedImageUrl && attachments.length === 0 && (
         <div className="text-[11px] text-amber-500 px-3 py-1 bg-amber-500/10 rounded-lg border border-amber-500/20 max-w-fit self-start animate-in fade-in-0">
           <strong>Note:</strong> To include the original image in your resubmission, you must re-attach it.
         </div>

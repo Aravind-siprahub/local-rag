@@ -393,9 +393,10 @@ async def search_similar(
         logger.info("[VECTOR QUERY FALLBACK RESULT] hits_found=%d", len(hits))
 
     for idx, hit in enumerate(hits, 1):
+        clean_preview = hit.chunk_text[:80].encode("ascii", "replace").decode("ascii")
         logger.info(
             "  Hit #%d: chunk_id=%s doc_id=%s distance=%.4f sim=%.4f preview=%r",
-            idx, hit.chunk_id, hit.document_id, hit.distance, 1.0 - hit.distance, hit.chunk_text[:80]
+            idx, hit.chunk_id, hit.document_id, hit.distance, 1.0 - hit.distance, clean_preview
         )
 
     return hits
@@ -412,29 +413,6 @@ async def search_document_chunks_structured(
         return []
 
     filters = filters or SearchFilters()
-
-    # Safety resolution: if document_id is not specified, resolve the latest ready document for the user
-    if filters.document_id is None and not filters.document_ids and filters.user_id is not None:
-        target_doc_stmt = (
-            select(Document.id)
-            .where(Document.user_id == filters.user_id)
-            .where(Document.deleted_at.is_(None))
-            .where(Document.status == DocumentStatus.READY)
-            .order_by(Document.created_at.desc())
-            .limit(1)
-        )
-        try:
-            resolved_id = (await session.execute(target_doc_stmt)).scalar_one_or_none()
-            if resolved_id:
-                filters = SearchFilters(
-                    user_id=filters.user_id,
-                    document_id=resolved_id,
-                    document_version_id=filters.document_version_id,
-                    search_mode=filters.search_mode,
-                )
-                logger.info("[STRUCTURED SEARCH TARGET RESOLVED] Scoped search to document_id=%s", resolved_id)
-        except Exception as res_err:
-            logger.warning("[STRUCTURED SEARCH TARGET RESOLUTION ERROR] %s", res_err)
 
     stmt = (
         select(

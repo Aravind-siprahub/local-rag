@@ -131,8 +131,8 @@ async def delete_chat_session(
     current_user: User = Depends(get_current_user),
     service: ChatSessionService = Depends(get_chat_session_service),
 ) -> None:
-    chat_session = await service.get(session_id)
-    if not chat_session:
+    chat_session = await service.get_optional(session_id)
+    if not chat_session or chat_session.deleted_at is not None:
         return
     verify_ownership(chat_session.user_id, current_user, "chat session")
 

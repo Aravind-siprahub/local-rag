@@ -177,6 +177,12 @@ def rerank_cross_encoder(
         final_top_k,
     )
 
+    from app.rag.query_understanding import extract_query_intent, AttributeCategory
+    from app.rag.query_normalizer import normalize_query
+    _, norm_q, ret_q = normalize_query(query.strip())
+    intent = extract_query_intent(query)
+    effective_query = intent.normalized_query if intent.normalized_query and intent.category != AttributeCategory.GENERAL else (norm_q or query)
+
     scored_candidates: list[tuple[float, RankedResult]] = []
 
     if reranker is not None:
@@ -193,7 +199,7 @@ def rerank_cross_encoder(
                     }
                     for idx, cand in enumerate(candidates)
                 ]
-                rerank_request = RerankRequest(query=query, passages=passages)
+                rerank_request = RerankRequest(query=effective_query, passages=passages)
                 results = reranker.rerank(rerank_request)
 
                 for item in results:
@@ -206,7 +212,7 @@ def rerank_cross_encoder(
 
             # Case 2: sentence-transformers CrossEncoder implementation
             else:
-                pairs = [[query, cand.chunk_text] for cand in candidates]
+                pairs = [[effective_query, cand.chunk_text] for cand in candidates]
                 scores = reranker.predict(pairs)
                 for cand, score in zip(candidates, scores):
                     scored_candidates.append((float(score), cand))
@@ -223,6 +229,53 @@ def rerank_cross_encoder(
     else:
         logger.info("[RERANKER FALLBACK] Neural model unavailable. Using heuristic fallback scorer.")
         scored_candidates = _fallback_heuristic_rerank(query, candidates)
+
+    if scored_candidates:
+        # Tech stack & architecture boosting for framework/technology queries
+        query_lower = f"{query} {norm_q or ''}".lower()
+        is_tech_query = any(kw in query_lower for kw in ("frontend", "backend", "tech stack", "technologies", "framework", "frameworks", "components", "architecture"))
+        if is_tech_query:
+            tech_keywords = {"fastapi", "react", "vue", "angular", "node", "python", "ollama", "qdrant", "postgresql", "duckdb", "vanna", "minio", "langfuse", "keycloak"}
+            adjusted = []
+            for score, cand in scored_candidates:
+                text_lower = cand.chunk_text.lower()
+                matching_techs = sum(1 for kw in tech_keywords if kw in text_lower)
+                if matching_techs > 0:
+                    score = score * (1.0 + 0.4 * matching_techs) + 0.12 * matching_techs
+                adjusted.append((score, cand))
+            scored_candidates = sorted(adjusted, key=lambda item: item[0], reverse=True)
+
+        # Source prioritization for HR Policy queries: prefer HR Framework/Policy docs over PRD schema definitions
+        hr_categories = {
+            AttributeCategory.POLICY_WFH,
+            AttributeCategory.POLICY_LEAVE,
+            AttributeCategory.POLICY_POSH,
+            AttributeCategory.POLICY_GRIEVANCE,
+            AttributeCategory.POLICY_PERFORMANCE,
+            AttributeCategory.POLICY_EXIT,
+            AttributeCategory.POLICY_IT_SECURITY,
+            AttributeCategory.POLICY_GENERAL,
+        }
+        if intent.category in hr_categories:
+            has_hr_docs = any(
+                any(kw in (cand.document_title or "").lower() for kw in ("hr", "framework", "policy", "handbook"))
+                for _, cand in scored_candidates
+            )
+            if has_hr_docs:
+                adjusted = []
+                for score, cand in scored_candidates:
+                    title = (cand.document_title or "").lower()
+                    if any(kw in title for kw in ("prd", "schema", "architecture", "spec", "v1.1", "v2.2")):
+                        adjusted.append((score * 0.25, cand))
+                    else:
+                        adjusted.append((score, cand))
+                scored_candidates = sorted(adjusted, key=lambda item: item[0], reverse=True)
+
+        top_score = scored_candidates[0][0]
+        if top_score >= 0.25:
+            # Filter out near-zero/distractor chunks when top chunk has high relevance
+            relevance_floor = max(0.01 if is_tech_query else 0.04, top_score * (0.04 if is_tech_query else 0.08))
+            scored_candidates = [item for item in scored_candidates if item[0] >= relevance_floor]
 
     reranked: list[RankedResult] = []
     for new_rank, (score, cand) in enumerate(scored_candidates[:final_top_k], 1):
@@ -317,6 +370,22 @@ def _fallback_heuristic_rerank(
                 attr_boost = 0.85
             elif has_port:
                 attr_boost = 0.50
+        elif intent.category == AttributeCategory.POLICY_LEAVE:
+            has_leave_rules = any(l_kw in text for l_kw in ("casual leave", "leave entitlement", "carry forward", "leave utilization", "leave benefits", "working hours", "work-life balance", "probation leave", "leave policy", "leave policies"))
+            has_tech_spec = any(tech in text for tech in ("jira", "postgresql", "fastapi", "react", "port 8000", "endpoint", "/api/leave-policies", "mvp modules", "user journeys")) and not has_leave_rules
+            if has_leave_rules:
+                attr_boost = 0.70
+            elif has_tech_spec:
+                attr_boost = -0.30
+            else:
+                attr_boost = 0.0
+        elif intent.category == AttributeCategory.CULTURE_VALUES:
+            has_culture = any(c_kw in text for c_kw in ("culture", "integrity", "accountability", "professionalism", "ethical", "ethics", "code of conduct", "standards of behavior", "respect", "dignity", "values"))
+            has_tech_spec = any(tech in text for tech in ("jira", "postgresql", "fastapi", "react", "port 8000", "role storage", "mvp modules", "user journeys")) and not has_culture
+            if has_culture:
+                attr_boost = 0.65
+            elif has_tech_spec:
+                attr_boost = -0.30
             else:
                 attr_boost = 0.0
 

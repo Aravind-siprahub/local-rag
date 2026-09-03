@@ -116,6 +116,68 @@ class HTMLContentCleaner(HTMLParser):
         return cleaned
 
 
+def extract_headline_title(html: str) -> str | None:
+    """Extract actual article title/headline from HTML metadata, og:title, or title tag."""
+    if not html:
+        return None
+
+    title_patterns = [
+        r'<meta[^>]+(?:property|name)=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']og:title["\']',
+        r'<title[^>]*>(.*?)</title>',
+        r'<h1[^>]*>(.*?)</h1>',
+    ]
+
+    for pattern in title_patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            clean_title = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+            # Collapse whitespace
+            clean_title = re.sub(r"\s+", " ", clean_title)
+            if clean_title and not clean_title.lower().startswith(("http://", "https://", "www.")):
+                return clean_title[:180]
+
+    return None
+
+
+def extract_publication_date(html: str) -> str | None:
+    """Extract publication date from raw HTML metadata, JSON-LD schema, or standard time tags."""
+    if not html:
+        return None
+
+    # 1. OpenGraph, JSON-LD, & Meta date tags
+    meta_patterns = [
+        r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|og:published_time|datePublished|date|pubdate|parsely-pub-date|sailthru\.date|publishdate|uploadDate)["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:article:published_time|og:published_time|datePublished|date|pubdate|parsely-pub-date|sailthru\.date|publishdate|uploadDate)["\']',
+        r'"datePublished"\s*:\s*"([^"]+)"',
+        r'"dateModified"\s*:\s*"([^"]+)"',
+        r'"dateCreated"\s*:\s*"([^"]+)"',
+        r'<time[^>]+datetime=["\']([^"\']+)["\']',
+        r'<time[^>]*>([^<]+)</time>',
+        r'<span[^>]+class=["\'][^"\']*(?:publish-date|post-date|article-date|date|entry-date)[^"\']*["\'][^>]*>([^<]+)</span>',
+    ]
+
+    for pattern in meta_patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if match:
+            raw_date = match.group(1).strip()
+            if raw_date:
+                # Basic ISO format cleanup (e.g. 2026-08-31T10:00:00Z -> 2026-08-31)
+                date_part = raw_date.split("T")[0] if "T" in raw_date else raw_date.split(" ")[0]
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", date_part):
+                    return date_part
+                if len(raw_date) < 40 and not raw_date.startswith("http"):
+                    return raw_date.strip()
+
+    # 2. Textual date pattern search (e.g. August 31, 2026 or Aug 31, 2026)
+    text_date_pattern = r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+20\d{2}\b"
+    t_match = re.search(text_date_pattern, html, flags=re.IGNORECASE)
+    if t_match:
+        return t_match.group(0).strip()
+
+    return None
+
+
 def extract_readable_content(html: str, max_chars: int = 2500) -> str:
     """Extract readable text content from raw HTML string."""
     if not html or not html.strip():
@@ -174,42 +236,53 @@ class PageFetcher:
         *,
         max_chars: int = 2500,
         request_id: str | None = None,
-    ) -> str | None:
-        """Fetch URL with SSRF protection, size limits, and extract clean text."""
+    ) -> tuple[str | None, str | None, str | None]:
+        """Fetch URL with SSRF protection, size limits, and extract clean text + publication date + headline.
+        
+        Returns tuple of (extracted_text, publication_date, headline_title).
+        """
         req_id = request_id or "N/A"
         is_safe, reason = is_safe_url(url)
         if not is_safe:
             logger.warning("[PAGE FETCH BLOCKED] url=%r reason=%s request_id=%s", url, reason, req_id)
-            return None
+            return None, None, None
 
         try:
             client = await self._get_client()
-            logger.info("[PAGE FETCH START] url=%r request_id=%s", url, req_id)
+            logger.info("[ARTICLE_FETCH START] url=%r request_id=%s", url, req_id)
             response = await client.get(url)
             
             if response.status_code != 200:
-                logger.warning("[PAGE FETCH HTTP ERROR] url=%r status=%d request_id=%s", url, response.status_code, req_id)
-                return None
+                logger.warning("[ARTICLE_FETCH HTTP ERROR] url=%r status=%d request_id=%s", url, response.status_code, req_id)
+                return None, None, None
 
             content_type = response.headers.get("content-type", "").lower()
             if content_type and "text/html" not in content_type and "text/plain" not in content_type:
-                logger.info("[PAGE FETCH SKIP] url=%r non-text content_type=%s request_id=%s", url, content_type, req_id)
-                return None
+                logger.info("[ARTICLE_FETCH SKIP] url=%r non-text content_type=%s request_id=%s", url, content_type, req_id)
+                return None, None, None
 
             raw_body = response.text[: self.max_bytes]
             extracted_text = extract_readable_content(raw_body, max_chars=max_chars)
-            logger.info("[PAGE FETCH SUCCESS] url=%r extracted_len=%d request_id=%s", url, len(extracted_text), req_id)
-            return extracted_text if extracted_text else None
+            pub_date = extract_publication_date(raw_body)
+            headline = extract_headline_title(raw_body)
+
+            # Reject articles with < 150 characters of readable body text
+            if not extracted_text or len(extracted_text) < 150:
+                logger.warning("[ARTICLE_FETCH REJECT] Thin content (< 150 chars): url=%r len=%d", url, len(extracted_text) if extracted_text else 0)
+                return None, None, None
+
+            logger.info("[ARTICLE_METADATA] url=%r len=%d pub_date=%s headline=%r request_id=%s", url, len(extracted_text), pub_date or "N/A", headline or "N/A", req_id)
+            return extracted_text, pub_date, headline
 
         except httpx.TimeoutException:
-            logger.warning("[PAGE FETCH TIMEOUT] url=%r timeout=%.1fs request_id=%s", url, self.timeout_seconds, req_id)
-            return None
+            logger.warning("[ARTICLE_FETCH TIMEOUT] url=%r timeout=%.1fs request_id=%s", url, self.timeout_seconds, req_id)
+            return None, None, None
         except httpx.HTTPError as err:
-            logger.warning("[PAGE FETCH HTTP FAILED] url=%r error=%s request_id=%s", url, err, req_id)
-            return None
+            logger.warning("[ARTICLE_FETCH HTTP FAILED] url=%r error=%s request_id=%s", url, err, req_id)
+            return None, None, None
         except Exception as exc:
-            logger.exception("[PAGE FETCH UNEXPECTED ERROR] url=%r error=%s request_id=%s", url, exc, req_id)
-            return None
+            logger.exception("[ARTICLE_FETCH UNEXPECTED ERROR] url=%r error=%s request_id=%s", url, exc, req_id)
+            return None, None, None
 
     async def close(self) -> None:
         if self._owns_client and self._client is not None:

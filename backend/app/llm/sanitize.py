@@ -277,6 +277,18 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
         truncated_lines.append(line)
     final_lines = truncated_lines
 
+    # Strip any trailing orphan headings or uncompleted section numbers
+    while final_lines:
+        last = final_lines[-1].strip()
+        if not last:
+            final_lines.pop()
+            continue
+        # If the last line is a section heading with no body (e.g. "4. What Is Not Stated in These Excerpts", "### Section", "4.")
+        if re.match(r"^(?:\d+[\.)]\s+[A-Za-z0-9\s&/_-]+|#{1,6}\s+.*|\d+[\.)])$", last) and len(last.split()) <= 10:
+            final_lines.pop()
+            continue
+        break
+
     cleaned = "\n".join(final_lines)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 

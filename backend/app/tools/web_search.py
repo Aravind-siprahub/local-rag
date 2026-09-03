@@ -309,6 +309,71 @@ async def _fetch_open_meteo_weather(query: str, client: httpx.AsyncClient) -> We
         return None
 
 
+async def _fetch_crypto_live_price(query: str, client: httpx.AsyncClient) -> WebSearchHit | None:
+    """Fetch real-time cryptocurrency ticker price and 24h stats from Binance / CoinCap public API."""
+    import re
+    from datetime import datetime
+    q_lower = query.lower()
+    symbol_map = {
+        "bitcoin": "BTCUSDT",
+        "btc": "BTCUSDT",
+        "ethereum": "ETHUSDT",
+        "eth": "ETHUSDT",
+        "solana": "SOLUSDT",
+        "sol": "SOLUSDT",
+        "dogecoin": "DOGEUSDT",
+        "doge": "DOGEUSDT",
+        "xrp": "XRPUSDT",
+        "ripple": "XRPUSDT",
+        "cardano": "ADAUSDT",
+        "ada": "ADAUSDT",
+        "bnb": "BNBUSDT",
+    }
+    target_symbol = None
+    target_name = "Bitcoin"
+    for name, sym in symbol_map.items():
+        if re.search(rf"\b{name}\b", q_lower):
+            target_symbol = sym
+            target_name = name.capitalize()
+            break
+
+    if not target_symbol and "crypto" in q_lower:
+        target_symbol = "BTCUSDT"
+        target_name = "Bitcoin"
+
+    if not target_symbol:
+        return None
+
+    try:
+        resp = await client.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={target_symbol}", timeout=4.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            price = float(data.get("lastPrice", 0))
+            change = float(data.get("priceChangePercent", 0))
+            high = float(data.get("highPrice", 0))
+            low = float(data.get("lowPrice", 0))
+            vol = float(data.get("volume", 0))
+            sign = "+" if change >= 0 else ""
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+            snippet = (
+                f"Live Cryptocurrency Market Data ({target_name}/USD): Current Price: ${price:,.2f} USD "
+                f"(24h Change: {sign}{change:.2f}%, 24h High: ${high:,.2f}, 24h Low: ${low:,.2f}, Volume: {vol:,.2f} {target_symbol[:3]}). "
+                f"Observation Timestamp: {now_str}. Source: Binance Global Exchange live ticker."
+            )
+            return WebSearchHit(
+                title=f"{target_name} Live Price Today - Binance & CoinMarketCap",
+                url=f"https://www.binance.com/en/price/{target_name.lower()}",
+                snippet=snippet,
+                source="binance.com",
+                published_at=datetime.now().strftime("%Y-%m-%d"),
+                content=snippet,
+            )
+    except Exception as exc:
+        logger.warning("[CRYPTO PRICE ENRICHMENT] Fetch failed: %s", exc)
+
+    return None
+
+
 class DuckDuckGoWebSearchProvider:
     """DuckDuckGo Instant Answer API + HTML Search fallback — no API key required."""
 
@@ -350,18 +415,39 @@ class DuckDuckGoWebSearchProvider:
                 py_resp = await client.get("https://www.python.org/downloads/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
                 if py_resp.status_code == 200:
                     import re
-                    m = re.search(r"Latest Python 3 Release - Python (3\.\d+\.\d+)", py_resp.text)
-                    ver = m.group(1) if m else "3.13.2"
-                    py_hit = WebSearchHit(
-                        title="Python Source Release - Python.org",
-                        url="https://www.python.org/downloads/",
-                        snippet=f"Official Python Website (python.org): The latest stable version of Python 3 is Python {ver}. Download Python {ver} directly from official Python documentation site python.org.",
-                        source="python.org",
-                    )
-                    enrichment_hits.append(py_hit)
-                    logger.info("[WEB SEARCH ENRICHMENT] Added official python.org hit for version=%s", ver)
+                    # Extract releases from official table: Python (3.x.y) and Release Date
+                    releases = re.findall(r'Python (3\.\d+\.\d+)</a></span>\s*<span class="release-date">([^<]+)</span>', py_resp.text)
+                    if not releases:
+                        btn_matches = re.findall(r'Download Python (3\.\d+\.\d+)', py_resp.text)
+                        releases = [(btn, "Latest") for btn in btn_matches]
+                    
+                    if releases:
+                        latest_ver, latest_date = releases[0]
+                        # Capture top active feature series and maintenance releases
+                        top_releases_str = ", ".join(f"Python {v} ({d})" for v, d in releases[:5])
+                        py_hit = WebSearchHit(
+                            title=f"Python Release Python {latest_ver} - Python.org",
+                            url="https://www.python.org/downloads/",
+                            snippet=f"Official Python Website (python.org): The latest Python release as of today is Python {latest_ver}, released on {latest_date}. Latest releases in the Python 3 series include: {top_releases_str}. Download Python {latest_ver} directly from python.org.",
+                            source="python.org",
+                            published_at=latest_date,
+                            content=f"Official Python Website (python.org): The latest Python release as of today is Python {latest_ver}, released on {latest_date}. Latest releases in the Python 3 series include: {top_releases_str}. Download Python {latest_ver} directly from python.org.",
+                        )
+                        enrichment_hits.append(py_hit)
+                        logger.info("[WEB SEARCH ENRICHMENT] Added official python.org hit for version=%s date=%s", latest_ver, latest_date)
             except Exception as py_exc:
                 logger.warning("[WEB SEARCH ENRICHMENT] Python fetch failed: %s", py_exc)
+
+        # Real-time Cryptocurrency / Bitcoin Price Enrichment
+        if any(c in q_lower for c in ("bitcoin", "btc", "ethereum", "eth", "solana", "crypto", "price of bitcoin")):
+            try:
+                client = await self._get_client()
+                crypto_hit = await _fetch_crypto_live_price(q, client)
+                if crypto_hit:
+                    enrichment_hits.append(crypto_hit)
+                    logger.info("[WEB SEARCH ENRICHMENT] Added Live Crypto Price Hit: %s", crypto_hit.snippet)
+            except Exception as c_exc:
+                logger.warning("[WEB SEARCH ENRICHMENT] Crypto price fetch failed: %s", c_exc)
 
         # Weather query enrichment using free Open-Meteo API
         if any(w in q_lower for w in ("weather", "temperature", "forecast", "climate", "rain", "degree")):

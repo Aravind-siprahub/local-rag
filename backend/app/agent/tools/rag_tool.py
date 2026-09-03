@@ -51,10 +51,14 @@ class DocumentRAGTool(Tool):
 
         route_str = params.get("route")
         from app.rag.intent_router import _is_document_summary, _is_document_detail, Route
+        from app.rag.query_understanding import extract_query_intent, AttributeCategory
+        intent = extract_query_intent(query)
+        is_policy_overview = intent.category == AttributeCategory.POLICY_GENERAL
         is_summary_or_detail = (
             route_str in (Route.DOCUMENT_SUMMARY.value, Route.DOCUMENT_DETAIL.value, "DOCUMENT_SUMMARY", "DOCUMENT_DETAIL")
             or _is_document_summary(query.lower())
             or _is_document_detail(query.lower())
+            or is_policy_overview
         )
 
         try:

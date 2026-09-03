@@ -27,6 +27,9 @@ class ChatSessionRepository(BaseRepository[ChatSession, uuid.UUID]):
             stmt = stmt.where(ChatSession.deleted_at.is_(None))
         if not include_archived:
             stmt = stmt.where(ChatSession.is_archived.is_(False))
-        stmt = stmt.order_by(ChatSession.last_message_at.desc()).limit(limit).offset(offset)
+        stmt = stmt.order_by(
+            ChatSession.last_message_at.desc().nullslast(),
+            ChatSession.created_at.desc(),
+        ).limit(limit).offset(offset)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -42,9 +42,18 @@ def get_llm_client(
     effective_provider = (provider or "").strip().lower()
     if not effective_provider and model:
         m_lower = model.strip().lower()
-        if m_lower.startswith("omniroute/") or m_lower.startswith("omni/") or m_lower.startswith("auto/") or m_lower == "auto/fast":
+        if (
+            m_lower.startswith("omniroute/")
+            or m_lower.startswith("omni/")
+            or m_lower.startswith("auto/")
+            or m_lower == "auto/fast"
+            or m_lower.startswith("combo/")
+            or m_lower.startswith("local-rag")
+            or m_lower == (getattr(settings, "OMNIROUTE_MODEL", "") or "").strip().lower()
+            or m_lower == (getattr(settings, "OMNIROUTE_VISION_MODEL", "") or "").strip().lower()
+        ):
             effective_provider = "omniroute"
-        elif m_lower.startswith("nvidia/") or "nemotron" in m_lower:
+        elif m_lower.startswith("nvidia/") or "nemotron" in m_lower or "meta/llama-3.2-" in m_lower:
             effective_provider = "nvidia"
         elif "openrouter" in m_lower or "google/" in m_lower or "meta-llama/" in m_lower or ("/" in m_lower and ":" in m_lower):
             effective_provider = "openrouter"

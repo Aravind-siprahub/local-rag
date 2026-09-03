@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -86,6 +87,47 @@ class OpenAICompatibleLLMClient:
                 raise LLMClientError(f"{self.provider.upper()}_API_KEY is required when LLM_PROVIDER={self.provider}")
 
 
+    @staticmethod
+    def _format_messages(
+        system_prompt: str,
+        user_prompt: str,
+        images: list[bytes] | None = None,
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        if system_prompt and system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt.strip()})
+
+        if images:
+            content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt.strip()}]
+            for img in images:
+                mime = "image/jpeg"
+                if img.startswith(b"\x89PNG"):
+                    mime = "image/png"
+                elif img.startswith(b"GIF8"):
+                    mime = "image/gif"
+                elif img.startswith(b"RIFF") and b"WEBP" in img[:12]:
+                    mime = "image/webp"
+                b64 = base64.b64encode(img).decode("utf-8")
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                })
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": user_prompt.strip()})
+        return messages
+
+    async def supports_vision(self, model: str | None = None) -> bool:
+        """Check whether the target model or provider supports multimodal/vision input."""
+        target = (model or self.model or "").lower()
+        if target.startswith("omniroute/"):
+            target = target[len("omniroute/") :]
+        _VISION_PATTERNS = (
+            "vision", "-vl", ":vl", "4o", "flash", "omni", "llava", "multimodal",
+            "local-rag-vision", "nemotron-3-nano-omni", "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl"
+        )
+        return any(p in target for p in _VISION_PATTERNS)
+
     async def generate(
         self,
         system_prompt: str,
@@ -101,15 +143,18 @@ class OpenAICompatibleLLMClient:
         """Execute a non-streaming completion request against OpenAI-compatible API."""
         self._validate_credentials()
         target_model = model or self.model
+        if self.provider == "nvidia" and target_model in ("nvidia/nemotron-4-340b-instruct", "nemotron-4-340b-instruct"):
+            target_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
+        elif self.provider == "omniroute" and target_model and target_model.startswith("omniroute/"):
+            target_model = target_model[len("omniroute/") :]
+        elif self.provider == "nvidia" and target_model and (target_model.startswith("nvidia/meta/") or target_model.startswith("nvidia/microsoft/")):
+            target_model = target_model[len("nvidia/") :]
         temp = self.temperature if temperature is None else temperature
         headers = self._build_headers()
         req_id = request_id or f"req-{time.time_ns()}"
         headers["X-Request-ID"] = req_id
 
-        messages: list[dict[str, Any]] = []
-        if system_prompt and system_prompt.strip():
-            messages.append({"role": "system", "content": system_prompt.strip()})
-        messages.append({"role": "user", "content": user_prompt.strip()})
+        messages = self._format_messages(system_prompt, user_prompt, images)
 
         payload: dict[str, Any] = {
             "model": target_model,
@@ -234,15 +279,18 @@ class OpenAICompatibleLLMClient:
         """Stream completion tokens from OpenAI-compatible SSE endpoint."""
         self._validate_credentials()
         target_model = model or self.model
+        if self.provider == "nvidia" and target_model in ("nvidia/nemotron-4-340b-instruct", "nemotron-4-340b-instruct"):
+            target_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
+        elif self.provider == "omniroute" and target_model and target_model.startswith("omniroute/"):
+            target_model = target_model[len("omniroute/") :]
+        elif self.provider == "nvidia" and target_model and (target_model.startswith("nvidia/meta/") or target_model.startswith("nvidia/microsoft/")):
+            target_model = target_model[len("nvidia/") :]
         temp = self.temperature if temperature is None else temperature
         headers = self._build_headers()
         req_id = request_id or f"req-{time.time_ns()}"
         headers["X-Request-ID"] = req_id
 
-        messages: list[dict[str, Any]] = []
-        if system_prompt and system_prompt.strip():
-            messages.append({"role": "system", "content": system_prompt.strip()})
-        messages.append({"role": "user", "content": user_prompt.strip()})
+        messages = self._format_messages(system_prompt, user_prompt, images)
 
         payload: dict[str, Any] = {
             "model": target_model,
@@ -377,13 +425,16 @@ class OmniRouteLLMClient(OpenAICompatibleLLMClient):
         client: httpx.AsyncClient | None = None,
     ) -> None:
         settings = get_settings()
+        target_model = model or settings.OMNIROUTE_MODEL
+        if target_model and target_model.startswith("omniroute/"):
+            target_model = target_model[len("omniroute/") :]
         super().__init__(
             provider="omniroute",
             base_url=base_url or settings.OMNIROUTE_BASE_URL,
             api_key=api_key if api_key is not None else settings.OMNIROUTE_API_KEY,
-            model=model or settings.OMNIROUTE_MODEL,
+            model=target_model,
             temperature=temperature,
-            timeout=timeout if timeout is not None else 15.0,
+            timeout=timeout,
             max_retries=max_retries if max_retries is not None else 1,
             prompt_price_per_1m=prompt_price_per_1m,
             completion_price_per_1m=completion_price_per_1m,

@@ -54,13 +54,17 @@ export function useLogin() {
   return useMutation({
     mutationFn: async (credentials: LoginCredentials) => {
       const data = await authApi.login(credentials)
-      AuthStore.setSession(data.accessToken, data.user, data.refreshToken)
-      AuthStore.setRememberedEmail(credentials.email, Boolean(credentials.rememberMe))
+      if (data.auth) {
+        AuthStore.setSession(data.auth.accessToken, data.auth.user)
+        AuthStore.setRememberedEmail(credentials.email, Boolean(credentials.rememberMe))
+      }
       return data
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(AUTH_QUERY_KEY, data.user)
-      navigate(ROUTES.dashboard, { replace: true })
+      if (data.auth) {
+        queryClient.setQueryData(AUTH_QUERY_KEY, data.auth.user)
+        navigate(ROUTES.dashboard, { replace: true })
+      }
     },
   })
 }
@@ -69,21 +73,13 @@ export function useLogin() {
  * Custom Hook for User Sign Up / Registration Mutation
  */
 export function useRegister() {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-
   return useMutation({
     mutationFn: async (credentials: SignupCredentials) => {
-      const data = await authApi.register(credentials)
-      AuthStore.setSession(data.accessToken, data.user, data.refreshToken)
-      return data
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData(AUTH_QUERY_KEY, data.user)
-      navigate(ROUTES.dashboard, { replace: true })
+      return await authApi.register(credentials)
     },
   })
 }
+
 
 /**
  * Custom Hook for User Logout

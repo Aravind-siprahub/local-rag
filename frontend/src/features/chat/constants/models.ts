@@ -8,16 +8,23 @@ export interface ModelOption {
 
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
-    id: 'auto/fast',
-    name: 'OmniRoute Gateway (Auto Fast Cloud)',
-    description: 'Auto-Fallback Cloud Gateway (1-3s response)',
+    id: 'local-rag',
+    name: 'OmniRoute Gateway (local-rag)',
+    description: 'NVIDIA NIM + OpenRouter Fallback (1-2s response)',
     type: 'text',
     provider: 'omniroute',
   },
   {
-    id: 'nvidia/nemotron-4-340b-instruct',
-    name: 'Nemotron 4 340B (NVIDIA Cloud)',
-    description: 'Accelerated Cloud Model (1-2s response)',
+    id: 'local-rag-vision',
+    name: 'OmniRoute Vision (local-rag-vision)',
+    description: 'Nemotron Omni Multimodal Gateway (1-2s response)',
+    type: 'vision',
+    provider: 'omniroute',
+  },
+  {
+    id: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    name: 'Nemotron 3.5 Lightning (NVIDIA Cloud)',
+    description: 'High-speed NVIDIA NIM Cloud Reasoning (1-2s response)',
     type: 'text',
     provider: 'nvidia',
   },
@@ -27,6 +34,13 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Local CPU Model (~50s response)',
     type: 'text',
     provider: 'ollama',
+  },
+  {
+    id: 'nvidia/meta/llama-3.2-11b-vision-instruct',
+    name: 'Llama 3.2 11B Vision (NVIDIA Cloud)',
+    description: 'High-speed NVIDIA NIM Multimodal Vision (<1s response)',
+    type: 'vision',
+    provider: 'nvidia',
   },
   {
     id: 'qwen3-vl:4b',

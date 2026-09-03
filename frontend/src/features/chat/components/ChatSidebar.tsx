@@ -152,6 +152,7 @@ export function ChatSidebar({
                           activeId === conv.id ? "opacity-100" : ""
                         )}
                         onClick={(e) => {
+                          e.preventDefault()
                           e.stopPropagation()
                           onDelete(conv.id)
                         }}

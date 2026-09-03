@@ -56,11 +56,12 @@ def test_password_hashing_properties() -> None:
 
 @pytest.mark.asyncio
 async def test_successful_login_with_correct_password(db_session) -> None:
-    """Correct email and password returns 200 OK and a valid JWT access token."""
+    """Correct email and password returns 200 OK and a valid 2FA challenge token."""
     user_repo = UserRepository(db_session)
     password = "MySecurePassword2026!"
+    email = f"login_success_{uuid.uuid4().hex[:6]}@example.com"
     user = await user_repo.create(
-        email="login_success@example.com",
+        email=email,
         hashed_password=hash_password(password),
         role=UserRole.MEMBER,
     )
@@ -73,9 +74,10 @@ async def test_successful_login_with_correct_password(db_session) -> None:
         )
         assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.text}"
         data = res.json()
-        assert "access_token" in data
-        assert data["token_type"] == "bearer"
+        assert data.get("requires_2fa") is True
+        assert "temp_token" in data
         assert data["user"]["email"] == user.email
+
 
 
 @pytest.mark.asyncio
