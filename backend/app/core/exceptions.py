@@ -13,11 +13,13 @@ Concerns living here, deliberately kept together:
 """
 import logging
 
+from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.llm.client import LLMUnavailableError, LLMClientError, LLMAPIError, LLMModelError, LLMTimeoutError
 from app.services.exceptions import ConflictError, NotFoundError, ValidationError
@@ -152,6 +154,21 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "path": request.url.path,
                 "status": 500,
             },
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        headers = getattr(exc, "headers", None)
+        detail = exc.detail
+        content: dict[str, Any] = {"detail": detail}
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            content["error"] = detail if isinstance(detail, str) else "You do not have permission to upload documents."
+        elif isinstance(detail, dict):
+            content.update(detail)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=content,
+            headers=headers,
         )
 
     @app.exception_handler(Exception)

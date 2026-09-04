@@ -517,8 +517,19 @@ async def ask_chat_stream(
         model=req_model,
     )
 
+    async def _stream_with_cleanup():
+        try:
+            async for item in generator:
+                yield item
+        finally:
+            if hasattr(rag, "close"):
+                try:
+                    await rag.close()
+                except Exception:
+                    pass
+
     return StreamingResponse(
-        generator,
+        _stream_with_cleanup(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

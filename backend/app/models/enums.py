@@ -31,6 +31,8 @@ def pg_enum(python_enum: type[enum.Enum], name: str) -> SqlEnum:
 
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
+    HR = "hr"
+    USER = "user"
     MEMBER = "member"
 
 

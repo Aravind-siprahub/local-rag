@@ -115,7 +115,7 @@ _REASONING_PREFIX_RE = _FULL_REASONING_SENTENCE_RE
 
 _INLINE_SOURCE_PREFIX_RE = re.compile(
     r"(?i)^(?:"
-    r"(?:looking at|based on|according to|from|the|in)\s+(?:the\s+)?(?:provided\s+|retrieved\s+)?(?:[a-zA-Z0-9_\-\.\s]{1,35}\s+)?(?:context|chunks?|passages?|excerpts?|documents?(?:\s+excerpts?)?|polic(?:y|ies)|sources?|search results?|web search results?)(?:\s+\d+)?(?:\s+(?:above|provided))?(?:[,.:]*)\s*(?:(?:i can see|we can see|we can infer|we can find|it says|it states|it shows|we see|it is clear|clearly states|clearly shows|states|shows|mentions)(?:\s+that)?\s*)?|"
+    r"(?:looking at|based on|according to|from|in)\s+(?:the\s+)?(?:provided\s+|retrieved\s+)?(?:[a-zA-Z0-9_\-\.\s]{1,35}\s+)?(?:context|chunks?|passages?|excerpts?|documents?(?:\s+excerpts?)?|polic(?:y|ies)|sources?|search results?|web search results?)(?:\s+\d+)?(?:\s+(?:above|provided))?(?:[,.:]*)\s*(?:(?:i can see|we can see|we can infer|we can find|it says|it states|it shows|we see|it is clear|clearly states|clearly shows|states|shows|mentions)(?:\s+that)?\s*)?|"
     r"(?:chunk|passage|document|doc)\s+\d+\s+(?:says|states|shows|mentions|specifies|indicates|contains)(?:\s+that)?\s*"
     r")"
 )
@@ -272,7 +272,8 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
     )
     for line in final_lines:
         lower_line = line.strip().lower()
-        if truncated_lines and any(lower_line.startswith(prefix) for prefix in self_talk_prefixes):
+        is_grounded_missing_note = any(kw in lower_line for kw in ("does not specify", "not specified", "not provide", "not mention", "no separate"))
+        if truncated_lines and not is_grounded_missing_note and any(lower_line.startswith(prefix) for prefix in self_talk_prefixes):
             break
         truncated_lines.append(line)
     final_lines = truncated_lines
@@ -284,7 +285,7 @@ def sanitize_response(text: str | None, question: str | None = None) -> str:
             final_lines.pop()
             continue
         # If the last line is a section heading with no body (e.g. "4. What Is Not Stated in These Excerpts", "### Section", "4.")
-        if re.match(r"^(?:\d+[\.)]\s+[A-Za-z0-9\s&/_-]+|#{1,6}\s+.*|\d+[\.)])$", last) and len(last.split()) <= 10:
+        if (re.match(r"^(?:#{1,6}\s+.*|\d+[\.)]\s*|\d+[\.)]\s+(?:section|part|chapter|what\s+is\s+not\s+stated).*)$", last, re.IGNORECASE)) and len(last.split()) <= 10:
             final_lines.pop()
             continue
         break
@@ -339,8 +340,8 @@ def _get_potential_close_tag_prefix_len(text: str) -> int:
 
 
 REASONING_CUES = [
-    "let me ", "i'll ", "i will ", "hmm", "looking at the passage", "looking at the chunk",
-    "wait", "checks requirements", "the user asks", "the user is asking", "how to reconcile",
+    "let me ", "i'll ", "i will ", "hmm", "okay, ", "okay. ", "looking at the passage", "looking at the chunk",
+    "wait", "checks requirements", "the user asks", "the user asked", "the user is asking", "how to reconcile",
     "i need to", "the instruction says", "reconcil", "re-read", "reread", "that phrasing",
     "it doesn't directly mention", "passage 1", "passage 2", "i'll write",
     "to answer this question", "we are given", "let's extract",

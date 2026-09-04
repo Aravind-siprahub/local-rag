@@ -251,39 +251,9 @@ def extract_query_intent(raw_query: str) -> QueryIntent:
         category = AttributeCategory.DEPLOYMENT
         attributes.add("deployment")
 
-    # Construct clean normalized query for vector search
+    # Construct clean normalized query for vector search without erasing user's specific requested sub-topics
     is_explicit_tech_stack_query = any(kw in q_norm for kw in ("frontend", "backend", "tech stack", "technology stack", "built with"))
-    if category == AttributeCategory.POLICY_WFH:
-        target_name = entity or "the organization"
-        normalized_q = f"What is {target_name}'s remote work and hybrid work policy, work from home (WFH) guidelines, eligibility, working hours, and approval process?"
-    elif category == AttributeCategory.WORKING_HOURS:
-        target_name = entity or "the organization"
-        normalized_q = f"What are {target_name}'s standard working hours, office timings, shift hours, weekly offs, and daily work schedule?"
-    elif category == AttributeCategory.POLICY_LEAVE:
-        target_name = entity or "the company"
-        normalized_q = f"What leave types, leave policy, casual leave entitlement, carry forward rules, and leave categories are available at {target_name}?"
-    elif category == AttributeCategory.POLICY_POSH:
-        target_name = entity or "the organization"
-        normalized_q = f"What is {target_name}'s Prevention of Sexual Harassment (POSH) policy, ICC committee, and complaint procedure?"
-    elif category == AttributeCategory.POLICY_GRIEVANCE:
-        target_name = entity or "the organization"
-        normalized_q = f"What is {target_name}'s grievance redressal policy, resolution timeline, and anti-retaliation guidelines?"
-    elif category == AttributeCategory.POLICY_PERFORMANCE:
-        target_name = entity or "the organization"
-        normalized_q = f"What is {target_name}'s performance management process, review cycles, appraisal, and evaluation criteria?"
-    elif category == AttributeCategory.POLICY_EXIT:
-        target_name = entity or "the organization"
-        normalized_q = f"What is {target_name}'s resignation, notice period, handover, exit, and termination policy?"
-    elif category == AttributeCategory.POLICY_IT_SECURITY:
-        target_name = entity or "the organization"
-        normalized_q = f"What is {target_name}'s IT and security policy, data protection, acceptable device use, and incident reporting guidelines?"
-    elif category == AttributeCategory.POLICY_GENERAL:
-        target_name = entity or "the organization"
-        normalized_q = f"What HR policies, employee policies, code of conduct, leave policies, POSH, WFH, and IT security guidelines are available at {target_name}?"
-    elif category == AttributeCategory.CULTURE_VALUES:
-        target_name = entity or "the organization"
-        normalized_q = f"What are {target_name}'s core values, culture, principles, code of conduct, and standards of behavior?"
-    elif entity and category == AttributeCategory.TECHNOLOGY and is_explicit_tech_stack_query:
+    if entity and category == AttributeCategory.TECHNOLOGY and is_explicit_tech_stack_query:
         normalized_q = f"What frontend and backend technologies and frameworks are used in {entity}?"
     elif entity and category == AttributeCategory.CONFIGURATION and has_port:
         normalized_q = f"What ports do frontend and backend use in {entity}?"
@@ -297,3 +267,75 @@ def extract_query_intent(raw_query: str) -> QueryIntent:
         attributes=attributes,
         category=category,
     )
+
+
+def decompose_query_topics(raw_query: str) -> list[str]:
+    """Decompose a natural language query into distinct requested sub-topics.
+
+    Examples:
+        "What are the rules for casual leave and sick leave?"
+        -> ["casual leave", "sick leave"]
+
+        "What is the probation period and notice period?"
+        -> ["probation period", "notice period"]
+
+        "What are Our Core Values of Siprahub?"
+        -> ["Our Core Values"]
+
+        "What are the working hours, shift timings, and attendance rules?"
+        -> ["working hours", "shift timings", "attendance rules"]
+    """
+    if not raw_query or not raw_query.strip():
+        return []
+
+    q = raw_query.strip()
+    q_clean = re.sub(r"[?\"'`]", " ", q).strip()
+
+    # Strip common conversational question prefixes
+    clean_core = re.sub(
+        r"(?i)^(?:what\s+(?:are|is|was|were|do|does|did)?\s*(?:the\s+)?(?:rules\s+(?:for|about)\s+|policies\s+(?:for|about)\s+|guidelines\s+(?:for|about)\s+|details\s+(?:for|on|about)\s+)?|"
+        r"can\s+you\s+(?:tell|explain|provide)\s+(?:me\s+)?(?:about\s+)?|"
+        r"tell\s+(?:me\s+)?(?:about\s+)?|"
+        r"explain\s+(?:to\s+me\s+)?(?:about\s+)?|"
+        r"give\s+(?:me\s+)?(?:details\s+(?:on|about)\s+)?|"
+        r"describe\s+(?:the\s+)?)\s*",
+        "",
+        q_clean,
+    ).strip()
+
+    # Strip standalone 'what <topic>' or 'which <topic>' prefix
+    clean_core = re.sub(r"(?i)^(?:what|which|how)\s+(?:is|are|was|were|do|does|did)?\s*", "", clean_core).strip()
+
+    # Strip company/project prepositional suffixes like "in SipraHub", "of SipraHub", "for Talk to My Data"
+    clean_core = re.sub(
+        r"(?i)\s+(?:in|of|for|at|about)\s+(?:siprahub|sipraone|sipra|airis|talk\s+to\s+my\s+data|the\s+company|our\s+company|the\s+organization|the\s+project|this\s+project|the\s+handbook|the\s+document)\s*$",
+        "",
+        clean_core,
+    ).strip()
+
+    # Strip trailing conversational verbs (e.g. "using", "used", "implemented")
+    clean_core = re.sub(r"(?i)\s+(?:is\s+|are\s+)?(?:using|used|utilized|implemented|applied|available)\s*$", "", clean_core).strip()
+
+    # Replace conjunctions and list separators with standard delimiter
+    normalized_delim = re.sub(
+        r"(?i)\s*(?:,\s*and\s+|,\s*|\s+and\s+|\s+as\s+well\s+as\s+|\s+along\s+with\s+|\s+versus\s+|\s+vs\.?\s+)\s*",
+        " || ",
+        clean_core,
+    )
+
+    parts = [p.strip() for p in normalized_delim.split("||") if p.strip()]
+
+    stopwords = {"the", "a", "an", "our", "their", "its", "rules", "policy", "policies"}
+    valid_topics: list[str] = []
+    for p in parts:
+        clean_p = re.sub(r"^(?:the|a|an|our|their|its)\s+", "", p, flags=re.IGNORECASE).strip()
+        words = [w for w in clean_p.split() if w.lower() not in stopwords]
+        if words:
+            valid_topics.append(clean_p)
+
+    if not valid_topics:
+        return [clean_core] if clean_core else [q]
+
+    return valid_topics
+
+

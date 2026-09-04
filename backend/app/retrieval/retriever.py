@@ -87,9 +87,10 @@ class Retriever:
         mode = getattr(filters_obj, "search_mode", "hybrid")
 
         from app.rag.query_normalizer import normalize_query
-        from app.rag.query_understanding import extract_query_intent, AttributeCategory
+        from app.rag.query_understanding import extract_query_intent, AttributeCategory, decompose_query_topics
         _, norm_q, ret_q = normalize_query(question.strip())
         intent = extract_query_intent(question.strip())
+        decomposed_topics = decompose_query_topics(question.strip())
 
         # Generate sub-queries for multi-aspect questions and clean retrieval query
         sub_queries = [question.strip()]
@@ -100,12 +101,25 @@ class Retriever:
         if intent.normalized_query and intent.normalized_query.strip().lower() not in (s.lower() for s in sub_queries):
             sub_queries.append(intent.normalized_query.strip())
 
-        q_clean = question.strip().lower()
-        if " and " in q_clean:
-            parts = [p.strip() for p in q_clean.split(" and ") if len(p.strip()) >= 3]
-            for p in parts:
-                if p and p not in sub_queries and len(p.split()) >= 3:
-                    sub_queries.append(p)
+        # Ensure multi-part questions have each decomposed sub-topic searched independently
+        if len(decomposed_topics) > 1:
+            for topic in decomposed_topics:
+                t_clean = topic.strip()
+                if t_clean and t_clean.lower() not in (s.lower() for s in sub_queries):
+                    sub_queries.append(t_clean)
+
+        # Clean topical sub-query without company names or conversational verbs
+        _Q_STRIP_WORDS = {
+            "siprahub", "airis", "what", "are", "is", "the", "in", "of", "to", "for",
+            "tell", "me", "about", "give", "details", "explain", "please", "can", "you",
+            "our", "my", "how", "do", "does", "we", "a", "an",
+        }
+        import re as re_mod
+        clean_words = [w for w in re_mod.findall(r"\b[a-zA-Z0-9]+\b", question) if w.lower() not in _Q_STRIP_WORDS]
+        if clean_words:
+            clean_topical_q = " ".join(clean_words)
+            if clean_topical_q.lower() not in (s.lower() for s in sub_queries):
+                sub_queries.append(clean_topical_q)
 
         search_depth = top_k if top_k is not None else max(candidate_top_k, 30)
         candidate_pool_limit = top_k if top_k is not None else max(candidate_top_k, 35)
@@ -183,13 +197,25 @@ class Retriever:
 
         retrieval_time_ms = int((time.monotonic() - retrieval_search_start) * 1000)
 
+        # Content-based deduplication: prevent identical chunks across multiple versions from crowding candidates
+        deduped_candidates: list[RankedResult] = []
+        seen_cand_hashes: set[str] = set()
+        for cand in candidate_results:
+            c_norm = " ".join(cand.chunk_text.strip()[:100].lower().split())
+            if c_norm not in seen_cand_hashes:
+                seen_cand_hashes.add(c_norm)
+                deduped_candidates.append(cand)
+            if len(deduped_candidates) >= candidate_pool_limit:
+                break
+        candidate_results = deduped_candidates
+
         rerank_start = time.monotonic()
         rerank_q = intent.normalized_query if intent.category != AttributeCategory.GENERAL and intent.normalized_query else question.strip()
         results = rerank_cross_encoder(rerank_q, candidate_results, final_top_k=final_top_k)
         rerank_time_ms = int((time.monotonic() - rerank_start) * 1000)
 
-        # Keep exact highly-focused reranked chunks without cross-section expansion
-        # (Window expansion stitches unrelated adjacent sections causing topic pollution)
+        # Expand adjacent sibling chunks within the same document version (preserves complete policy details)
+        results = await self._expand_chunk_windows(results, forward_window=5, backward_window=1)
 
         total_retrieval_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -217,9 +243,14 @@ class Retriever:
     async def _expand_chunk_windows(
         self,
         results: list[RankedResult],
-        window_size: int = 1,
+        forward_window: int = 3,
+        backward_window: int = 1,
     ) -> list[RankedResult]:
-        """Expand retrieved chunks with adjacent context from the same document version."""
+        """Expand retrieved chunks with adjacent context from the same document version.
+        
+        Fetches forward sibling chunks (preserving policy details) and backward context
+        while respecting section boundaries and avoiding cross-section topic pollution.
+        """
         if not results or not self.session:
             return results
 
@@ -241,7 +272,7 @@ class Retriever:
                     v_id, idx = chunk_map[cid]
                     if v_id not in needed_by_version:
                         needed_by_version[v_id] = set()
-                    for offset in range(-window_size, window_size + 1):
+                    for offset in range(-backward_window, forward_window + 1):
                         target_idx = idx + offset
                         if target_idx >= 0:
                             needed_by_version[v_id].add(target_idx)
@@ -258,18 +289,52 @@ class Retriever:
                     fetched_chunks[(v_id, c.chunk_index)] = c
 
             expanded_results: list[RankedResult] = []
+            seen_emitted_indices: set[tuple[uuid.UUID, int]] = set()
+
             for r in results:
                 if r.chunk_id not in chunk_map:
                     expanded_results.append(r)
                     continue
 
                 v_id, idx = chunk_map[r.chunk_id]
+                if (v_id, idx) in seen_emitted_indices:
+                    continue
+
+                base_chunk = fetched_chunks.get((v_id, idx))
+                base_section = getattr(base_chunk, "section_title", None) or r.section_title
+
+                base_root = (base_section or "").split("→")[0].strip().lower()
+
                 stitched_parts: list[str] = []
-                for offset in range(-window_size, window_size + 1):
-                    key = (v_id, idx + offset)
-                    if key in fetched_chunks:
-                        adj_chunk = fetched_chunks[key]
-                        stitched_parts.append(adj_chunk.content.strip())
+                # Backward pass
+                for offset in range(-backward_window, 0):
+                    target_idx = idx + offset
+                    key = (v_id, target_idx)
+                    if key in fetched_chunks and key not in seen_emitted_indices:
+                        adj = fetched_chunks[key]
+                        adj_root = (adj.section_title or "").split("→")[0].strip().lower()
+                        # Do not cross major section boundary backwards
+                        if base_root and adj_root and adj_root != base_root:
+                            continue
+                        stitched_parts.append(adj.content.strip())
+                        seen_emitted_indices.add(key)
+
+                # Center chunk
+                stitched_parts.append(r.chunk_text.strip())
+                seen_emitted_indices.add((v_id, idx))
+
+                # Forward pass (subsequent rules / continuation)
+                for offset in range(1, forward_window + 1):
+                    target_idx = idx + offset
+                    key = (v_id, target_idx)
+                    if key in fetched_chunks and key not in seen_emitted_indices:
+                        adj = fetched_chunks[key]
+                        adj_root = (adj.section_title or "").split("→")[0].strip().lower()
+                        # Do not cross major section boundary forwards
+                        if base_root and adj_root and adj_root != base_root:
+                            break
+                        stitched_parts.append(adj.content.strip())
+                        seen_emitted_indices.add(key)
 
                 if stitched_parts:
                     expanded_text = "\n\n".join(dict.fromkeys(stitched_parts))
@@ -282,7 +347,7 @@ class Retriever:
                             document_title=r.document_title,
                             similarity_score=r.similarity_score,
                             rank=r.rank,
-                            section_title=r.section_title,
+                            section_title=base_section,
                             page_number=r.page_number,
                             metadata_=r.metadata_,
                         )
@@ -300,19 +365,19 @@ class Retriever:
         question: str,
         *,
         filters: SearchFilters | None = None,
-        max_total_chunks: int = 40,
+        max_total_chunks: int = 5,
     ) -> list[RankedResult]:
         """Section-aware document retrieval for document summary and detail queries.
 
-        Retrieves representative chunks from ALL major sections/pages of the target document
-        to guarantee comprehensive whole-document coverage.
+        Retrieves representative chunks from major sections of the target document,
+        strictly capped to prevent full-document context dumping.
         """
         from app.retrieval.search import search_document_chunks_structured, SearchHit
 
         hits = await search_document_chunks_structured(
             self.session,
             filters=filters,
-            max_chunks=150,
+            max_chunks=200,
         )
 
         if not hits:
@@ -326,16 +391,21 @@ class Retriever:
             sections.setdefault(sec_name, []).append(hit)
 
         selected_hits: list[SearchHit] = []
-        # First pass: pick up to 2-3 representative chunks from EVERY section
-        for sec_name, sec_hits in sections.items():
-            selected_hits.extend(sec_hits[:3])
-
-        # If total exceeds max_total_chunks, sample evenly across sections
-        if len(selected_hits) > max_total_chunks:
-            per_section = max(1, max_total_chunks // max(1, len(sections)))
-            selected_hits = []
+        if len(sections) == 1:
+            # Single section or uncategorized: sample evenly across all chunks up to max_total_chunks
+            all_hits = list(sections.values())[0]
+            if len(all_hits) <= max_total_chunks:
+                selected_hits = list(all_hits)
+            else:
+                step = len(all_hits) / max_total_chunks
+                selected_hits = [all_hits[int(i * step)] for i in range(max_total_chunks)]
+        else:
+            # Multi-section: sample proportionally across sections
+            per_section = max(2, max_total_chunks // len(sections))
             for sec_name, sec_hits in sections.items():
                 selected_hits.extend(sec_hits[:per_section])
+            if len(selected_hits) > max_total_chunks:
+                selected_hits = selected_hits[:max_total_chunks]
 
         # Dedup and preserve document index order (chunk sequence order)
         seen_hit_ids: set[uuid.UUID] = set()

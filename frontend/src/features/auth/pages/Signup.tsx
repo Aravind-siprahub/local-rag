@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AuthStore } from '@/features/auth/utils/authStore'
 import { authApi } from '@/features/auth/api/authApi'
+import type { User as AuthUser } from '@/features/auth/types/authTypes'
 
 /* ─── helpers ───────────────────────────────────────────────── */
 function FieldError({ msg }: { msg?: string }) {
@@ -289,7 +290,14 @@ export const Signup: React.FC = () => {
       sessionStorage.removeItem('pendingVerificationEmail')
 
       if (res.access_token && res.user) {
-        AuthStore.setSession(res.access_token, res.user)
+        const normalized: AuthUser = {
+          id: res.user.id,
+          email: res.user.email,
+          fullName: res.user.fullName || (res.user as unknown as { full_name?: string }).full_name || res.user.email.split('@')[0],
+          role: (res.user.role as AuthUser['role']) || 'member',
+          createdAt: res.user.createdAt,
+        }
+        AuthStore.setSession(res.access_token, normalized)
         window.dispatchEvent(new Event('auth:change'))
         void navigate('/')
       } else {

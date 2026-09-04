@@ -154,6 +154,29 @@ def _filter_relevant_chunks(query: str, chunks: list[RankedResult]) -> list[Rank
     return filtered
 
 
+def _is_refusal_response(answer: str) -> bool:
+    """Check if an answer text represents a missing information refusal declaration."""
+    if not answer or not answer.strip():
+        return True
+    a = answer.strip().lower()
+    # If the answer provides substantive content with a disclaimer (e.g. "However, it outlines...")
+    if "however, it outlines" in a or "however, the document" in a or "however, it details" in a:
+        return False
+    if (
+        "could not find" in a
+        or "couldn't find" in a
+        or "information not found" in a
+        or "not found in the documents" in a
+        or "the provided document does not specify" in a
+        or "the provided documents do not specify" in a
+        or "not specified in the provided document" in a
+        or "not mentioned in the provided document" in a
+        or "does not contain information" in a
+    ):
+        return True
+    return False
+
+
 class RAGService:
     """End-to-end RAG pipeline: retrieve -> prompt -> generate -> persist.
 
@@ -411,18 +434,14 @@ class RAGService:
             document_titles=document_titles,
         )
 
-        answer_text = agent_state.final_answer or "Information not found in document excerpts."
+        answer_text = agent_state.final_answer or "I couldn't find enough information in the available documents to answer this question."
+        if agent_state.retrieved_documents:
+            from app.rag.validator import validate_and_reconcile_answer
+            answer_text = validate_and_reconcile_answer(question, answer_text, agent_state.retrieved_documents)
 
         # Citation processing from agent state retrieved documents
         effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
-        _refusal_strings = (
-            "information not found in document excerpts",
-            "i could not find this information in the uploaded documents",
-            "i could not find relevant information in the uploaded documents",
-            "the requested information is not found in the documents",
-            "could not find",
-        )
-        if any(r in answer_text.lower() for r in _refusal_strings):
+        if _is_refusal_response(answer_text):
             sources = []
         else:
             raw_sources = _sources_from_chunks(agent_state.retrieved_documents)
@@ -691,6 +710,31 @@ class RAGService:
             chat_session.user_id, question, retrieval_filters, attachments=attachments
         )
 
+        # Carry over active document_id from previous messages in this chat session if not specified in current payload
+        if retrieval_filters.document_id is None and not getattr(retrieval_filters, "document_ids", None):
+            try:
+                recent_msgs = await self.messages.list_by_session(session_id, limit=10)
+                for prev in reversed(recent_msgs):
+                    if prev.attachments:
+                        for prev_att in prev.attachments:
+                            doc_id_val = prev_att.get("document_id")
+                            if doc_id_val:
+                                try:
+                                    retrieval_filters = SearchFilters(
+                                        user_id=retrieval_filters.user_id,
+                                        document_id=uuid.UUID(str(doc_id_val)),
+                                        document_version_id=retrieval_filters.document_version_id,
+                                        search_mode=retrieval_filters.search_mode,
+                                    )
+                                    logger.info("[SESSION DOC RESOLVED] Carried over document_id=%s from session history", doc_id_val)
+                                    break
+                                except ValueError:
+                                    pass
+                    if retrieval_filters.document_id is not None:
+                        break
+            except Exception as hist_exc:
+                logger.warning("[SESSION DOC RESOLUTION FAILED] session_id=%s: %s", session_id, hist_exc)
+
         if image or image_storage_path:
             route = Route.DIRECT
         elif retrieval_filters and (retrieval_filters.document_id or getattr(retrieval_filters, "document_ids", None) or retrieval_filters.document_version_id):
@@ -759,7 +803,12 @@ class RAGService:
 
         yield f"data: {json.dumps({'type': 'status', 'message': 'Searching knowledge base...'})}\n\n"
         
-        search_query = ret_q or norm_q or question.strip()
+        has_doc_filter = (retrieval_filters.document_id is not None) or bool(getattr(retrieval_filters, "document_ids", None))
+        if has_doc_filter:
+            search_query = question.strip()
+        else:
+            search_query = ret_q or norm_q or question.strip()
+
         if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
             logger.info("[SECTION AWARE RETRIEVAL stream] route=%s executing retrieve_section_aware for document_id=%s", route, retrieval_filters.document_id)
             retrieved_chunks = await self.retriever.retrieve_section_aware(
@@ -780,7 +829,6 @@ class RAGService:
             req_id, len(retrieved_chunks), search_query, retrieval_filters.document_id
         )
 
-        has_doc_filter = (retrieval_filters.document_id is not None) or bool(getattr(retrieval_filters, "document_ids", None))
         if not retrieved_chunks and has_doc_filter:
             logger.info("[SCOPED DOC RETRIEVAL stream] 0 chunks found with threshold. Retrying scoped retrieval for document_id=%s with threshold 0.0", retrieval_filters.document_id)
             doc_chunks = await self._retrieve_safely(
@@ -815,42 +863,31 @@ class RAGService:
             if unrestricted_chunks:
                 retrieved_chunks = unrestricted_chunks
 
-        if not retrieved_chunks and retrieval_filters.user_id is not None:
-            logger.info("[RETRIEVAL FALLBACK stream] 0 chunks found for user_id=%s. Retrying globally without user_id filter.", retrieval_filters.user_id)
-            unrestricted_chunks = await self._retrieve_safely(
-                search_query,
-                filters=SearchFilters(
-                    user_id=None,
-                    document_id=None,
-                    document_ids=None,
-                    document_version_id=None,
-                ),
-                top_k=top_k,
-                similarity_threshold=0.10,
-            )
-            if unrestricted_chunks:
-                retrieved_chunks = unrestricted_chunks
-
         # NOTE: Do NOT re-apply cosine similarity_threshold to cross-encoder-reranked scores.
         # The reranker already selected and re-scored the best candidates; scores are not cosine values.
         settings = get_settings()
         seen_keys: set[uuid.UUID] = set()
         deduped_chunks = []
         max_context_chunks = 35 if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL) else getattr(settings, "FINAL_CONTEXT", 10)
-        min_chunk_score = 0.0 if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL) else 0.10
+        # NOTE: Do NOT filter by cross-encoder logit scores here — they are NOT cosine similarities.
+        # Cross-encoder scores (ms-marco-MiniLM-L-12-v2) range -10 to +10.
+        # Threshold filtering was already applied by the retriever before reranking.
         for c in retrieved_chunks:
             if c.chunk_id not in seen_keys:
-                if getattr(c, "similarity_score", 0.0) >= min_chunk_score:
-                    seen_keys.add(c.chunk_id)
-                    deduped_chunks.append(c)
-                    if len(deduped_chunks) >= max_context_chunks:
-                        break
+                seen_keys.add(c.chunk_id)
+                deduped_chunks.append(c)
+                if len(deduped_chunks) >= max_context_chunks:
+                    break
 
-        # Check relevance before sending meta / citations
-        min_relevance_threshold = 0.20 if not getattr(self.retriever, "use_reranker", False) else 0.05
+        # Check relevance before sending meta / citations. Scoped document queries already target the requested document.
+        # NOTE: similarity_score here is a cross-encoder logit (range -10 to +10), NOT cosine similarity.
+        # We only declare "low relevance" if the top score is very negative (model confident of irrelevance).
+        # A threshold of -3.0 catches truly irrelevant matches while preserving borderline but useful chunks.
+        min_relevance_threshold = -3.0
         is_low_relevance = bool(
             deduped_chunks and 
             route in (Route.DOCUMENT_QA, Route.RAG) and 
+            not has_doc_filter and
             deduped_chunks[0].similarity_score < min_relevance_threshold
         )
 
@@ -863,7 +900,31 @@ class RAGService:
             )
             user_explicit_doc = has_doc_filter or _has_explicit_private_doc_ref(norm_q or question) or route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL)
             if user_explicit_doc:
-                fallback_ans = "I could not find relevant information in the uploaded documents to answer your question."
+                is_diagnostic_q = any(cue in (norm_q or question).lower() for cue in (
+                    "what is issue", "why u cannot", "why cannot", "why can't", "why you cannot",
+                    "what i am missing", "getting in document", "see document", "telling answer",
+                    "tell the answer correctly", "not getting", "what am i missing"
+                ))
+                active_doc_title = None
+                if retrieval_filters.document_id and self.session is not None:
+                    try:
+                        from app.models.document import Document
+                        doc_record = await self.session.get(Document, retrieval_filters.document_id)
+                        if doc_record:
+                            active_doc_title = doc_record.title
+                    except Exception:
+                        pass
+
+                if is_diagnostic_q and active_doc_title:
+                    fallback_ans = (
+                        f"I have your document **'{active_doc_title}'** active and loaded in this conversation. "
+                        "I am ready to answer questions directly from its contents! Please ask a specific question "
+                        "about the document (for example: *'What are Our Core Values?'*, *'What is the leave policy?'*, "
+                        "or *'What are the working hours?'*), and I will cite and explain the exact sections for you."
+                    )
+                else:
+                    fallback_ans = "I could not find relevant information in the uploaded documents to answer your question."
+
                 total_ms = int((time.monotonic() - start_mono) * 1000)
                 assistant_msg = await self.messages.create_message(
                     session_id=session_id,
@@ -915,7 +976,6 @@ class RAGService:
                 "page_number": getattr(c, "page_number", None),
             }
             for c in deduped_chunks
-            if getattr(c, "similarity_score", 0.0) > 0.15 or route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL)
         ]
 
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
@@ -1138,20 +1198,23 @@ class RAGService:
                 retrieved_chunks=prompt.retrieved_chunks,
             )
         elif route in (Route.DOCUMENT_QA, Route.RAG) and assembled_context and "=== LOCAL DOCUMENTS ===" not in prompt.user_prompt:
+            prompt_question = question
+
             local_only_user_prompt = (
                 f"=== LOCAL DOCUMENTS ===\n\n"
                 f"{assembled_context}\n\n"
                 f"=== USER QUESTION ===\n\n"
-                f"{question}\n\n"
+                f"{prompt_question}\n\n"
                 f"CRITICAL GROUNDING RULES:\n"
-                f"1. Give a direct, helpful, factual, and complete response summarizing all relevant details present in the local document excerpts above.\n"
-                f"2. When asked what technologies, frameworks, frontend, or backend are used in a project or system, extract and explicitly state the exact technology and framework names (e.g. React, FastAPI, Node.js, PostgreSQL, Ollama, Qdrant, etc.) found in the local document excerpts above, rather than generic conceptual descriptions.\n"
-                f"3. If the question asks to explain or define a general concept, acronym, or industry term (such as 'POC' / 'Proof of Concept'), first define the general concept clearly, and then explain how that concept is specifically used or applied in the local document excerpts above.\n"
-                f"4. State all verified facts, tracking rules, policies, and metrics present in the document context accurately. If the question asks for specific details (such as fixed shift start/end times, lunch breaks, or exact hours) that are NOT explicitly mentioned in the context, state what the document DOES record while clarifying that exact fixed times or figures are not explicitly specified.\n"
-                f"5. Inspect the uploaded document context for matching keywords or concepts from the question. When matching keywords or sections are found, extract and state the full answer directly based on those matching document details.\n"
-                f"6. Do NOT invent or infer unstated facts, shift times, figures, or policies not present in the document context.\n"
-                f"7. If the context contains NO relevant facts whatsoever for the question, state: \"I could not find this information in the local documents.\"\n"
-                f"8. Provide complete, well-formatted, and comprehensive answers covering all parts of the user question (e.g. both Frontend and Backend, all component details, or all policies). Never leave a section header without its content.\n"
+                f"1. The local document excerpts above are your ONLY source of truth. Pretrained knowledge is strictly forbidden for document-based questions.\n"
+                f"2. MULTI-PART QUESTIONS: If the question asks about multiple topics (e.g. topic A and topic B), you MUST address EVERY requested topic:\n"
+                f"   - For topics present in the document: Answer factually using ONLY the document excerpts.\n"
+                f"   - For topics NOT present in the document: Explicitly state: \"The provided document does not specify [Topic].\"\n"
+                f"   - NEVER omit a requested topic, and NEVER invent policies or numbers to make an unsupported topic look complete.\n"
+                f"3. EXACT NUMBERS & TERMINOLOGY: State verified facts accurately. Preserve exact wording, numbers, limits, and time periods (e.g. if the document says \"1 (one) Casual Leave per month\", state exactly that; do NOT change it to \"12 casual leaves annually\").\n"
+                f"4. NO POLICY SUBSTITUTION: Do NOT combine or substitute unrelated sections unless explicitly requested (e.g. do NOT substitute Code of Conduct for Core Values unless the user asks for Code of Conduct).\n"
+                f"5. RELEVANCE: Answer ONLY what the user specifically asked for. Do NOT include unrequested adjacent topics (e.g. do not explain working hours or IT security when answering a leave question).\n"
+                f"6. COMPLETELY UNSUPPORTED: If the document excerpts contain no supporting information for the question, respond: \"The provided document does not specify this information.\"\n"
             )
             prompt = Prompt(
                 system_prompt=prompt.system_prompt,
@@ -1282,11 +1345,25 @@ class RAGService:
             yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
 
         full_raw = "".join(full_answer_chunks).strip()
-        full_answer = sanitize_response(full_raw, question=question) or "I could not find this information in the uploaded documents."
+        full_answer = sanitize_response(full_raw, question=question) or "The provided document does not specify this information."
 
-        # If nothing was streamed (e.g. buffered or thinking block consumed entire stream), yield the sanitized answer now
-        if not streamed_to_client:
+        if deduped_chunks:
+            from app.rag.validator import validate_and_reconcile_answer
+            validated_answer = validate_and_reconcile_answer(question, full_answer, deduped_chunks)
+            if validated_answer != full_answer:
+                if len(validated_answer) > len(full_answer) and validated_answer.startswith(full_answer):
+                    diff_text = validated_answer[len(full_answer):]
+                    yield f"data: {json.dumps({'type': 'token', 'content': diff_text})}\n\n"
+                elif not streamed_to_client:
+                    yield f"data: {json.dumps({'type': 'token', 'content': validated_answer})}\n\n"
+                full_answer = validated_answer
+        elif not streamed_to_client:
             yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
+
+        # If the final validated answer is a refusal, inform frontend to clear citations
+        if _is_refusal_response(full_answer):
+            sources_data = []
+            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
         token_count = len(full_answer.split())  # rough estimate for telemetry
@@ -1299,24 +1376,47 @@ class RAGService:
             latency_ms=total_ms,
         )
 
+        from app.services.citation_service import CitationInput
         effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
-        valid_sources_data = [
-            s for s in sources_data 
-            if s.get("similarity_score", 0.0) >= effective_threshold
-            and not str(s.get("document_title", "")).startswith("[Web]")
-        ]
-        if valid_sources_data:
+        valid_citations: list[CitationInput] = []
+        if not _is_refusal_response(full_answer):
+            seen_cids: set[uuid.UUID] = set()
+            max_cit = getattr(settings, "FINAL_CONTEXT", 3)
+            for s in sources_data:
+                # Exclude web sources which do not exist in document_chunks table
+                if s.get("source_type") == "web" or s.get("url") or str(s.get("document_title", "")).startswith("[Web]"):
+                    continue
+
+                raw_cid = s.get("chunk_id")
+                if not raw_cid:
+                    continue
+                try:
+                    cid = uuid.UUID(str(raw_cid)) if not isinstance(raw_cid, uuid.UUID) else raw_cid
+                except (ValueError, TypeError):
+                    continue
+
+                if cid in seen_cids:
+                    continue
+                seen_cids.add(cid)
+
+                raw_score = s.get("similarity_score")
+                score: float = float(raw_score) if raw_score is not None else 0.0
+                if score < effective_threshold:
+                    continue
+
+                valid_citations.append({
+                    "chunk_id": cid,
+                    "rank": len(valid_citations) + 1,
+                    "similarity_score": score,
+                })
+                if len(valid_citations) >= max_cit:
+                    break
+
+        if valid_citations:
             try:
                 await self.citations.create_citations_for_message(
                     assistant_message.id,
-                    [
-                        {
-                            "chunk_id": uuid.UUID(s["chunk_id"]) if isinstance(s["chunk_id"], str) else s["chunk_id"],
-                            "rank": s["rank"],
-                            "similarity_score": s["similarity_score"],
-                        }
-                        for s in valid_sources_data
-                    ],
+                    valid_citations,
                 )
             except Exception as cit_exc:
                 logger.warning("[CITATION PERSISTENCE SKIPPED] message_id=%s: %s", assistant_message.id, cit_exc)
@@ -1507,6 +1607,23 @@ class RAGService:
                             document_version_id=base_filters.document_version_id,
                             search_mode=base_filters.search_mode,
                         )
+
+            # 4. Fallback when user query explicitly includes natural document cues ("in document", "inside document", "see document", etc.)
+            from app.rag.intent_router import _has_explicit_private_doc_ref
+            if _has_explicit_private_doc_ref(q_lower) or any(cue in q_lower for cue in ("in document", "inside document", "inside of document", "see document", "from document", "this document", "the document", "getting in document")):
+                ready_docs = [d for d in all_docs if getattr(d, "status", None) == DocumentStatus.READY or getattr(d, "status", None) == "READY"]
+                if not ready_docs:
+                    ready_docs = list(all_docs)
+                if ready_docs:
+                    # Select the most recent ready document
+                    best_doc = sorted(ready_docs, key=lambda d: getattr(d, "created_at", None) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[0]
+                    logger.info("[EXPLICIT DOC CUE RESOLVED] Bound to ready document '%s' (%s)", best_doc.title, best_doc.id)
+                    return SearchFilters(
+                        user_id=base_filters.user_id,
+                        document_id=best_doc.id,
+                        document_version_id=base_filters.document_version_id,
+                        search_mode=base_filters.search_mode,
+                    )
         except Exception as d_exc:
             logger.warning("[PROJECT ENTITY MATCH FAILED] %s", d_exc)
 

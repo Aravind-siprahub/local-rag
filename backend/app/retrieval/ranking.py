@@ -255,6 +255,7 @@ def rerank_cross_encoder(
             AttributeCategory.POLICY_EXIT,
             AttributeCategory.POLICY_IT_SECURITY,
             AttributeCategory.POLICY_GENERAL,
+            AttributeCategory.CULTURE_VALUES,
         }
         if intent.category in hr_categories:
             has_hr_docs = any(
@@ -271,11 +272,73 @@ def rerank_cross_encoder(
                         adjusted.append((score, cand))
                 scored_candidates = sorted(adjusted, key=lambda item: item[0], reverse=True)
 
+        # Culture & Core Values boosting (prevents small cross-encoders from dropping bullet lists)
+        is_culture_query = intent.category == AttributeCategory.CULTURE_VALUES or any(
+            kw in query_lower for kw in ("core value", "core values", "company values", "our values", "culture")
+        )
+        if is_culture_query:
+            adjusted = []
+            for score, cand in scored_candidates:
+                sec_lower = (cand.section_title or "").lower()
+                text_lower = cand.chunk_text.lower()
+                if "core value" in sec_lower or "core values" in sec_lower or "our values" in sec_lower:
+                    score += 0.85
+                elif any(kw in sec_lower for kw in ("values", "conduct", "culture")):
+                    score += 0.40
+                if any(kw in text_lower for kw in ("integrity –", "integrity -", "accountability –", "accountability -", "collaboration –", "excellence –", "respect –", "core values")):
+                    score += 0.50
+                adjusted.append((score, cand))
+            scored_candidates = sorted(adjusted, key=lambda item: item[0], reverse=True)
+
+        # Leave Policy boosting
+        is_leave_query = intent.category == AttributeCategory.POLICY_LEAVE or any(
+            kw in query_lower for kw in ("leave policy", "leave rules", "casual leave", "leave entitlement")
+        )
+        if is_leave_query:
+            adjusted = []
+            for score, cand in scored_candidates:
+                sec_lower = (cand.section_title or "").lower()
+                text_lower = cand.chunk_text.lower()
+                if "leave policy" in sec_lower or "casual leave" in sec_lower or "leave application" in sec_lower:
+                    score += 0.60
+                elif "leave" in sec_lower:
+                    score += 0.35
+                if any(kw in text_lower for kw in ("casual leave", "leave entitlement", "carry forward", "leave utilization")):
+                    score += 0.40
+                adjusted.append((score, cand))
+            scored_candidates = sorted(adjusted, key=lambda item: item[0], reverse=True)
+
+        # General section title alignment boost
+        raw_tokens = [t for t in query.lower().split() if t not in _STOP_WORDS and len(t) > 2]
+        if raw_tokens:
+            adjusted = []
+            for score, cand in scored_candidates:
+                sec_lower = (cand.section_title or "").lower()
+                matching_sec_tokens = sum(1 for t in raw_tokens if t in sec_lower)
+                if matching_sec_tokens >= 2:
+                    score += 0.35
+                elif matching_sec_tokens == 1:
+                    score += 0.15
+                adjusted.append((score, cand))
+            scored_candidates = sorted(adjusted, key=lambda item: item[0], reverse=True)
+
         top_score = scored_candidates[0][0]
         if top_score >= 0.25:
             # Filter out near-zero/distractor chunks when top chunk has high relevance
             relevance_floor = max(0.01 if is_tech_query else 0.04, top_score * (0.04 if is_tech_query else 0.08))
-            scored_candidates = [item for item in scored_candidates if item[0] >= relevance_floor]
+
+            def _is_protected(c: RankedResult) -> bool:
+                sec = (c.section_title or "").lower()
+                if is_culture_query and any(k in sec for k in ("value", "conduct", "culture")):
+                    return True
+                if is_leave_query and "leave" in sec:
+                    return True
+                return False
+
+            scored_candidates = [
+                item for item in scored_candidates
+                if item[0] >= relevance_floor or _is_protected(item[1])
+            ]
 
     reranked: list[RankedResult] = []
     for new_rank, (score, cand) in enumerate(scored_candidates[:final_top_k], 1):

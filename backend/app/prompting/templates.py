@@ -12,19 +12,18 @@ USER_PROMPT_WITH_CONTEXT = (
     "{context_header}:\n\n"
     "{context}\n\n"
     "{question_header} {question}\n\n"
-    "CRITICAL RULES FOR YOUR RESPONSE:\n"
-    "1. Answer ONLY what the user specifically asked for. Focus strictly and exclusively on the exact topic of the question.\n"
-    "2. Do NOT include unrequested adjacent topics (e.g., do NOT explain working hours, shift timings, IT security, or codes of conduct when answering a leave question).\n"
-    "3. Do NOT add meta-notes, disclaimers, or sections like 'Important Note', 'Note on Provided Context', or 'The document does not mention...'.\n"
-    "4. State verified facts from the context directly, clearly, and concisely in clean bullet points.\n"
-    "5. Do NOT invent or infer unstated facts, shift times, figures, or policies not present in the document context.\n"
-    "6. Do NOT list documents, section numbers, or page numbers.\n"
-    "7. Do NOT output self-talk, reasoning, or phrases like 'Let\\'s write', 'We are to be', 'Note that', or 'The key is'.\n"
-    "8. If the context contains NO relevant facts whatsoever for the question, say: \"I could not find relevant information in the uploaded documents to answer your question.\"\n"
-    "9. Never output internal pipeline explanations (such as how OCR, text detection, PaddleOCR, parsing engines, or RAG works) unless the user explicitly asked about the technical implementation of OCR or parsing.\n"
-    "10. If the document context contains technical architecture or OCR specifications from project documents that do not directly answer the user's question, IGNORE them.\n"
-    "11. If the retrieved context contains no relevant facts to answer the specific question, do NOT summarize unrelated sections; respond: \"I could not find relevant information in the uploaded documents to answer your question.\"\n"
-    "12. PROJECT ISOLATION: When answering for a specific project, application, or system named in the question (such as AIRIS, SipraOne, SipraHub, or Talk to My Data), verify that the retrieved excerpts explicitly describe THAT project. Never borrow, mix in, or attribute technologies, components, or policies from other documents or projects.\n"
+    "CRITICAL GROUNDING RULES:\n"
+    "1. The retrieved document context is your ONLY source of truth. Pretrained knowledge is strictly forbidden for document-based questions.\n"
+    "2. MULTI-PART QUESTIONS: If the question asks about multiple topics (e.g. topic A and topic B), you MUST address EVERY requested topic:\n"
+    "   - For topics present in the context: Answer factually using ONLY the provided excerpts.\n"
+    "   - For topics NOT present in the context: Explicitly state: \"The provided document does not specify [Topic].\"\n"
+    "   - NEVER omit a requested topic, and NEVER invent policies or numbers to fill in an absent topic.\n"
+    "3. EXACT NUMBERS & TERMINOLOGY: Preserve exact wording, numbers, limits, and time periods from the document (e.g. if the document states \"1 (one) Casual Leave per month\", state exactly that; do NOT change it to \"12 casual leaves annually\").\n"
+    "4. NO POLICY SUBSTITUTION: Do NOT combine or substitute unrelated sections (e.g. do NOT substitute Code of Conduct for Core Values unless explicitly asked).\n"
+    "5. RELEVANCE: Answer ONLY what the user asked. Do NOT include unrequested adjacent topics (e.g. do not explain working hours or IT security when asked about leave).\n"
+    "6. FORMAT: Present verified facts directly, clearly, and concisely in clean bullet points without self-talk or reasoning monologue.\n"
+    "7. COMPLETELY UNSUPPORTED: If the document context contains no supporting information for the question or is insufficient, respond: \"I couldn't find enough information in the available documents to answer this question.\"\n"
+    "8. PROJECT ISOLATION: When answering for a specific project (such as AIRIS, SipraOne, SipraHub, or Talk to My Data), verify that the retrieved excerpts explicitly describe THAT project. Never mix in or attribute technologies or policies from other documents or projects.\n"
 )
 
 USER_PROMPT_WITHOUT_CONTEXT = (
@@ -32,7 +31,7 @@ USER_PROMPT_WITHOUT_CONTEXT = (
     "No document excerpts were available.\n\n"
     "Question:\n\n{question}\n\n"
     "CRITICAL GROUNDING RULES:\n"
-    "No document context was retrieved for this query. If the question asks for information from uploaded documents or project specifications, or if no relevant context exists, respond: \"Information not found in document excerpts.\""
+    "No document context was retrieved for this query. If the question asks for information from uploaded documents or project specifications, or if no relevant context exists, respond: \"I couldn't find enough information in the available documents to answer this question.\""
 )
 
 

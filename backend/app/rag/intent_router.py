@@ -83,6 +83,30 @@ _DOC_QA_PHRASES = (
     "uploaded document",
     "uploaded documents",
     "knowledge base",
+    "in document",
+    "in documents",
+    "inside document",
+    "inside of document",
+    "inside the document",
+    "inside of the document",
+    "see document",
+    "see the document",
+    "from document",
+    "from documents",
+    "getting in document",
+    "get in document",
+    "tell answer in document",
+    "tell the answer in document",
+    "tell from document",
+    "answer from document",
+    "answer in document",
+    "question inside document",
+    "question inside of document",
+    "read document",
+    "check document",
+    "look in document",
+    "what is in document",
+    "what is inside the document",
     "in my document",
     "in my documents",
     "in the document",
@@ -124,8 +148,6 @@ _DOC_QA_PHRASES = (
     "local only",
     "siprahub",
     "sipra hub",
-    "sipraone",
-    "sipra",
     "talk to my data",
     "working hours",
     "probation period",
@@ -707,7 +729,12 @@ def _has_explicit_private_doc_ref(lower: str) -> bool:
         "in my document", "in my doc", "in my file", "in uploaded", "from my document",
         "from uploaded", "my uploaded", "my local documents", "local documents",
         "local document", "local rag", "local codebase", "local files", "local project",
-        "local documentation", "in my local", "my local", "my documents only", "local only"
+        "local documentation", "in my local", "my local", "my documents only", "local only",
+        "in document", "in documents", "inside document", "inside of document", "inside the document",
+        "inside of the document", "see document", "see the document", "from document", "from the document",
+        "getting in document", "tell the answer in document", "tell answer in document",
+        "answer inside document", "question inside document", "question inside of document",
+        "read document", "check document", "look in document", "this document", "the document",
     )
     return any(cue in lower for cue in private_doc_cues)
 def _is_document_detail(lower: str) -> bool:
@@ -765,7 +792,12 @@ def classify(
     lower = norm.lower() if norm else text.lower()
 
     # Explicit override checks (Priority 1 & Priority 2)
-    is_web_only = any(p in lower for p in ("use web search only", "web search only", "ignore my local documents", "ignore local documents", "without local documents"))
+    is_web_only = any(p in lower for p in (
+        "use web search only", "web search only", "ignore my local documents",
+        "ignore local documents", "without local documents", "search online for",
+        "search the web for", "search web for", "search internet for",
+        "search google for", "search github for",
+    ))
     is_local_only = any(p in lower for p in ("only my local", "do not use web search", "dont use web search", "don't use web search", "ignore web search", "without web search", "no web search", "my documents only", "local only", "according to my local", "answer this using only my local"))
 
     is_generic_def_without_cues = bool(
@@ -825,6 +857,15 @@ def classify(
     elif is_explicit_hybrid:
         route = Route.HYBRID
         reason = "hybrid_comparison"
+    elif _is_document_list(lower):
+        route = Route.DOCUMENT_LIST
+        reason = "document_list"
+    elif _is_document_metadata(lower):
+        route = Route.DOCUMENT_METADATA
+        reason = "document_metadata"
+    elif _is_calculator(text, lower):
+        route = Route.CALCULATOR
+        reason = "calculator"
     elif is_doc_q or has_private_doc:
         if _is_document_detail(lower):
             route = Route.DOCUMENT_DETAIL
@@ -835,15 +876,6 @@ def classify(
         else:
             route = Route.DOCUMENT_QA
             reason = "document_qa_corpus_active"
-    elif _is_document_metadata(lower):
-        route = Route.DOCUMENT_METADATA
-        reason = "document_metadata"
-    elif _is_document_list(lower):
-        route = Route.DOCUMENT_LIST
-        reason = "document_list"
-    elif _is_calculator(text, lower):
-        route = Route.CALCULATOR
-        reason = "calculator"
     elif _is_datetime_query(lower):
         route = Route.GENERIC_CHAT
         reason = "datetime_query"

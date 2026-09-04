@@ -7,7 +7,7 @@ export interface User {
   email: string
   fullName: string
   avatarUrl?: string
-  role?: 'user' | 'admin'
+  role?: 'admin' | 'hr' | 'user' | 'member'
   createdAt?: string
 }
 

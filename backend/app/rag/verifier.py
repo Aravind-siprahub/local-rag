@@ -35,7 +35,13 @@ def verify_answer(
     ans_lower = ans_clean.lower()
 
     # Always valid if the model correctly returned the standard fallback
-    if "requested information is not found" in ans_lower or "could not find this information" in ans_lower:
+    if (
+        "requested information is not found" in ans_lower
+        or "could not find this information" in ans_lower
+        or "couldn't find enough information" in ans_lower
+        or "could not find enough information" in ans_lower
+        or "the provided document does not specify" in ans_lower
+    ):
         return VerificationResult(is_valid=True, reason="Valid fallback answer")
 
     context_text = " ".join(c.chunk_text for c in context_chunks).lower()

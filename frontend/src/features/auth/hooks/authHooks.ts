@@ -23,6 +23,26 @@ export function useAuth() {
 
     window.addEventListener('auth:unauthorized', handleAuthChange)
     window.addEventListener('auth:change', handleAuthChange)
+
+    // Sync fresh profile from backend /auth/me to ensure user role is always up-to-date
+    if (AuthStore.getAccessToken()) {
+      authApi.getCurrentUser().then((profile) => {
+        if (profile) {
+          const normalized: User = {
+            id: profile.id,
+            email: profile.email,
+            fullName: profile.fullName || (profile as unknown as { full_name?: string }).full_name || profile.email.split('@')[0],
+            role: (profile.role as User['role']) || 'member',
+            createdAt: profile.createdAt,
+          }
+          AuthStore.setUser(normalized)
+          setUser(normalized)
+        }
+      }).catch(() => {
+        // Ignore network failure on background sync
+      })
+    }
+
     return () => {
       window.removeEventListener('auth:unauthorized', handleAuthChange)
       window.removeEventListener('auth:change', handleAuthChange)
