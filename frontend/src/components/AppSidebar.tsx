@@ -17,7 +17,7 @@ import { ROUTES } from '@/routes/paths'
 const navItems = [
   { to: ROUTES.dashboard, label: 'Dashboard', icon: LayoutDashboardIcon },
   { to: ROUTES.documents, label: 'Documents', icon: FileTextIcon },
-  { to: ROUTES.upload, label: 'Upload', icon: UploadIcon },
+  { to: ROUTES.upload, label: 'Upload', icon: UploadIcon, adminOnly: true },
   { to: ROUTES.chat, label: 'Chat', icon: MessageSquareIcon },
   { to: ROUTES.settings, label: 'Settings', icon: SettingsIcon },
 ] as const
@@ -25,11 +25,14 @@ const navItems = [
 export function AppSidebar() {
   const navigate = useNavigate()
   const { user, logout } = useAuth()
+  const isAdmin = user?.role?.toLowerCase() === 'admin'
 
   const handleLogout = () => {
     logout()
     navigate('/login', { replace: true })
   }
+
+  const visibleNavItems = navItems.filter((item) => !('adminOnly' in item && item.adminOnly) || isAdmin)
 
   return (
     <aside className="glass-panel flex h-full w-full flex-col gap-5 p-4 lg:w-56">
@@ -43,7 +46,7 @@ export function AppSidebar() {
       </div>
 
       <nav className="flex flex-1 flex-col gap-1">
-        {navItems.map(({ to, label, icon: Icon }) => (
+        {visibleNavItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}

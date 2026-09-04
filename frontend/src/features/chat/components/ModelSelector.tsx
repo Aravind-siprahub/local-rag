@@ -22,8 +22,11 @@ export function ModelSelector({
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Auto-switch / lock to vision model if image is attached
-  const activeModelId = hasImageAttached ? 'qwen3-vl:4b' : selectedModel
+  // Auto-switch to vision model if image is attached and current model is text-only
+  const isSelectedVision = AVAILABLE_MODELS.find((m) => m.id === selectedModel)?.type === 'vision'
+  const activeModelId = hasImageAttached
+    ? (isSelectedVision ? selectedModel : 'local-rag-vision')
+    : selectedModel
   const currentModel =
     AVAILABLE_MODELS.find((m) => m.id === activeModelId) || AVAILABLE_MODELS[0]
 
@@ -62,7 +65,7 @@ export function ModelSelector({
         )}
         title={
           hasImageAttached
-            ? 'Automatically using qwen3-vl:4b for image analysis'
+            ? `Using ${currentModel.name} for image analysis`
             : 'Select AI Model'
         }
         aria-expanded={isOpen}
@@ -95,7 +98,7 @@ export function ModelSelector({
             </span>
             {hasImageAttached && (
               <span className="text-[10px] bg-primary/15 text-primary px-1.5 py-0.5 rounded font-medium">
-                Auto Vision
+                Vision Mode
               </span>
             )}
           </div>
@@ -103,7 +106,7 @@ export function ModelSelector({
           <div className="space-y-0.5" role="listbox">
             {AVAILABLE_MODELS.map((model) => {
               const isSelected = model.id === currentModel.id
-              const isAutoVisionLocked = hasImageAttached && model.id !== 'qwen3-vl:4b'
+              const isAutoVisionLocked = hasImageAttached && model.type !== 'vision'
 
               return (
                 <button
@@ -151,7 +154,7 @@ export function ModelSelector({
           
           {hasImageAttached && (
             <div className="mt-1.5 pt-1.5 border-t border-border/40 text-[10px] text-muted-foreground/80 leading-tight">
-              Backend automatically routes to the vision model when an image is present.
+              Select an available vision model (OmniRoute or Local) for image analysis.
             </div>
           )}
         </div>

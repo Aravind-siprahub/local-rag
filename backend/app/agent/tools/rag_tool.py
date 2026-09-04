@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.tools.base import Tool, ToolInput, ToolMetadata, ToolOutput
 from app.retrieval.retriever import Retriever
+from app.retrieval.ranking import RankedResult
 from app.retrieval.search import SearchFilters
 from app.rag.service import _filter_relevant_chunks
 from app.core.config import get_settings
@@ -51,10 +52,14 @@ class DocumentRAGTool(Tool):
 
         route_str = params.get("route")
         from app.rag.intent_router import _is_document_summary, _is_document_detail, Route
+        from app.rag.query_understanding import extract_query_intent, AttributeCategory
+        intent = extract_query_intent(query)
+        is_policy_overview = intent.category == AttributeCategory.POLICY_GENERAL
         is_summary_or_detail = (
             route_str in (Route.DOCUMENT_SUMMARY.value, Route.DOCUMENT_DETAIL.value, "DOCUMENT_SUMMARY", "DOCUMENT_DETAIL")
             or _is_document_summary(query.lower())
             or _is_document_detail(query.lower())
+            or is_policy_overview
         )
 
         try:
@@ -64,7 +69,7 @@ class DocumentRAGTool(Tool):
                 retrieved_chunks = await self.retriever.retrieve_section_aware(
                     query,
                     filters=filters,
-                    max_total_chunks=35 if (_is_document_detail(query.lower()) or route_str == "DOCUMENT_DETAIL") else 25,
+                    max_total_chunks=5,
                 )
             else:
                 retrieved_chunks = await self.retriever.retrieve(
@@ -74,33 +79,53 @@ class DocumentRAGTool(Tool):
                     similarity_threshold=similarity_threshold,
                 )
 
-            # Fallback 1: Retrieve without document_id restriction if 0 chunks hit
-            if not retrieved_chunks and (document_id or document_ids or document_version_id):
-                logger.info("[RAG TOOL] 0 chunks with document filter. Retrying with global filters.")
-                relaxed_filters = SearchFilters(user_id=user_id)
+            has_doc_filter = bool(document_id or document_ids or document_version_id)
+            # Fallback 1: If scoped to a document and 0 chunks hit, retry on the SAME document with relaxed threshold
+            if not retrieved_chunks and has_doc_filter:
+                logger.info("[RAG TOOL] 0 chunks with document filter. Retrying scoped retrieval with relaxed threshold.")
                 retrieved_chunks = await self.retriever.retrieve(
                     query,
-                    filters=relaxed_filters,
+                    filters=filters,
                     top_k=top_k,
-                    similarity_threshold=similarity_threshold,
+                    similarity_threshold=0.15,
                 )
 
-            # Fallback 2: Global cross-user retry if 0 chunks hit for user_id
-            if not retrieved_chunks and user_id is not None:
+            # Fallback 2: Global cross-user retry ONLY if no document filter was requested
+            if not retrieved_chunks and not has_doc_filter and user_id is not None:
                 logger.info("[RAG TOOL] 0 chunks for user_id=%s. Retrying globally.", user_id)
                 unrestricted_filters = SearchFilters(user_id=None)
                 retrieved_chunks = await self.retriever.retrieve(
                     query,
                     filters=unrestricted_filters,
                     top_k=top_k,
-                    similarity_threshold=0.10,
+                    similarity_threshold=0.15,
                 )
 
-            # Stage 2: Relevance Gate Filtering
-            relevant_chunks = _filter_relevant_chunks(query, retrieved_chunks)
-            if not relevant_chunks and retrieved_chunks:
-                logger.info("[RAG TOOL] Relevance filter dropped all chunks. Preserving raw retrieved chunks as fallback.")
-                relevant_chunks = retrieved_chunks
+            # Stage 2: Centralized Context Building (Filter, Dedup, Sort, Cap)
+            # IMPORTANT: After cross-encoder reranking, similarity_score holds LOGIT values
+            # (range: -10 to +10 for ms-marco cross-encoders), NOT cosine similarity [0,1].
+            # We must NOT apply a cosine threshold here — pass 0.0 to bypass threshold filtering.
+            # The retriever already applied the cosine threshold before reranking.
+            from app.rag.context_builder import ContextBuilder
+            ctx_builder = ContextBuilder(similarity_threshold=0.0, max_chunks=8, max_context_chars=12000)
+            ctx_res = ctx_builder.build_context(retrieved_chunks, query=query)
+
+            relevant_chunks: list[RankedResult] = []
+            if ctx_res.has_context:
+                for sel in ctx_res.selected_chunks:
+                    relevant_chunks.append(
+                        RankedResult(
+                            chunk_id=sel.chunk_id,
+                            chunk_text=sel.chunk_text,
+                            document_id=sel.document_id,
+                            document_version_id=sel.document_version_id,
+                            similarity_score=sel.similarity_score,
+                            rank=sel.rank,
+                            document_title=sel.document_title or "",
+                            section_title=sel.section_title,
+                            page_number=sel.page_number,
+                        )
+                    )
 
 
             # Stage 3: Evidence Extraction
@@ -112,7 +137,7 @@ class DocumentRAGTool(Tool):
                     "document_title": getattr(c, "document_title", "Uploaded Document"),
                     "section_title": getattr(c, "section_title", "Document Section"),
                     "content": c.chunk_text,
-                    "relevance_score": float(c.similarity_score),
+                    "relevance_score": c.similarity_score,
                 })
 
             duration_ms = int((time.monotonic() - start_mono) * 1000)

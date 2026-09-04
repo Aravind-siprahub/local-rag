@@ -154,6 +154,29 @@ def _filter_relevant_chunks(query: str, chunks: list[RankedResult]) -> list[Rank
     return filtered
 
 
+def _is_refusal_response(answer: str) -> bool:
+    """Check if an answer text represents a missing information refusal declaration."""
+    if not answer or not answer.strip():
+        return True
+    a = answer.strip().lower()
+    # If the answer provides substantive content with a disclaimer (e.g. "However, it outlines...")
+    if "however, it outlines" in a or "however, the document" in a or "however, it details" in a:
+        return False
+    if (
+        "could not find" in a
+        or "couldn't find" in a
+        or "information not found" in a
+        or "not found in the documents" in a
+        or "the provided document does not specify" in a
+        or "the provided documents do not specify" in a
+        or "not specified in the provided document" in a
+        or "not mentioned in the provided document" in a
+        or "does not contain information" in a
+    ):
+        return True
+    return False
+
+
 class RAGService:
     """End-to-end RAG pipeline: retrieve -> prompt -> generate -> persist.
 
@@ -222,8 +245,10 @@ class RAGService:
 
         if image or image_storage_path:
             vision_model = get_settings().ollama_vision_model
-            supports_vision_fn = getattr(self.llm_client, "supports_vision", None)
-            logger.info('[VISION GATE] checking vision capability model=%s has_fn=%s', vision_model, supports_vision_fn is not None)
+            from app.llm.factory import get_llm_client
+            vision_client = get_llm_client(model=vision_model)
+            supports_vision_fn = getattr(vision_client, "supports_vision", None)
+            logger.info('[VISION GATE] checking vision capability model=%s has_fn=%s client=%s', vision_model, supports_vision_fn is not None, type(vision_client).__name__)
             has_vision = await supports_vision_fn(model=vision_model) if supports_vision_fn else False
             logger.info('[VISION GATE] vision_check_result=%s model=%s', has_vision, vision_model)
             if not has_vision:
@@ -265,12 +290,27 @@ class RAGService:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
 
-        user_message = await self.messages.create_message(
-            session_id=session_id,
-            role=MessageRole.USER,
-            content=question.strip(),
-            attachments=attachments if len(attachments) > 0 else None,
-        )
+        # Check if this request is regenerating an existing interaction in this session
+        user_message = None
+        existing_msgs = await self.messages.list_by_session(session_id, limit=20)
+        if existing_msgs:
+            last_msg = existing_msgs[-1]
+            if last_msg.role == MessageRole.USER and last_msg.content.strip() == question.strip():
+                user_message = last_msg
+            elif last_msg.role == MessageRole.ASSISTANT and len(existing_msgs) >= 2:
+                prev_msg = existing_msgs[-2]
+                if prev_msg.role == MessageRole.USER and prev_msg.content.strip() == question.strip():
+                    user_message = prev_msg
+                    # Delete the outdated assistant message and its citations so the new response replaces it cleanly
+                    await self.messages.delete_message(last_msg.id)
+
+        if user_message is None:
+            user_message = await self.messages.create_message(
+                session_id=session_id,
+                role=MessageRole.USER,
+                content=question.strip(),
+                attachments=attachments if len(attachments) > 0 else None,
+            )
 
         if not image and not image_storage_path and attachments:
             for att in attachments:
@@ -284,6 +324,29 @@ class RAGService:
                     image_mime = image_mime or (mime if mime.startswith("image/") else f"image/{ext if ext != 'jpg' else 'jpeg'}")
                     logger.info("[IMAGE ATTACHMENT RESOLVED] Found image attachment path=%s mime=%s", image_storage_path, image_mime)
                     break
+
+        if not image and not image_storage_path:
+            lowered_q = question.lower() if question else ""
+            image_cue = any(cue in lowered_q for cue in ("this image", "the image", "this picture", "the picture", "this photo", "the photo", "attached image", "the file", "this file")) or any(
+                str(att.get("mime_type") or "").startswith("image/") or any(str(att.get("filename") or "").lower().endswith(f".{ext}") for ext in ("png", "jpg", "jpeg", "webp"))
+                for att in attachments
+            )
+            if image_cue:
+                recent_msgs = await self.messages.list_by_session(session_id, limit=6)
+                for prev in reversed(recent_msgs):
+                    if prev.attachments:
+                        for prev_att in prev.attachments:
+                            sp = prev_att.get("storage_path")
+                            mime = str(prev_att.get("mime_type") or "").lower()
+                            fname = str(prev_att.get("filename") or "").lower()
+                            if sp and (mime.startswith("image/") or any(fname.endswith(f".{ext}") for ext in ("png", "jpg", "jpeg", "webp"))):
+                                image_storage_path = sp
+                                image_name = image_name or prev_att.get("filename")
+                                image_mime = image_mime or mime
+                                logger.info("[IMAGE CONTEXT RESOLVED] Found previous session image storage_path=%s", image_storage_path)
+                                break
+                    if image_storage_path:
+                        break
 
         if image_storage_path and not image:
             from app.storage import get_storage_service
@@ -371,15 +434,14 @@ class RAGService:
             document_titles=document_titles,
         )
 
-        answer_text = agent_state.final_answer or "Information not found in document excerpts."
+        answer_text = agent_state.final_answer or "I couldn't find enough information in the available documents to answer this question."
+        if agent_state.retrieved_documents:
+            from app.rag.validator import validate_and_reconcile_answer
+            answer_text = validate_and_reconcile_answer(question, answer_text, agent_state.retrieved_documents)
 
         # Citation processing from agent state retrieved documents
         effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
-        _refusal_strings = (
-            "information not found in document excerpts",
-            "i could not find this information in the uploaded documents",
-        )
-        if any(r in answer_text.lower() for r in _refusal_strings):
+        if _is_refusal_response(answer_text):
             sources = []
         else:
             raw_sources = _sources_from_chunks(agent_state.retrieved_documents)
@@ -447,14 +509,16 @@ class RAGService:
         )
 
 
-    def _generate_focused_web_query(self, question: str, local_chunks: list) -> str:
+    def _generate_focused_web_query(self, question: str, local_chunks: list | None = None) -> str:
         """Generate a clean, focused web search query from local context or key user intent."""
         import re
-        q_lower = (question or "").lower()
+        q_raw = (question or "").strip()
+        q_lower = q_raw.lower()
         if "python" in q_lower and ("latest" in q_lower or "version" in q_lower or "official" in q_lower):
             return "Python latest stable release version site:python.org"
         
-        blob = (question or "") + " " + " ".join(getattr(c, "chunk_text", "") for c in local_chunks[:3])
+        chunks = local_chunks or []
+        blob = q_raw + " " + " ".join(getattr(c, "chunk_text", "") for c in chunks[:3])
         provider_match = re.search(r"\b(omniroute|openrouter|nvidia|ollama|qwen3?|nemotron|llama\d?)\b", blob, re.IGNORECASE)
         model_match = re.search(r"\b(omniroute/auto|auto/fast|nemotron-4-340b|qwen3:8b)\b", blob, re.IGNORECASE)
 
@@ -463,13 +527,25 @@ class RAGService:
             mod = model_match.group(1) if model_match else ""
             return f"{prov} {mod} official documentation latest api".strip()
 
+        # Split at sentence boundaries or formatting instructions
+        first_part = re.split(r"(?i)\b(?:give me|please provide|provide me|list out|list 5|list \d+|summarize in|tell me what|and paste)\b", q_raw)[0].strip()
+        target = first_part or q_raw
         clean = re.sub(
-            r"(?i)\b(find|search|compare|local documents|my local|latest information|tell me|identify|using my|the web for|then search|contradictions|citations|according to|based on)\b",
+            r"(?i)\b(?:verify\s+(?:whether|if)\s+(?:this\s+)?(?:latest\s+)?(?:ai\s+)?claim\s+is\s+true\s+(?:using\s+(?:current\s+)?(?:web\s+)?sources)?[:\s]*)\b",
             "",
-            question or "",
+            target,
         )
+        clean = re.sub(
+            r"(?i)\b(?:can\s+you\s+|please\s+)?(?:look\s*up|search\s+(?:the\s+web\s+for|web\s+for|online\s+for|for)?|find\s+online|find\s+information\s+(?:about|on)?|tell\s+me|what\s+are|what\s+is|summarize|compare|local\s+documents|my\s+local|latest\s+information|using\s+my|the\s+web\s+for|then\s+search|contradictions|citations|according\s+to|based\s+on|siprahub(?:'s)?|sipraone(?:'s)?|sipra)\b",
+            "",
+            clean,
+        )
+        clean = re.sub(r"(?i)\b(?:with\s+headline|short\s+summary|headline|publication\s+date|and\s+a\s+summary|source|sources)\b", "", clean)
+        clean = re.sub(r"[?!.,;:]+", " ", clean)
         clean = re.sub(r"\s+", " ", clean).strip()
-        result_str = clean[:100] or (question[:100] if question else "") or "query"
+        if not clean:
+            clean = "current industry standards for IT companies WFH policy"
+        result_str = clean[:120] or (q_raw[:120] if q_raw else "") or "query"
         return result_str
 
 
@@ -517,6 +593,30 @@ class RAGService:
                     )
                     break
 
+        if not image and not image_storage_path:
+            lowered_q = question.lower() if question else ""
+            image_cue = any(cue in lowered_q for cue in ("this image", "the image", "this picture", "the picture", "this photo", "the photo", "attached image", "the file", "this file")) or any(
+                str(att.get("mime_type") or "").startswith("image/") or any(str(att.get("filename") or "").lower().endswith(f".{ext}") for ext in ("png", "jpg", "jpeg", "webp"))
+                for att in attachments
+            )
+            if image_cue:
+                recent_msgs = await self.messages.list_by_session(session_id, limit=6)
+                for prev in reversed(recent_msgs):
+                    if prev.attachments:
+                        for prev_att in prev.attachments:
+                            sp = prev_att.get("storage_path")
+                            mime = str(prev_att.get("mime_type") or "").lower()
+                            fname = str(prev_att.get("filename") or "").lower()
+                            if sp and (mime.startswith("image/") or any(fname.endswith(f".{ext}") for ext in ("png", "jpg", "jpeg", "webp"))):
+                                image_storage_path = sp
+                                image_name = image_name or prev_att.get("filename")
+                                image_mime = image_mime or mime
+                                image_size = image_size or prev_att.get("size")
+                                logger.info("[IMAGE CONTEXT RESOLVED stream] Found previous session image storage_path=%s", image_storage_path)
+                                break
+                    if image_storage_path:
+                        break
+
         if not question or not question.strip():
             if image or image_storage_path:
                 question = "Describe this image."
@@ -527,14 +627,15 @@ class RAGService:
         start_mono = time.monotonic()
 
         if image_storage_path:
-            attachments.append({
-                "storage_path": image_storage_path,
-                "bucket": get_settings().SUPABASE_STORAGE_BUCKET,
-                "mime_type": image_mime or "application/octet-stream",
-                "filename": image_name or "upload.png",
-                "size": image_size or 0,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
+            if not any(att.get("storage_path") == image_storage_path for att in attachments):
+                attachments.append({
+                    "storage_path": image_storage_path,
+                    "bucket": get_settings().SUPABASE_STORAGE_BUCKET,
+                    "mime_type": image_mime or "application/octet-stream",
+                    "filename": image_name or "upload.png",
+                    "size": image_size or 0,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
         elif image:
             attachments.append({
                 "id": str(uuid.uuid4()),
@@ -544,12 +645,27 @@ class RAGService:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
 
-        user_message = await self.messages.create_message(
-            session_id=session_id,
-            role=MessageRole.USER,
-            content=question.strip(),
-            attachments=attachments if len(attachments) > 0 else None,
-        )
+        # Check if this request is regenerating an existing interaction in this session
+        user_message = None
+        existing_msgs = await self.messages.list_by_session(session_id, limit=20)
+        if existing_msgs:
+            last_msg = existing_msgs[-1]
+            if last_msg.role == MessageRole.USER and last_msg.content.strip() == question.strip():
+                user_message = last_msg
+            elif last_msg.role == MessageRole.ASSISTANT and len(existing_msgs) >= 2:
+                prev_msg = existing_msgs[-2]
+                if prev_msg.role == MessageRole.USER and prev_msg.content.strip() == question.strip():
+                    user_message = prev_msg
+                    # Delete the outdated assistant message and its citations so the new response replaces it cleanly
+                    await self.messages.delete_message(last_msg.id)
+
+        if user_message is None:
+            user_message = await self.messages.create_message(
+                session_id=session_id,
+                role=MessageRole.USER,
+                content=question.strip(),
+                attachments=attachments if len(attachments) > 0 else None,
+            )
 
         if image_storage_path and not image:
             from app.storage import get_storage_service
@@ -564,7 +680,7 @@ class RAGService:
                 logger.error("[IMAGE LOAD stream]\nloaded=false\nerror=%s", e)
                 raise RAGError(f"Unable to analyze the uploaded image because the image could not be loaded: {e}")
 
-        from app.rag.intent_router import Route, classify
+        from app.rag.intent_router import Route, classify, _has_explicit_private_doc_ref
         from app.rag.query_normalizer import normalize_query
         
         yield f"data: {json.dumps({'type': 'status', 'message': 'Understanding query...'})}\n\n"
@@ -594,8 +710,35 @@ class RAGService:
             chat_session.user_id, question, retrieval_filters, attachments=attachments
         )
 
-        if retrieval_filters and (retrieval_filters.document_id or getattr(retrieval_filters, "document_ids", None) or retrieval_filters.document_version_id):
-            if route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT):
+        # Carry over active document_id from previous messages in this chat session if not specified in current payload
+        if retrieval_filters.document_id is None and not getattr(retrieval_filters, "document_ids", None):
+            try:
+                recent_msgs = await self.messages.list_by_session(session_id, limit=10)
+                for prev in reversed(recent_msgs):
+                    if prev.attachments:
+                        for prev_att in prev.attachments:
+                            doc_id_val = prev_att.get("document_id")
+                            if doc_id_val:
+                                try:
+                                    retrieval_filters = SearchFilters(
+                                        user_id=retrieval_filters.user_id,
+                                        document_id=uuid.UUID(str(doc_id_val)),
+                                        document_version_id=retrieval_filters.document_version_id,
+                                        search_mode=retrieval_filters.search_mode,
+                                    )
+                                    logger.info("[SESSION DOC RESOLVED] Carried over document_id=%s from session history", doc_id_val)
+                                    break
+                                except ValueError:
+                                    pass
+                    if retrieval_filters.document_id is not None:
+                        break
+            except Exception as hist_exc:
+                logger.warning("[SESSION DOC RESOLUTION FAILED] session_id=%s: %s", session_id, hist_exc)
+
+        if image or image_storage_path:
+            route = Route.DIRECT
+        elif retrieval_filters and (retrieval_filters.document_id or getattr(retrieval_filters, "document_ids", None) or retrieval_filters.document_version_id):
+            if route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT, Route.WEB):
                 route = Route.DOCUMENT_QA
 
         logger.info(
@@ -604,6 +747,15 @@ class RAGService:
         )
 
         if route not in (Route.DOCUMENT_QA, Route.RAG, Route.HYBRID, Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
+            if route == Route.WEB:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Searching the web for live information...'})}\n\n"
+            elif route == Route.CALCULATOR:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating...'})}\n\n"
+            elif image or image_storage_path:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Analyzing image with vision model...'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Synthesizing response...'})}\n\n"
+
             res = await self._ask_non_rag(
                 route=route,
                 session_id=session_id,
@@ -651,7 +803,12 @@ class RAGService:
 
         yield f"data: {json.dumps({'type': 'status', 'message': 'Searching knowledge base...'})}\n\n"
         
-        search_query = ret_q or norm_q or question.strip()
+        has_doc_filter = (retrieval_filters.document_id is not None) or bool(getattr(retrieval_filters, "document_ids", None))
+        if has_doc_filter:
+            search_query = question.strip()
+        else:
+            search_query = ret_q or norm_q or question.strip()
+
         if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
             logger.info("[SECTION AWARE RETRIEVAL stream] route=%s executing retrieve_section_aware for document_id=%s", route, retrieval_filters.document_id)
             retrieved_chunks = await self.retriever.retrieve_section_aware(
@@ -672,7 +829,6 @@ class RAGService:
             req_id, len(retrieved_chunks), search_query, retrieval_filters.document_id
         )
 
-        has_doc_filter = (retrieval_filters.document_id is not None) or bool(getattr(retrieval_filters, "document_ids", None))
         if not retrieved_chunks and has_doc_filter:
             logger.info("[SCOPED DOC RETRIEVAL stream] 0 chunks found with threshold. Retrying scoped retrieval for document_id=%s with threshold 0.0", retrieval_filters.document_id)
             doc_chunks = await self._retrieve_safely(
@@ -707,34 +863,95 @@ class RAGService:
             if unrestricted_chunks:
                 retrieved_chunks = unrestricted_chunks
 
-        if not retrieved_chunks and retrieval_filters.user_id is not None:
-            logger.info("[RETRIEVAL FALLBACK stream] 0 chunks found for user_id=%s. Retrying globally without user_id filter.", retrieval_filters.user_id)
-            unrestricted_chunks = await self._retrieve_safely(
-                search_query,
-                filters=SearchFilters(
-                    user_id=None,
-                    document_id=None,
-                    document_ids=None,
-                    document_version_id=None,
-                ),
-                top_k=top_k,
-                similarity_threshold=0.10,
-            )
-            if unrestricted_chunks:
-                retrieved_chunks = unrestricted_chunks
-
         # NOTE: Do NOT re-apply cosine similarity_threshold to cross-encoder-reranked scores.
         # The reranker already selected and re-scored the best candidates; scores are not cosine values.
         settings = get_settings()
         seen_keys: set[uuid.UUID] = set()
         deduped_chunks = []
-        max_context_chunks = 35 if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL) else getattr(settings, "FINAL_CONTEXT", 3)
+        max_context_chunks = 35 if route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL) else getattr(settings, "FINAL_CONTEXT", 10)
+        # NOTE: Do NOT filter by cross-encoder logit scores here — they are NOT cosine similarities.
+        # Cross-encoder scores (ms-marco-MiniLM-L-12-v2) range -10 to +10.
+        # Threshold filtering was already applied by the retriever before reranking.
         for c in retrieved_chunks:
             if c.chunk_id not in seen_keys:
                 seen_keys.add(c.chunk_id)
                 deduped_chunks.append(c)
                 if len(deduped_chunks) >= max_context_chunks:
                     break
+
+        # Check relevance before sending meta / citations. Scoped document queries already target the requested document.
+        # NOTE: similarity_score here is a cross-encoder logit (range -10 to +10), NOT cosine similarity.
+        # We only declare "low relevance" if the top score is very negative (model confident of irrelevance).
+        # A threshold of -3.0 catches truly irrelevant matches while preserving borderline but useful chunks.
+        min_relevance_threshold = -3.0
+        is_low_relevance = bool(
+            deduped_chunks and 
+            route in (Route.DOCUMENT_QA, Route.RAG) and 
+            not has_doc_filter and
+            deduped_chunks[0].similarity_score < min_relevance_threshold
+        )
+
+        if (not deduped_chunks or is_low_relevance) and not image and not image_storage_path:
+            logger.info(
+                "stage=rag_relevance_check status=FAIL chunks=%d top_score=%s route=%s",
+                len(deduped_chunks),
+                deduped_chunks[0].similarity_score if deduped_chunks else None,
+                route.value,
+            )
+            user_explicit_doc = has_doc_filter or _has_explicit_private_doc_ref(norm_q or question) or route in (Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL)
+            if user_explicit_doc:
+                is_diagnostic_q = any(cue in (norm_q or question).lower() for cue in (
+                    "what is issue", "why u cannot", "why cannot", "why can't", "why you cannot",
+                    "what i am missing", "getting in document", "see document", "telling answer",
+                    "tell the answer correctly", "not getting", "what am i missing"
+                ))
+                active_doc_title = None
+                if retrieval_filters.document_id and self.session is not None:
+                    try:
+                        from app.models.document import Document
+                        doc_record = await self.session.get(Document, retrieval_filters.document_id)
+                        if doc_record:
+                            active_doc_title = doc_record.title
+                    except Exception:
+                        pass
+
+                if is_diagnostic_q and active_doc_title:
+                    fallback_ans = (
+                        f"I have your document **'{active_doc_title}'** active and loaded in this conversation. "
+                        "I am ready to answer questions directly from its contents! Please ask a specific question "
+                        "about the document (for example: *'What are Our Core Values?'*, *'What is the leave policy?'*, "
+                        "or *'What are the working hours?'*), and I will cite and explain the exact sections for you."
+                    )
+                else:
+                    fallback_ans = "I could not find relevant information in the uploaded documents to answer your question."
+
+                total_ms = int((time.monotonic() - start_mono) * 1000)
+                assistant_msg = await self.messages.create_message(
+                    session_id=session_id,
+                    role=MessageRole.ASSISTANT,
+                    content=fallback_ans,
+                    model_used=getattr(self.llm_client, "model", "ollama"),
+                    latency_ms=total_ms,
+                )
+                yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'content': fallback_ans})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
+                return
+            else:
+                logger.info("[RAG RELEVANCE FALLBACK stream] Query %r has 0 relevant doc chunks and no explicit doc ref. Synthesizing reasoning/knowledge response.", question)
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Synthesizing response...'})}\n\n"
+                res = await self._ask_general_knowledge(
+                    session_id=session_id,
+                    question=question.strip(),
+                    user_message_id=user_message.id,
+                    start_mono=start_mono,
+                    norm_q=norm_q,
+                    image=image,
+                )
+                yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'content': res.answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(res.assistant_message_id or uuid.uuid4()), 'processing_time_ms': res.processing_time_ms})}\n\n"
+                return
 
         for r_idx, c in enumerate(deduped_chunks, start=1):
             doc_name = getattr(c, "document_title", "Unknown")
@@ -764,15 +981,19 @@ class RAGService:
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
 
         long_term_memory_context = ""
-        if self.session is not None and chat_session.user_id:
+        # Only query personal memory if relevant and not a pure document QA/summary query
+        if self.session is not None and chat_session.user_id and route not in (Route.DOCUMENT_QA, Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
             try:
                 from app.memory.manager import MemoryManager
                 mem_mgr = MemoryManager(self.session)
-                long_term_memory_context, _ = await mem_mgr.before_query(
-                    user_id=chat_session.user_id, query=question.strip()
+                long_term_memory_context, _ = await asyncio.wait_for(
+                    mem_mgr.before_query(
+                        user_id=chat_session.user_id, query=question.strip()
+                    ),
+                    timeout=1.5,
                 )
             except Exception as mem_ret_exc:
-                logger.warning("[MEMORY MANAGER] before_query error: %s", mem_ret_exc)
+                logger.warning("[MEMORY MANAGER] before_query bypassed or timed out: %s", mem_ret_exc)
 
         if not deduped_chunks and not image and not image_storage_path and not long_term_memory_context:
             logger.info(
@@ -822,30 +1043,6 @@ class RAGService:
             yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
             return
 
-        # Relevance guard: if reranker scores are all very low (< 0.05), the retrieved
-        # chunks are unlikely to answer the question — abstain rather than hallucinate.
-        if deduped_chunks and not image and not image_storage_path:
-            top_reranker_score = deduped_chunks[0].similarity_score
-            # Relevance guard disabled for highly broken English queries.
-            # The LLM will now determine relevance itself.
-            if top_reranker_score < -999.0:
-                logger.warning(
-                    "stage=rag_fallback reason_code=RETRIEVAL_LOW_SCORE request_id=%s score=%.4f threshold=-999.0 query=%r",
-                    req_id, top_reranker_score, question.strip()
-                )
-                fallback_ans = "I couldn't find enough information in the uploaded documents to answer this accurately."
-                total_ms = int((time.monotonic() - start_mono) * 1000)
-                assistant_msg = await self.messages.create_message(
-                    session_id=session_id,
-                    role=MessageRole.ASSISTANT,
-                    content=fallback_ans,
-                    model_used=getattr(self.llm_client, "model", "ollama"),
-                    latency_ms=total_ms,
-                )
-                self._trigger_memory_extraction(chat_session.user_id, session_id, question, fallback_ans)
-                yield f"data: {json.dumps({'type': 'token', 'content': fallback_ans})}\n\n"
-                yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(assistant_msg.id), 'processing_time_ms': total_ms})}\n\n"
-                return
         if not deduped_chunks and (image or image_storage_path):
             logger.info("[VISION ONLY STREAM] No document chunks found. Routing image-only stream to _ask_direct.")
             res = await self._ask_direct(
@@ -993,7 +1190,7 @@ class RAGService:
                 f"2. Detail each major policy section (such as Employee Handbook Purpose, Probation Period, Role Clarity, Working Hours & Attendance, Leave Policy, Casual Leave, Leave Application Process, Public Holidays, Leave Without Pay, WFH / Remote Work, Performance Management, BGV, POSH, Code of Conduct, Grievance Redressal, Exit & Termination, IT Security) with its specific rules, numbers, limits, and guidelines.\n"
                 f"3. Do NOT state that a policy or section is missing if it is supported by the document excerpts above.\n"
                 f"4. Preserve exact policy numbers, limits, rules, and terminology used in the original document.\n"
-                f"5. Clearly distinguish what information IS stated in the document context versus what specific numbers or details are omitted.\n"
+                f"5. Conclude your response cleanly once all sections present in the context have been summarized without adding empty placeholder headings or meta-commentary.\n"
             )
             prompt = Prompt(
                 system_prompt=prompt.system_prompt,
@@ -1001,18 +1198,23 @@ class RAGService:
                 retrieved_chunks=prompt.retrieved_chunks,
             )
         elif route in (Route.DOCUMENT_QA, Route.RAG) and assembled_context and "=== LOCAL DOCUMENTS ===" not in prompt.user_prompt:
+            prompt_question = question
+
             local_only_user_prompt = (
                 f"=== LOCAL DOCUMENTS ===\n\n"
                 f"{assembled_context}\n\n"
                 f"=== USER QUESTION ===\n\n"
-                f"{question}\n\n"
+                f"{prompt_question}\n\n"
                 f"CRITICAL GROUNDING RULES:\n"
-                f"1. Give a direct, helpful, factual, and complete response summarizing all relevant details present in the local document excerpts above.\n"
-                f"2. If the question asks to explain or define a general concept, acronym, or industry term (such as 'POC' / 'Proof of Concept'), first define the general concept clearly, and then explain how that concept is specifically used or applied in the local document excerpts above.\n"
-                f"3. State all verified facts, tracking rules, policies, and metrics present in the document context accurately. If the question asks for specific details (such as fixed shift start/end times, lunch breaks, or exact hours) that are NOT explicitly mentioned in the context, state what the document DOES record while clarifying that exact fixed times or figures are not explicitly specified.\n"
-                f"4. Inspect the uploaded document context for matching keywords or concepts from the question. When matching keywords or sections are found, extract and state the full answer directly based on those matching document details.\n"
-                f"5. Do NOT invent or infer unstated facts, shift times, figures, or policies not present in the document context.\n"
-                f"6. If the context contains NO relevant facts whatsoever for the question, state: \"I could not find this information in the local documents.\"\n"
+                f"1. The local document excerpts above are your ONLY source of truth. Pretrained knowledge is strictly forbidden for document-based questions.\n"
+                f"2. MULTI-PART QUESTIONS: If the question asks about multiple topics (e.g. topic A and topic B), you MUST address EVERY requested topic:\n"
+                f"   - For topics present in the document: Answer factually using ONLY the document excerpts.\n"
+                f"   - For topics NOT present in the document: Explicitly state: \"The provided document does not specify [Topic].\"\n"
+                f"   - NEVER omit a requested topic, and NEVER invent policies or numbers to make an unsupported topic look complete.\n"
+                f"3. EXACT NUMBERS & TERMINOLOGY: State verified facts accurately. Preserve exact wording, numbers, limits, and time periods (e.g. if the document says \"1 (one) Casual Leave per month\", state exactly that; do NOT change it to \"12 casual leaves annually\").\n"
+                f"4. NO POLICY SUBSTITUTION: Do NOT combine or substitute unrelated sections unless explicitly requested (e.g. do NOT substitute Code of Conduct for Core Values unless the user asks for Code of Conduct).\n"
+                f"5. RELEVANCE: Answer ONLY what the user specifically asked for. Do NOT include unrequested adjacent topics (e.g. do not explain working hours or IT security when answering a leave question).\n"
+                f"6. COMPLETELY UNSUPPORTED: If the document excerpts contain no supporting information for the question, respond: \"The provided document does not specify this information.\"\n"
             )
             prompt = Prompt(
                 system_prompt=prompt.system_prompt,
@@ -1067,44 +1269,102 @@ class RAGService:
         ttft_ms = None
         start_generation = time.monotonic()
         from app.rag.intent_router import analyze_complexity
-        model_name = get_settings().ollama_vision_model if image else getattr(self.llm_client, "model", None)
+        vision_model_name = get_settings().ollama_vision_model
+        model_name = vision_model_name if image else getattr(self.llm_client, "model", None)
         dynamic_max_tokens = analyze_complexity(question, model_name=model_name)
+
+        active_client = self.llm_client
+        if image:
+            from app.llm.factory import get_llm_client
+            active_client = get_llm_client(model=vision_model_name)
+
+        in_thinking = False
+        think_buffer = ""
+        streamed_to_client = False
+
         try:
-            if hasattr(self.llm_client, "generate_stream"):
-                # Buffer ALL tokens first — do NOT stream raw tokens to client.
-                # The model may emit chain-of-thought ("Passage 1 mentions...",
-                # "Wait...") that must be sanitized before the user sees it.
-                async for token in self.llm_client.generate_stream(
+            if hasattr(active_client, "generate_stream"):
+                async for token in active_client.generate_stream(
                     prompt.system_prompt,
                     prompt.user_prompt,
                     images=[image] if image else None,
-                    model=get_settings().ollama_vision_model if image else None,
+                    model=vision_model_name if image else None,
                     num_predict=dynamic_max_tokens,
                     request_id=req_id,
                 ):
                     if ttft_ms is None:
                         ttft_ms = int((time.monotonic() - start_generation) * 1000)
                     full_answer_chunks.append(token)
+
+                    # Filter out <think> ... </think> or `think` blocks on the fly while streaming
+                    if not streamed_to_client:
+                        think_buffer += token
+                        if "<think" in think_buffer.lower() or "`think`" in think_buffer.lower():
+                            in_thinking = True
+                            if "</think>" in think_buffer.lower():
+                                in_thinking = False
+                                after_think = re.split(r"</think>", think_buffer, flags=re.IGNORECASE)[-1].lstrip()
+                                if after_think:
+                                    streamed_to_client = True
+                                    yield f"data: {json.dumps({'type': 'token', 'content': after_think})}\n\n"
+                                think_buffer = ""
+                            elif "`" in think_buffer and ("`/think`" in think_buffer.lower() or "\\`think`" in think_buffer.lower()):
+                                in_thinking = False
+                                after_think = re.split(r"`/?(?:think|thinking)`", think_buffer, flags=re.IGNORECASE)[-1].lstrip()
+                                if after_think:
+                                    streamed_to_client = True
+                                    yield f"data: {json.dumps({'type': 'token', 'content': after_think})}\n\n"
+                                think_buffer = ""
+                        elif len(think_buffer) >= 15 or "\n" in think_buffer:
+                            # Standard response without thinking block — stream immediately
+                            streamed_to_client = True
+                            yield f"data: {json.dumps({'type': 'token', 'content': think_buffer})}\n\n"
+                            think_buffer = ""
+                    else:
+                        if in_thinking:
+                            if "</think>" in token.lower() or "`/think`" in token.lower():
+                                in_thinking = False
+                        else:
+                            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
             else:
-                resp = await self.llm_client.generate(
+                resp = await active_client.generate(
                     prompt.system_prompt,
                     prompt.user_prompt,
                     images=[image] if image else None,
-                    model=get_settings().ollama_vision_model if image else None,
+                    model=vision_model_name if image else None,
                     num_predict=dynamic_max_tokens,
                     request_id=req_id,
                 )
                 safe = sanitize_response(resp.answer, question=question)
                 ttft_ms = int((time.monotonic() - start_generation) * 1000)
                 full_answer_chunks.append(safe)
+                streamed_to_client = True
+                yield f"data: {json.dumps({'type': 'token', 'content': safe})}\n\n"
         except Exception as exc:
             logger.error("Streaming error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
 
-        full_answer = sanitize_response("".join(full_answer_chunks).strip(), question=question) or "I could not find this information in the uploaded documents."
+        full_raw = "".join(full_answer_chunks).strip()
+        full_answer = sanitize_response(full_raw, question=question) or "The provided document does not specify this information."
 
-        # Now emit the clean, sanitized answer as a single token
-        yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
+        if deduped_chunks:
+            from app.rag.validator import validate_and_reconcile_answer
+            validated_answer = validate_and_reconcile_answer(question, full_answer, deduped_chunks)
+            if validated_answer != full_answer:
+                if len(validated_answer) > len(full_answer) and validated_answer.startswith(full_answer):
+                    diff_text = validated_answer[len(full_answer):]
+                    yield f"data: {json.dumps({'type': 'token', 'content': diff_text})}\n\n"
+                elif not streamed_to_client:
+                    yield f"data: {json.dumps({'type': 'token', 'content': validated_answer})}\n\n"
+                full_answer = validated_answer
+        elif not streamed_to_client:
+            yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
+
+        # If the final validated answer is a refusal, inform frontend to clear citations
+        if _is_refusal_response(full_answer):
+            sources_data = []
+            yield f"data: {json.dumps({'type': 'meta', 'sources': [], 'user_message_id': str(user_message.id)})}\n\n"
+
         total_ms = int((time.monotonic() - start_mono) * 1000)
         token_count = len(full_answer.split())  # rough estimate for telemetry
 
@@ -1116,24 +1376,47 @@ class RAGService:
             latency_ms=total_ms,
         )
 
+        from app.services.citation_service import CitationInput
         effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
-        valid_sources_data = [
-            s for s in sources_data 
-            if s.get("similarity_score", 0.0) >= effective_threshold
-            and not str(s.get("document_title", "")).startswith("[Web]")
-        ]
-        if valid_sources_data:
+        valid_citations: list[CitationInput] = []
+        if not _is_refusal_response(full_answer):
+            seen_cids: set[uuid.UUID] = set()
+            max_cit = getattr(settings, "FINAL_CONTEXT", 3)
+            for s in sources_data:
+                # Exclude web sources which do not exist in document_chunks table
+                if s.get("source_type") == "web" or s.get("url") or str(s.get("document_title", "")).startswith("[Web]"):
+                    continue
+
+                raw_cid = s.get("chunk_id")
+                if not raw_cid:
+                    continue
+                try:
+                    cid = uuid.UUID(str(raw_cid)) if not isinstance(raw_cid, uuid.UUID) else raw_cid
+                except (ValueError, TypeError):
+                    continue
+
+                if cid in seen_cids:
+                    continue
+                seen_cids.add(cid)
+
+                raw_score = s.get("similarity_score")
+                score: float = float(raw_score) if raw_score is not None else 0.0
+                if score < effective_threshold:
+                    continue
+
+                valid_citations.append({
+                    "chunk_id": cid,
+                    "rank": len(valid_citations) + 1,
+                    "similarity_score": score,
+                })
+                if len(valid_citations) >= max_cit:
+                    break
+
+        if valid_citations:
             try:
                 await self.citations.create_citations_for_message(
                     assistant_message.id,
-                    [
-                        {
-                            "chunk_id": uuid.UUID(s["chunk_id"]) if isinstance(s["chunk_id"], str) else s["chunk_id"],
-                            "rank": s["rank"],
-                            "similarity_score": s["similarity_score"],
-                        }
-                        for s in valid_sources_data
-                    ],
+                    valid_citations,
                 )
             except Exception as cit_exc:
                 logger.warning("[CITATION PERSISTENCE SKIPPED] message_id=%s: %s", assistant_message.id, cit_exc)
@@ -1210,36 +1493,85 @@ class RAGService:
                                 search_mode=base_filters.search_mode,
                             )
 
-            # 2. Match document title in query text
+            # 2. Match explicit document title or distinct multi-word project in query text
             q_lower = question.strip().lower()
-            q_clean = re.sub(r"[^\w\s]", "", q_lower)
+            q_clean = re.sub(r"[^\w\s]", " ", q_lower)
             q_words = set(re.findall(r"\b\w+\b", q_clean))
+
+            # Check for explicit file extension or explicit document syntax
+            has_file_ext = any(ext in q_lower for ext in (".docx", ".pdf", ".txt", ".md", ".xlsx", ".pptx", ".csv"))
+            has_doc_syntax = bool(re.search(r"\b(?:in\s+document|in\s+file|according\s+to\s+document|from\s+document|summarize\s+document|summarize\s+file)\b", q_lower))
+
+            GENERIC_ORGANIZATION_WORDS = {
+                "siprahub", "sipra", "hub", "company", "organization", "portal", "system",
+                "employee", "employees", "user", "users", "app", "application", "document",
+                "documents", "file", "files", "policy", "policies", "framework", "frameworks",
+                "new", "guide", "guides", "v1", "v2", "draft", "final", "summary", "overview",
+                "prd", "deployment", "staging", "combined", "doc", "docx", "pdf", "txt",
+                "technology", "technologies", "stack", "stacks", "tech", "setup", "installation",
+                "install", "testing", "test", "issue", "issues", "report", "notes", "details",
+                "documentation", "manual", "specification", "architecture", "config", "configuration",
+                "review", "summary"
+            }
+
+            # Primary project entities for strict document isolation.
+            # Organization names like 'siprahub' are company-wide and must NOT isolate to a single PRD document.
+            primary_entity_map = {
+                "airis": lambda t: "airis" in t,
+                "sipraone": lambda t: "sipraone" in t or "sipra_one" in t or "sipra one" in t,
+                "sipra one": lambda t: "sipraone" in t or "sipra_one" in t or "sipra one" in t,
+                "siprahub prd": lambda t: ("siprahub" in t or "sipra_hub" in t) and "prd" in t,
+                "sipra hub prd": lambda t: ("siprahub" in t or "sipra_hub" in t) and "prd" in t,
+                "siprahub mvp": lambda t: ("siprahub" in t or "sipra_hub" in t) and ("mvp" in t or "prd" in t),
+                "talk to my data": lambda t: "talk_to_my_data" in t or "talk to my data" in t,
+                "hr framework": lambda t: "hr" in t or "framework" in t or "policy" in t or "handbook" in t,
+                "hr policy": lambda t: "hr" in t or "policy" in t or "handbook" in t,
+                "leave policy": lambda t: "leave" in t or "hr" in t or "framework" in t or "policy" in t or "handbook" in t,
+                "leave policies": lambda t: "leave" in t or "hr" in t or "framework" in t or "policy" in t or "handbook" in t,
+                "employee handbook": lambda t: "handbook" in t or "hr" in t or "policy" in t,
+                "attendance policy": lambda t: "attendance" in t or "hr" in t or "policy" in t or "framework" in t,
+            }
+
+            target_entity_check = None
+            for entity_key, check_fn in primary_entity_map.items():
+                if re.search(rf"\b{re.escape(entity_key)}\b", q_lower):
+                    target_entity_check = check_fn
+                    break
+
             matched_doc_ids: list[uuid.UUID] = []
 
-            for d in all_docs:
-                d_title_lower = d.title.lower()
-                stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
-                clean_stem = re.sub(r"[_\-]+", " ", stem).strip()
-                core_words = [w for w in clean_stem.split() if w not in {"prd", "guide", "deployment", "staging", "combined", "summary", "overview", "doc", "docx", "v1", "v2", "final", "draft"}]
-                core_phrase = " ".join(core_words).strip()
+            if target_entity_check is not None:
+                for d in all_docs:
+                    d_title_lower = d.title.lower()
+                    if target_entity_check(d_title_lower):
+                        logger.info("[PRIMARY PROJECT ENTITY ISOLATED] Document '%s' (%s) matched target entity", d.title, d.id)
+                        matched_doc_ids.append(d.id)
+            else:
+                for d in all_docs:
+                    d_title_lower = d.title.lower()
+                    stem = d_title_lower.rsplit(".", 1)[0] if "." in d_title_lower else d_title_lower
+                    clean_stem = re.sub(r"[_\-\.\(\)\d]+", " ", stem).strip()
+                    core_words = [w for w in clean_stem.split() if w not in GENERIC_ORGANIZATION_WORDS and len(w) >= 3]
 
-                is_match = False
-                if d_title_lower in q_lower or clean_stem in q_clean:
-                    is_match = True
-                elif core_phrase and len(core_phrase) >= 4 and core_phrase in q_clean:
-                    is_match = True
-                elif core_words:
-                    # Match multi-word subphrases (e.g. "hr framework" from "siprahub hr framework")
-                    significant_words = [w for w in core_words if len(w) >= 2 and w not in {"the", "and", "for", "with", "pdf", "docx", "txt"}]
-                    matching_word_count = sum(1 for w in significant_words if w in q_words)
-                    if matching_word_count >= 2:
+                    is_match = False
+                    raw_stem = re.sub(r"\s+\d+$", "", stem).strip()
+                    if raw_stem and raw_stem in q_lower:
                         is_match = True
-                    elif significant_words and any(w in q_clean for w in significant_words if len(w) >= 4 and w not in {"frontend", "backend", "system", "service", "app", "guide", "prd"}):
-                        is_match = True
+                    elif has_file_ext or has_doc_syntax:
+                        doc_keyword_match = re.search(r"\b(?:document|file)\s+([a-zA-Z0-9_\-\.]+)", q_lower)
+                        if doc_keyword_match:
+                            target_token = doc_keyword_match.group(1).lower()
+                            if target_token in d_title_lower or d_title_lower.startswith(target_token):
+                                is_match = True
 
-                if is_match:
-                    logger.info("[PROJECT/DOCUMENT ENTITY DETECTED] Question references document '%s' (%s)", d.title, d.id)
-                    matched_doc_ids.append(d.id)
+                    if not is_match and len(core_words) >= 2:
+                        proj_phrase = " ".join(core_words)
+                        if proj_phrase in q_clean or all(w in q_words for w in core_words):
+                            is_match = True
+
+                    if is_match:
+                        logger.info("[PROJECT/DOCUMENT ENTITY DETECTED] Question references document '%s' (%s)", d.title, d.id)
+                        matched_doc_ids.append(d.id)
 
             if matched_doc_ids:
                 return SearchFilters(
@@ -1258,12 +1590,34 @@ class RAGService:
                     ready_docs = list(all_docs)
                 if ready_docs:
                     # Pick ready document matching highest number of query terms or most recent
+                    # Exclude generic organization words so words like 'siprahub' don't bias towards PRD over HR policy
+                    meaningful_q_words = q_words - GENERIC_ORGANIZATION_WORDS
                     def _doc_match_score(d_item):
-                        t_words = set(re.findall(r"\b\w+\b", d_item.title.lower()))
-                        return (len(t_words & q_words), getattr(d_item, "created_at", None))
+                        t_words = set(re.findall(r"\b\w+\b", d_item.title.lower())) - GENERIC_ORGANIZATION_WORDS
+                        return (len(t_words & meaningful_q_words), getattr(d_item, "created_at", None))
 
                     best_doc = max(ready_docs, key=_doc_match_score)
-                    logger.info("[SUMMARY DOCUMENT FALLBACK RESOLVED] Selected target document '%s' (%s) for summary query", best_doc.title, best_doc.id)
+                    # Only scope to best_doc if there is at least one meaningful word match
+                    t_words_best = set(re.findall(r"\b\w+\b", best_doc.title.lower())) - GENERIC_ORGANIZATION_WORDS
+                    if len(t_words_best & meaningful_q_words) > 0:
+                        logger.info("[SUMMARY DOCUMENT FALLBACK RESOLVED] Selected target document '%s' (%s) for summary query", best_doc.title, best_doc.id)
+                        return SearchFilters(
+                            user_id=base_filters.user_id,
+                            document_id=best_doc.id,
+                            document_version_id=base_filters.document_version_id,
+                            search_mode=base_filters.search_mode,
+                        )
+
+            # 4. Fallback when user query explicitly includes natural document cues ("in document", "inside document", "see document", etc.)
+            from app.rag.intent_router import _has_explicit_private_doc_ref
+            if _has_explicit_private_doc_ref(q_lower) or any(cue in q_lower for cue in ("in document", "inside document", "inside of document", "see document", "from document", "this document", "the document", "getting in document")):
+                ready_docs = [d for d in all_docs if getattr(d, "status", None) == DocumentStatus.READY or getattr(d, "status", None) == "READY"]
+                if not ready_docs:
+                    ready_docs = list(all_docs)
+                if ready_docs:
+                    # Select the most recent ready document
+                    best_doc = sorted(ready_docs, key=lambda d: getattr(d, "created_at", None) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[0]
+                    logger.info("[EXPLICIT DOC CUE RESOLVED] Bound to ready document '%s' (%s)", best_doc.title, best_doc.id)
                     return SearchFilters(
                         user_id=base_filters.user_id,
                         document_id=best_doc.id,
@@ -1356,8 +1710,8 @@ class RAGService:
                     request_id=request_id,
                     route=route,
                 )
-        elif route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT) and not image:
-            res = await self._ask_general_knowledge(
+        elif image is not None:
+            res = await self._ask_direct(
                 session_id=session_id,
                 question=question,
                 user_message_id=user_message_id,
@@ -1647,10 +2001,12 @@ class RAGService:
                     clean_topic = re.sub(r"\s+", " ", clean_topic).strip()
                     part_clean = f"site:stackoverflow.com {clean_topic or part_clean}"
 
-                if part_clean and part_clean not in queries:
-                    queries.append(part_clean)
+                focused_part = self._generate_focused_web_query(part_clean)
+                if focused_part and focused_part not in queries:
+                    queries.append(focused_part)
+
             if not queries:
-                queries.append(q_str)
+                queries.append(self._generate_focused_web_query(q_str) or q_str)
             
             logger.info("stage=web_search_started request_id=%s provider=%s query=%r", req_id, provider_name, queries[0])
 
@@ -1679,7 +2035,7 @@ class RAGService:
             total_ms = int((time.monotonic() - start_mono) * 1000)
 
             if all_hits:
-                # Rank hits by domain authority (e.g. python.org, official docs)
+                # Rank hits by domain authority and recency
                 def _hit_authority_score(h):
                     u = (getattr(h, "url", "") or "").lower()
                     t = (getattr(h, "title", "") or "").lower()
@@ -1690,20 +2046,18 @@ class RAGService:
                             sc += 100
                         elif "python.org" in u:
                             sc += 80
-                    if any(d in u for d in ("python.org", "docs.", "github.com", "openrouter.ai", "nvidia.com", "pypi.org")):
+                    if any(d in u for d in ("python.org", "docs.", "github.com", "openrouter.ai", "nvidia.com", "pypi.org", "openai.com")):
                         sc += 50
                     if "official" in t or "official" in s:
                         sc += 20
-                    if "release" in u or "download" in u or "stable" in t:
-                        sc += 15
+                    if getattr(h, "published_at", None):
+                        sc += 10
                     return sc
 
                 ranked_hits = sorted(all_hits, key=_hit_authority_score, reverse=True)[:6]
 
-                logger.info("stage=web_search_results request_id=%s result_count=%d top_url=%s", req_id, len(ranked_hits), getattr(ranked_hits[0], "url", "N/A"))
-
                 # Format web snippets with title, content/snippet, and URL
-                from app.services.web_search_service import format_web_context
+                from app.services.web_search_service import format_web_context, is_article_url
                 web_context = format_web_context(ranked_hits)
 
                 logger.info("RAG_CONTEXT_DEBUG: web_results_added=true web_context_length=%d", len(web_context))
@@ -1726,76 +2080,69 @@ class RAGService:
                         )
                     )
 
-                # Check if live enrichment data (Open-Meteo weather, python.org) is available
-                live_data_section = ""
-                live_hit = next((h for h in ranked_hits if h.source in ("open-meteo.com", "python.org") and h.snippet), None)
-                if live_hit:
-                    live_data_section = f"=== LIVE REAL-TIME DATA (USE THIS AS PRIMARY SOURCE) ===\n{live_hit.snippet}\n\n"
-                    logger.info("LLM_CONTEXT_DEBUG: live_enrichment_hit_available=true source=%s", live_hit.source)
+                # Detailed backend debug logs (Requirement 10)
+                logger.info("[WEB_SEARCH_QUERY] query=%r", question)
+                logger.info("[SEARCH_RESULTS] count=%d urls=%r", len(all_hits), [h.url for h in all_hits])
+                logger.info("[FILTERED_RESULTS] count=%d urls=%r", len(ranked_hits), [h.url for h in ranked_hits])
+
+                for idx, h in enumerate(ranked_hits, start=1):
+                    pub_date = getattr(h, "published_at", None) or "N/A"
+                    cnt_len = len(h.content) if h.content else len(h.snippet or "")
+                    logger.info(
+                        "[ARTICLE_METADATA] source_id=%d url=%r title=%r source=%r published_at=%s content_length=%d",
+                        idx, h.url, h.title, h.source, pub_date, cnt_len
+                    )
 
                 web_user_prompt = (
-                    f"{live_data_section}"
-                    f"=== WEB SEARCH RESULTS ===\n\n{web_context}\n\n"
+                    f"=== RETRIEVED LIVE SEARCH RESULTS ===\n\n{web_context}\n\n"
                     f"=== USER QUESTION ===\n\n{question}\n\n"
-                    f"INSTRUCTIONS:\n"
-                    f"Write a direct, factual answer in 2-4 sentences.\n"
-                    f"If LIVE REAL-TIME DATA is present above, use those exact numbers and facts as your primary answer.\n"
-                    f"Do NOT output URLs, bullet lists, or source names in your answer text — citations are shown separately below.\n"
-                    f"Do NOT say 'I recommend checking sources' if live data is available above."
+                    f"CRITICAL ANSWERING INSTRUCTIONS:\n"
+                    f"1. Directly answer the question in the very first sentence with the exact fact, name, date, entity, score, or outcome requested (e.g. 'India won the 2024 ICC Men's T20 World Cup...').\n"
+                    f"2. Follow up with key supporting details and context from the retrieved search results.\n"
+                    f"3. Do NOT provide vague meta-talk about how information is corroborated across sources without stating the direct answer.\n"
+                    f"4. Attach direct inline Markdown citations [Source Name](URL) supporting your statements.\n"
+                    f"5. NEVER mention internal OCR, PaddleOCR, document parsers, vector indexes, or system implementation details."
                 )
 
-                logger.info("LLM_CONTEXT_DEBUG: web_context_present=true")
-                logger.info(
-                    "stage=context_constructed request_id=%s web_context_chars=%d web_results=%d final_prompt_chars=%d web_context_in_final_prompt=true",
-                    req_id, len(web_context), len(ranked_hits), len(web_user_prompt)
-                )
+                logger.info("[LLM_CONTEXT] length=%d prompt_sample=%r", len(web_user_prompt), web_user_prompt[:250])
 
-                prov_name = getattr(self.llm_client, "provider_name", getattr(self.llm_client, "name", "omniroute"))
-                mod_name = getattr(self.llm_client, "model", "auto/fast")
+                # Helper to format clean readable fallback if LLM is unavailable
+                def _build_clean_fallback_response(hits: list) -> str:
+                    if not hits:
+                        return "I couldn't find reliable web results for that question right now."
+                    sections = ["Here are the top results retrieved from live web search:"]
+                    for idx, h in enumerate(hits[:5], 1):
+                        title = h.title or "Web Source"
+                        url = h.url or ""
+                        summary = (h.snippet or h.content or "").strip()
+                        pub_date = f" (Published: {h.published_at})" if getattr(h, "published_at", None) else ""
+                        if summary:
+                            sections.append(f"{idx}. **[{title}]({url})**{pub_date}\n   {summary}")
+                        else:
+                            sections.append(f"{idx}. **[{title}]({url})**{pub_date}")
+                    return "\n\n".join(sections)
 
                 gen_start = time.monotonic()
                 try:
                     llm_resp = await self.llm_client.generate(
                         get_settings().WEB_SEARCH_SYSTEM_PROMPT,
                         web_user_prompt,
-                        num_predict=768,
+                        num_predict=1536,
                         request_id=req_id,
                     )
                     raw_text = (llm_resp.answer or "").strip()
-                    logger.info("stage=raw_llm_response request_id=%s len=%d snippet=%r", req_id, len(raw_text), raw_text[:200])
                     clean_text = sanitize_response(raw_text, question=question).strip()
+                    answer_text = _validate_web_answer(
+                        raw_answer=raw_text,
+                        clean_answer=clean_text,
+                        concise_text=_build_clean_fallback_response(ranked_hits),
+                        original_query=question,
+                    )
+                    logger.info("[FINAL_CLAIM_TO_SOURCE_MAPPING] answer_length=%d hits_mapped=%d", len(answer_text), len(ranked_hits))
 
-                    # Detect if LLM echoed a URL list instead of synthesizing prose
-                    url_list_lines = [
-                        l for l in clean_text.splitlines()
-                        if l.strip().startswith(("http://", "https://", "www.", "- http", "- www"))
-                        or ("http" in l and l.strip().startswith("-"))
-                    ]
-                    is_url_list = len(url_list_lines) >= 2 or (len(clean_text) > 0 and len(url_list_lines) / max(len(clean_text.splitlines()), 1) > 0.5)
-
-                    if is_url_list or not clean_text:
-                        logger.warning("[WEB SEARCH] LLM returned URL list instead of prose. Using synthesized answer. len=%d url_lines=%d", len(clean_text), len(url_list_lines))
-                        # Build a proper prose answer from enrichment hits (Open-Meteo weather data, python.org, etc.)
-                        best_hit = next((h for h in ranked_hits if h.source and h.source in ("open-meteo.com", "python.org") and h.snippet), None) or (ranked_hits[0] if ranked_hits else None)
-                        if best_hit and best_hit.snippet and ":" in best_hit.snippet:
-                            answer_text = best_hit.snippet
-                        else:
-                            domains = ", ".join({h.source or urllib.parse.urlparse(h.url).netloc.replace("www.", "") for h in ranked_hits[:3] if h.url})
-                            answer_text = (
-                                f"I found current web search results for your query from {domains}. "
-                                f"However, the page content could not be fully extracted. "
-                                f"Please use the source links below to view the latest information directly."
-                            )
-                    else:
-                        answer_text = _validate_web_answer(
-                            raw_answer=raw_text,
-                            clean_answer=clean_text,
-                            concise_text=clean_text,
-                            original_query=question,
-                        )
                 except Exception as llm_exc:
-                    logger.error("[WEB SEARCH LLM ERROR] request_id=%s error: %s", req_id, llm_exc, exc_info=True)
-                    answer_text = "I retrieved current web search results for your query, but encountered an issue generating the summary. Please use the source links below."
+                    logger.warning("[WEB SEARCH FALLBACK] LLM error: %s. Formatting live hits cleanly.", llm_exc)
+                    answer_text = _build_clean_fallback_response(ranked_hits)
             else:
                 logger.warning("[WEB SEARCH EMPTY] request_id=%s provider=%s queries=%r empty results", req_id, provider_name, queries)
                 if last_sub_exc:
@@ -1911,12 +2258,17 @@ class RAGService:
         configured_vision_model = getattr(get_settings(), "ollama_vision_model", "qwen3-vl:4b")
         vision_model = configured_vision_model
         
-        supports_fn = getattr(self.llm_client, "supports_vision", None)
+        from app.llm.factory import get_llm_client
+        vision_client = get_llm_client(model=vision_model)
+        supports_fn = getattr(vision_client, "supports_vision", None)
         if supports_fn:
             if not (await supports_fn(configured_vision_model)):
                 for candidate in ["qwen2.5-vl:latest", "llava:latest", "llava", "qwen3-vl:4b"]:
-                    if await supports_fn(candidate):
+                    cand_client = get_llm_client(model=candidate)
+                    cand_supports = getattr(cand_client, "supports_vision", None)
+                    if cand_supports and await cand_supports(candidate):
                         vision_model = candidate
+                        vision_client = cand_client
                         break
 
         llm_start = time.monotonic()
@@ -1934,7 +2286,7 @@ class RAGService:
             num_pred = 1024
             
             try:
-                llm_response = await self.llm_client.generate(
+                llm_response = await vision_client.generate(
                     direct_sys_prompt,
                     query_text,
                     num_predict=num_pred,
@@ -2038,10 +2390,15 @@ class RAGService:
         if long_term_memory_context:
             query_text = f"{long_term_memory_context}\n\nUser Question:\n{query_text}"
 
-        llm_response = await self.llm_client.generate(
+        active_client = self.llm_client
+        if image:
+            from app.llm.factory import get_llm_client
+            active_client = get_llm_client(model=get_settings().ollama_vision_model)
+
+        llm_response = await active_client.generate(
             direct_sys_prompt,
             query_text,
-            num_predict=512,
+            num_predict=1024,
             images=[image] if image else None,
             model=get_settings().ollama_vision_model if image else None,
         )

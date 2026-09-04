@@ -14,16 +14,22 @@ import {
   SettingsSidebar,
   useSettings,
 } from '@/features/settings'
+import { useAuth } from '@/features/auth/hooks/authHooks'
 import type { SettingsSectionId } from '@/types'
 import { settingsStore, applyTheme } from '@/store/settings.store'
 
 export function SettingsPage() {
+  const { user: authUser } = useAuth()
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('general')
   const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(() => {
     return settingsStore.get().theme || 'system'
   })
 
   const { health, isHealthLoading, isHealthError, activeUser, settingsMap, updateSetting, refetchAll } = useSettings()
+
+  const displayUser = authUser || activeUser
+  const userRole = (authUser?.role || (activeUser?.role as string) || 'member').toLowerCase()
+  const isAdmin = userRole === 'admin'
 
   // Top right corner Edit Mode State per section
   const [isEditingSection, setIsEditingSection] = useState<Record<string, boolean>>({})
@@ -238,17 +244,31 @@ export function SettingsPage() {
               >
                 <InfoRow
                   label="User Email"
-                  value={activeUser ? activeUser.email : 'admin@localrag.internal'}
-                  copyable={Boolean(activeUser)}
+                  value={displayUser?.email || 'admin@localrag.internal'}
+                  copyable={Boolean(displayUser?.email)}
                 />
                 <InfoRow
                   label="Role"
-                  value={<Badge variant="secondary" className="bg-primary/10 text-primary font-semibold">Admin (Full Access)</Badge>}
+                  value={
+                    isAdmin ? (
+                      <Badge variant="secondary" className="bg-primary/10 text-primary font-semibold">
+                        Admin (Full Access)
+                      </Badge>
+                    ) : userRole === 'hr' ? (
+                      <Badge variant="secondary" className="bg-primary/10 text-primary font-semibold">
+                        HR (Full Access)
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-muted text-muted-foreground font-medium">
+                        {userRole.charAt(0).toUpperCase() + userRole.slice(1)} (Query Only)
+                      </Badge>
+                    )
+                  }
                 />
                 <InfoRow
                   label="User ID"
-                  value={activeUser ? activeUser.id : 'system-admin-uuid'}
-                  copyable={Boolean(activeUser)}
+                  value={displayUser?.id || 'system-admin-uuid'}
+                  copyable={Boolean(displayUser?.id)}
                 />
               </SettingCard>
             </SettingsSection>

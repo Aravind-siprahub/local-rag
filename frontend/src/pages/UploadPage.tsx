@@ -19,9 +19,13 @@ import {
   UploadQueue,
   useUploadQueue,
 } from '@/features/upload'
+import { useAuth } from '@/features/auth/hooks/authHooks'
 import type { DocumentListItem } from '@/types'
 
 export function UploadPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role?.toLowerCase() === 'admin'
+
   const {
     queue,
     rejectedFiles,
@@ -63,6 +67,23 @@ export function UploadPage() {
       setSelectedDocumentId(null)
     }
     void documentsQuery.refetch()
+  }
+
+  if (user && !isAdmin) {
+    return (
+      <div className="space-y-8 max-w-7xl mx-auto pb-12">
+        <UploadHeader />
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-8 text-center space-y-3">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-destructive/20 text-destructive text-xl font-bold">
+            !
+          </div>
+          <h2 className="text-xl font-bold text-foreground">Access Restricted</h2>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            You do not have permission to upload documents. Only administrators can upload documents to the knowledge base.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (

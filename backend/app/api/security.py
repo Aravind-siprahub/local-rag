@@ -169,6 +169,136 @@ def decode_access_token(token: str) -> dict[str, Any]:
     return payload
 
 
+# --- 2FA Secret Encryption & Decryption ----------------------------------------
+
+def _get_encryption_key() -> bytes:
+    """Derive a 256-bit encryption key from JWT_SECRET_KEY using SHA-256."""
+    settings = get_settings()
+    return hashlib.sha256(f"totp-enc-salt:{settings.JWT_SECRET_KEY}".encode("utf-8")).digest()
+
+
+def encrypt_totp_secret(plain_secret: str) -> str:
+    """Encrypt TOTP secret using AES-256-GCM authenticated encryption."""
+    if not plain_secret or not plain_secret.strip():
+        raise ValueError("Secret cannot be empty.")
+
+    key = _get_encryption_key()
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        aesgcm = AESGCM(key)
+        nonce = secrets.token_bytes(12)
+        ciphertext = aesgcm.encrypt(nonce, plain_secret.strip().encode("utf-8"), None)
+        return f"$aes-gcm${_b64url_encode(nonce)}${_b64url_encode(ciphertext)}"
+    except ImportError:
+        # Fallback: HMAC-SHA256 authenticated encryption
+        iv = secrets.token_bytes(16)
+        stream_key = hashlib.sha256(key + iv).digest()
+        plain_bytes = plain_secret.strip().encode("utf-8")
+        cipher_bytes = bytes(p ^ stream_key[i % len(stream_key)] for i, p in enumerate(plain_bytes))
+        tag = hmac.new(key, iv + cipher_bytes, hashlib.sha256).digest()
+        return f"$hmac-enc${_b64url_encode(iv)}${_b64url_encode(cipher_bytes)}${_b64url_encode(tag)}"
+
+
+def decrypt_totp_secret(encrypted_secret: str) -> str:
+    """Decrypt an encrypted TOTP secret using AES-256-GCM authenticated decryption."""
+    if not encrypted_secret or not encrypted_secret.strip():
+        raise ValueError("Encrypted secret cannot be empty.")
+
+    parts = encrypted_secret.strip().split("$")
+    key = _get_encryption_key()
+
+    if len(parts) == 4 and parts[1] == "aes-gcm":
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        nonce = _b64url_decode(parts[2])
+        ciphertext = _b64url_decode(parts[3])
+        aesgcm = AESGCM(key)
+        plain_bytes = aesgcm.decrypt(nonce, ciphertext, None)
+        return plain_bytes.decode("utf-8")
+    elif len(parts) == 5 and parts[1] == "hmac-enc":
+        iv = _b64url_decode(parts[2])
+        cipher_bytes = _b64url_decode(parts[3])
+        tag = _b64url_decode(parts[4])
+        expected_tag = hmac.new(key, iv + cipher_bytes, hashlib.sha256).digest()
+        if not hmac.compare_digest(expected_tag, tag):
+            raise InvalidTokenError("Encrypted TOTP secret MAC validation failed.")
+        stream_key = hashlib.sha256(key + iv).digest()
+        plain_bytes = bytes(c ^ stream_key[i % len(stream_key)] for i, c in enumerate(cipher_bytes))
+        return plain_bytes.decode("utf-8")
+    else:
+        # Backward compatibility for plain base32 secret in development/testing
+        if len(encrypted_secret) == 32 and encrypted_secret.isalnum():
+            return encrypted_secret
+        raise InvalidTokenError("Unknown or corrupted encrypted secret format.")
+
+
+# --- 2FA Challenge Tokens -----------------------------------------------------
+
+def create_2fa_challenge_token(
+    user_id: uuid.UUID | str,
+    is_setup: bool = False,
+    expires_minutes: int = 5,
+    extra_data: dict[str, Any] | None = None,
+) -> str:
+    """Create a short-lived (5-minute) signed challenge token for 2FA verification."""
+    extra = {
+        "token_type": "2fa_challenge",
+        "is_setup": is_setup,
+    }
+    if extra_data:
+        extra.update(extra_data)
+    return create_access_token(
+        user_id=user_id,
+        expires_delta=timedelta(minutes=expires_minutes),
+        extra_claims=extra,
+    )
+
+
+def decode_2fa_challenge_token(token: str) -> dict[str, Any]:
+    """Decode and verify a 2FA challenge token, ensuring it is unexpired and of type '2fa_challenge'."""
+    payload = decode_access_token(token)
+    if payload.get("token_type") != "2fa_challenge":
+        raise InvalidTokenError("Token is not a valid 2FA challenge token.")
+    return payload
+
+
+# --- 2FA Rate Limiting & Brute Force Protection -------------------------------
+
+_2FA_ATTEMPTS: dict[str, list[float]] = {}
+_MAX_2FA_ATTEMPTS = 5
+_LOCKOUT_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def is_2fa_rate_limited(identifier: str) -> tuple[bool, int]:
+    """Check if identifier (user_id or IP) is rate limited. Returns (is_limited, retry_after_seconds)."""
+    now = time.time()
+    history = _2FA_ATTEMPTS.get(identifier, [])
+    # Keep only timestamps within window
+    recent = [t for t in history if now - t < _LOCKOUT_WINDOW_SECONDS]
+    _2FA_ATTEMPTS[identifier] = recent
+
+    if len(recent) >= _MAX_2FA_ATTEMPTS:
+        oldest = recent[0]
+        retry_after = int(_LOCKOUT_WINDOW_SECONDS - (now - oldest))
+        return True, max(1, retry_after)
+    return False, 0
+
+
+def record_failed_2fa_attempt(identifier: str) -> int:
+    """Record a failed 2FA verification attempt. Returns number of remaining attempts."""
+    now = time.time()
+    history = _2FA_ATTEMPTS.setdefault(identifier, [])
+    history.append(now)
+    # clean old
+    recent = [t for t in history if now - t < _LOCKOUT_WINDOW_SECONDS]
+    _2FA_ATTEMPTS[identifier] = recent
+    return max(0, _MAX_2FA_ATTEMPTS - len(recent))
+
+
+def reset_2fa_attempts(identifier: str) -> None:
+    """Clear failed attempts on successful verification."""
+    _2FA_ATTEMPTS.pop(identifier, None)
+
+
 def verify_ownership(
     resource_owner_id: uuid.UUID | str,
     current_user: User,
@@ -183,3 +313,4 @@ def verify_ownership(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Access denied: You do not have permission to access or modify this {resource_name}.",
         )
+

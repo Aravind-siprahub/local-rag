@@ -145,7 +145,7 @@ class FakeWebSearchProvider:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
+    async def search(self, query: str, request_id: str | None = None, **kwargs) -> WebSearchResult:
         self.calls.append(query)
         return WebSearchResult(
             query=query,
@@ -204,7 +204,7 @@ class TestAgentRouterAsk:
 
         response = await service.ask(session.id, "When is Good Friday in 2026?")
 
-        assert web.calls == ["When is Good Friday in 2026?"]
+        assert web.calls == ["When is Good Friday in 2026"]
         assert retriever.calls == []
         assert "Good Friday" in response.answer or "April" in response.answer or "found" in response.answer.lower()
         assert not response.sources or getattr(response.sources[0], "section_title", "web") in ("web", "duckduckgo", "fake", "example.com")
@@ -249,7 +249,7 @@ class TestAgentRouterAsk:
             def __init__(self) -> None:
                 self.calls: list[str] = []
 
-            async def search(self, query: str, request_id: str | None = None) -> WebSearchResult:
+            async def search(self, query: str, request_id: str | None = None, **kwargs) -> WebSearchResult:
                 self.calls.append(query)
                 return WebSearchResult(query=query, provider="fake_empty", hits=[])
 
@@ -258,7 +258,7 @@ class TestAgentRouterAsk:
 
         response = await service.ask(session.id, "When is Good Friday in 2026?")
 
-        assert empty_web.calls == ["When is Good Friday in 2026?"]
+        assert empty_web.calls == ["When is Good Friday in 2026"]
         assert len(llm.calls) == 0  # Ollama NOT invoked for WEB route
         assert "could not find reliable web results" in response.answer.lower()
         assert response.sources == []

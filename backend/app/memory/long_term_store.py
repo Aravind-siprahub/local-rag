@@ -11,6 +11,7 @@ This approach:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import uuid
@@ -25,6 +26,8 @@ from app.models.long_term_memory import LongTermMemory
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository
 
 logger = logging.getLogger(__name__)
+
+_MEMORY_EMBED_CACHE: dict[str, list[float]] = {}
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -255,17 +258,20 @@ class LongTermMemoryStore:
             )
             return entries
 
-        # Embed each candidate and compute composite score
+        # Embed all candidates concurrently (using cache where available)
+        candidate_embeddings = await asyncio.gather(
+            *[self._embed_text(mem.content) for mem in candidates],
+            return_exceptions=True,
+        )
+
         now = datetime.now(timezone.utc)
         scored: list[tuple[float, LongTermMemory]] = []
 
-        for mem in candidates:
-            try:
-                mem_embedding = await self._embed_text(mem.content)
-            except Exception:
-                mem_embedding = []
+        for mem, mem_emb in zip(candidates, candidate_embeddings):
+            if isinstance(mem_emb, Exception) or not isinstance(mem_emb, list):
+                mem_emb = []
 
-            sim = _cosine_similarity(query_embedding, mem_embedding)
+            sim = _cosine_similarity(query_embedding, mem_emb)
             if len(candidates) > 10 and sim < effective_sim_thresh and effective_sim_thresh > 0:
                 continue  # Below threshold for large memory sets — skip
 
@@ -308,11 +314,19 @@ class LongTermMemoryStore:
     # ------------------------------------------------------------------
 
     async def _embed_text(self, text: str) -> list[float]:
-        """Embed text using the existing OllamaEmbeddingClient. Returns [] on failure."""
+        """Embed text using the existing OllamaEmbeddingClient with in-memory caching. Returns [] on failure."""
+        clean_text = text.strip()
+        if not clean_text:
+            return []
+        if clean_text in _MEMORY_EMBED_CACHE:
+            return _MEMORY_EMBED_CACHE[clean_text]
         try:
             from app.embeddings.client import OllamaEmbeddingClient
             client = OllamaEmbeddingClient()
-            return await client.embed(text)
+            vec = await client.embed(clean_text)
+            if vec:
+                _MEMORY_EMBED_CACHE[clean_text] = vec
+            return vec
         except Exception as exc:
             logger.warning("[MEMORY STORE] embedding_failed text=%r error=%s", text[:50], exc)
             return []

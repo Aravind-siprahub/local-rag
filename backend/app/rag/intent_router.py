@@ -83,6 +83,30 @@ _DOC_QA_PHRASES = (
     "uploaded document",
     "uploaded documents",
     "knowledge base",
+    "in document",
+    "in documents",
+    "inside document",
+    "inside of document",
+    "inside the document",
+    "inside of the document",
+    "see document",
+    "see the document",
+    "from document",
+    "from documents",
+    "getting in document",
+    "get in document",
+    "tell answer in document",
+    "tell the answer in document",
+    "tell from document",
+    "answer from document",
+    "answer in document",
+    "question inside document",
+    "question inside of document",
+    "read document",
+    "check document",
+    "look in document",
+    "what is in document",
+    "what is inside the document",
     "in my document",
     "in my documents",
     "in the document",
@@ -122,6 +146,26 @@ _DOC_QA_PHRASES = (
     "my local",
     "my documents only",
     "local only",
+    "siprahub",
+    "sipra hub",
+    "talk to my data",
+    "working hours",
+    "probation period",
+    "probation",
+    "background verification",
+    "bgv",
+    "posh",
+    "casual leave",
+    "sick leave",
+    "earned leave",
+    "maternity leave",
+    "paternity leave",
+    "bereavement leave",
+    "work from home",
+    "wfh policy",
+    "core values",
+    "exit policy",
+    "notice period",
 )
 
 _DOC_QA_CUE_WORDS = (
@@ -129,6 +173,9 @@ _DOC_QA_CUE_WORDS = (
     "doc", "docs", "guide", "guides", "manual", "manuals",
     "handbook", "handbooks", "sheet", "sheets", "prd", "specification",
     "problem", "statement", "architecture", "requirements",
+    "probation", "bgv", "posh", "wfh", "shift", "timing", "leave",
+    "attendance", "appraisal", "frontend", "backend", "database", "framework",
+    "siprahub", "sipra", "diagram", "chart",
 )
 
 _DOC_QA_ACTION_WORDS = (
@@ -183,11 +230,26 @@ _PROJECT_INFO_CUES = (
     "nginx",
     "install",
     "installation",
-    "python",
-    "version",
-    "required",
+    "python version",
+    "required python",
+    "python requirements",
+    "required version",
     "leave",
     "policy",
+    "probation",
+    "bgv",
+    "posh",
+    "working hours",
+    "casual leave",
+    "sick leave",
+    "earned leave",
+    "maternity",
+    "wfh",
+    "work from home",
+    "core values",
+    "siprahub",
+    "sipra",
+    "talk to my data",
 )
 
 _GENERIC_DEFINITION = re.compile(
@@ -198,6 +260,7 @@ _GENERIC_DEFINITION = re.compile(
 _TITLE_NOISE = {
     "prd",
     "guide",
+    "guides",
     "summary",
     "staging",
     "deployment",
@@ -211,6 +274,54 @@ _TITLE_NOISE = {
     "v3",
     "v4",
     "project",
+    "new",
+    "data",
+    "post",
+    "issues",
+    "testing",
+    "setup",
+    "talk",
+    "combined",
+    "documentation",
+    "framework",
+    "overview",
+    "system",
+    "report",
+    "analysis",
+    "meeting",
+    "notes",
+    "training",
+    "template",
+    "sample",
+    "example",
+    "review",
+    "checklist",
+    "version",
+    "file",
+    "files",
+    "sheet",
+    "sheets",
+    "manual",
+    "manuals",
+    "handbook",
+    "handbooks",
+    "presentation",
+    "slide",
+    "slides",
+    "table",
+    "chart",
+    "graph",
+    "code",
+    "app",
+    "service",
+    "info",
+    "information",
+    "general",
+    "basic",
+    "advanced",
+    "standard",
+    "standards",
+    "process",
 }
 
 # Document list cues
@@ -306,11 +417,24 @@ _CREATIVE_GENERATION_VERBS = re.compile(
     r"^(?:"
     r"write\b|create\b|generate\b|make\b|build\b|code\b|draft\b|"
     r"design\b|implement\b|program\b|develop\b|produce\b|"
+    r"invent\b|imagine\b|brainstorm\b|compose\b|suggest\b|propose\b|pitch\b|craft\b|"
     r"give me\b|help me\b|show me how\b|how to\b|how do i\b|"
-    r"write a\b|write me\b|create a\b|generate a\b|make a\b|build a\b|"
+    r"write a\b|write me\b|create a\b|generate a\b|make a\b|build a\b|invent a\b|"
     r"draw\b|sketch\b|plan\b|explain how to\b|teach me\b|tell me how\b"
     r")",
     re.IGNORECASE,
+)
+
+_REASONING_MATH_LOGIC_REGEX = re.compile(
+    r"(?i)(?:"
+    r"^(?:if|suppose|assume|consider)\s+(?:a|an|the|\d+)\b|"
+    r"\bat\s+what\s+time\s+will\s+(?:they|it|the)\b|"
+    r"\bhow\s+(?:many|much|long|far|fast)\s+(?:will|would|does|do|can|is|are|did)\b|"
+    r"\bwhat\s+is\s+the\s+(?:probability|likelihood|ratio|percentage|sum|difference|product|average|speed|distance)\b|"
+    r"\b(?:riddle|logic\s+puzzle|brain\s*teaser)\b|"
+    r"\bsolve\s+(?:this|the\s+following|for)\b|"
+    r"\bstep[- ]by[- ]step\s+(?:reasoning|solution|calculation)\b"
+    r")"
 )
 
 
@@ -349,6 +473,9 @@ def _is_document_qa(text: str, lower: str) -> bool:
         return True
     if any(phrase in lower for phrase in _DOC_QA_PHRASES):
         return True
+    # Creative and reasoning queries without explicit document reference are NOT document QA
+    if (_CREATIVE_GENERATION_VERBS.match(lower.strip()) or _REASONING_MATH_LOGIC_REGEX.search(lower.strip())) and not _has_explicit_private_doc_ref(lower):
+        return False
     word_tokens = set(re.findall(r"\b\w+\b", lower))
     if any(noun in word_tokens for noun in _DOC_QA_CUE_WORDS) and any(action in word_tokens for action in _DOC_QA_ACTION_WORDS):
         return True
@@ -356,6 +483,8 @@ def _is_document_qa(text: str, lower: str) -> bool:
 
 
 def _has_project_info_cues(lower: str) -> bool:
+    if "python.org" in lower or "official website" in lower or "released on" in lower:
+        return False
     return any(cue in lower for cue in _PROJECT_INFO_CUES)
 
 
@@ -415,8 +544,8 @@ def _is_corpus_document_qa(
     """
     if not document_titles:
         return False
-    # Creative/generative tasks (e.g. "write a poem") are never document lookups
-    if _CREATIVE_GENERATION_VERBS.match(lower.strip()):
+    # Creative/generative or reasoning/logic/math tasks are never document lookups unless explicitly requested from documents
+    if (_CREATIVE_GENERATION_VERBS.match(lower.strip()) or _REASONING_MATH_LOGIC_REGEX.search(lower.strip())) and not _has_explicit_private_doc_ref(lower):
         return False
 
     has_entity = _matches_document_entity(lower, document_titles)
@@ -465,13 +594,28 @@ def _is_calculator(text: str, lower: str) -> bool:
 
 
 def _is_datetime_query(lower: str) -> bool:
-    datetime_phrases = (
-        "today date", "today's date", "todays date", "date today", "the date today",
-        "what is the date", "what date is it", "current date", "what time is it",
-        "current time", "what day is today", "what day is it today", "time right now",
-        "today's time", "current day"
+    text = (lower or "").strip().lower()
+    # Explicit exclusions for holiday/festival/event/future date questions
+    event_markers = (
+        "diwali", "deepawali", "puja", "pooja", "festival", "holiday", "lakshmi",
+        "release", "announced", "launch", "event", "meeting", "expire", "expiry",
+        "deadline", "born", "birth", "founded", "happen", "news", "price", "cve",
+        "verify", "claim", "weather", "match", "game", "score", "schedule", "gpt", "model",
+        "when is", "when will", "which day is", "date of", "date for"
     )
-    return any(p in lower for p in datetime_phrases)
+    if any(m in text for m in event_markers):
+        return False
+
+    # Strict regex matches for current clock/calendar queries
+    current_clock_patterns = (
+        r"\b(?:what(?:\s+is|\s*'s)?\s+(?:today(?:'s)?\s+date|the\s+date\s+today|current\s+date|the\s+current\s+date))\b",
+        r"\b(?:what\s+date\s+is\s+it(?:\s+today)?)\b",
+        r"\b(?:what(?:\s+is|\s*'s)?\s+(?:the\s+time(?:\s+now)?|current\s+time|the\s+current\s+time|time\s+right\s+now))\b",
+        r"\b(?:what\s+time\s+is\s+it(?:\s+now)?)\b",
+        r"\b(?:what\s+day\s+is\s+(?:it\s+)?today)\b",
+        r"\b(?:today(?:'s)?\s+(?:date|day|time))\b",
+    )
+    return any(re.search(pat, text, re.IGNORECASE) for pat in current_clock_patterns)
 
 
 _CURRENT_INFO_CONCEPTS = (
@@ -494,6 +638,17 @@ _CURRENT_INFO_CONCEPTS = (
     "current stable",
     "latest documentation",
     "current documentation",
+    "last hour",
+    "last 1 hour",
+    "past hour",
+    "last 2 hours",
+    "last 24 hours",
+    "last 48 hours",
+    "past 24 hours",
+    "what happened in",
+    "since yesterday",
+    "compared with last week",
+    "what changed",
 )
 
 
@@ -507,9 +662,12 @@ _WEB_SEARCH_REGEX = re.compile(
     r"search(?:\s+\w+){0,3}\s+for|"
     r"search\s+(?:the\s+)?(?:web|online|internet|google|github|reddit|documentation|docs|bing|duckduckgo|repo|repository|live)|"
     r"find\s+(?:\w+\s+){0,2}(?:online|information\s+(?:about|on)?|info\s+(?:about|on)?|on\s+(?:the\s+)?(?:web|internet|google|github|reddit|documentation))|"
-    r"verify\s+online|check\s+online|"
-    r"real-?time|live\s+(?:search|info|data)|"
-    r"latest|recent|today"
+    r"verify(?:\s+\w+){0,4}\s+(?:online|web|claim|source|true|false)|"
+    r"real-?time|live\s+(?:search|info|data|price|score|weather)|"
+    r"latest|recent|today|"
+    r"last\s+(?:1\s+hour|hour|2\s+hours|24\s+hours|48\s+hours|week|month)|"
+    r"past\s+(?:hour|24\s+hours|48\s+hours|week)|"
+    r"what\s+happened\s+in|what\s+changed"
     r")\b",
     re.IGNORECASE,
 )
@@ -541,7 +699,8 @@ def _is_web_query(text: str, lower: str) -> bool:
         "look up", "lookup", "search github", "find on github", "search reddit",
         "search documentation", "verify online", "check online", "find information about",
         "find information on", "find public information", "public information", "search google", "search internet",
-        "realtime", "real-time", "live search", "use web search only", "web search only"
+        "realtime", "real-time", "live search", "use web search only", "web search only",
+        "last hour", "last 1 hour", "past hour", "last 24 hours", "what happened in", "since yesterday", "what changed"
     )
     if any(phrase in lower for phrase in web_phrases):
         return True
@@ -570,7 +729,12 @@ def _has_explicit_private_doc_ref(lower: str) -> bool:
         "in my document", "in my doc", "in my file", "in uploaded", "from my document",
         "from uploaded", "my uploaded", "my local documents", "local documents",
         "local document", "local rag", "local codebase", "local files", "local project",
-        "local documentation", "in my local", "my local", "my documents only", "local only"
+        "local documentation", "in my local", "my local", "my documents only", "local only",
+        "in document", "in documents", "inside document", "inside of document", "inside the document",
+        "inside of the document", "see document", "see the document", "from document", "from the document",
+        "getting in document", "tell the answer in document", "tell answer in document",
+        "answer inside document", "question inside document", "question inside of document",
+        "read document", "check document", "look in document", "this document", "the document",
     )
     return any(cue in lower for cue in private_doc_cues)
 def _is_document_detail(lower: str) -> bool:
@@ -582,6 +746,10 @@ def _is_document_detail(lower: str) -> bool:
         "more detail",
         "detailed summary",
         "detailed overview",
+        "detailed breakdown",
+        "full detailed",
+        "full breakdown",
+        "breakdown of",
         "all important policies",
         "all policies",
         "full detail",
@@ -624,7 +792,12 @@ def classify(
     lower = norm.lower() if norm else text.lower()
 
     # Explicit override checks (Priority 1 & Priority 2)
-    is_web_only = any(p in lower for p in ("use web search only", "web search only", "ignore my local documents", "ignore local documents", "without local documents"))
+    is_web_only = any(p in lower for p in (
+        "use web search only", "web search only", "ignore my local documents",
+        "ignore local documents", "without local documents", "search online for",
+        "search the web for", "search web for", "search internet for",
+        "search google for", "search github for",
+    ))
     is_local_only = any(p in lower for p in ("only my local", "do not use web search", "dont use web search", "don't use web search", "ignore web search", "without web search", "no web search", "my documents only", "local only", "according to my local", "answer this using only my local"))
 
     is_generic_def_without_cues = bool(
@@ -649,10 +822,23 @@ def classify(
     comparison_phrases = (
         "compare both", "compare local", "compare my project", "compare the python version",
         "my local documents, then search the web", "local project documentation and current official web",
-        "and is it current", "is it up-to-date", "is it up to date"
+        "and is it current", "is it up-to-date", "is it up to date",
+        "statutory labor law standards online", "industry standards online"
     )
-    is_explicit_hybrid = any(p in lower for p in comparison_phrases) or (
-        is_current_info and any(ref in lower for ref in ("in this project", "my project", "configured in", "does this project use", "my document", "local doc", "in the doc"))
+    raw_lower = text.lower()
+    has_comparison_cues = any(p in lower or p in raw_lower for p in (
+        "compare", "comparison", "versus", " vs ", " vs. ", "industry standard", "industry standards",
+        "market standard", "market standards", "best practices", "statutory", "labor law", "labor laws",
+        "other companies", "standard practice"
+    ))
+    has_local_anchor = has_private_doc or is_doc_q or any(ref in lower or ref in raw_lower for ref in (
+        "in this project", "my project", "configured in", "does this project use", "my document",
+        "local doc", "in the doc", "siprahub", "sipraone", "sipra", "leave policy", "framework"
+    ))
+    is_explicit_hybrid = any(p in lower or p in raw_lower for p in comparison_phrases) or (
+        has_local_anchor and has_comparison_cues
+    ) or (
+        is_current_info and any(ref in lower or ref in raw_lower for ref in ("in this project", "my project", "configured in", "does this project use", "my document", "local doc", "in the doc"))
     )
 
     if is_local_only:
@@ -671,30 +857,15 @@ def classify(
     elif is_explicit_hybrid:
         route = Route.HYBRID
         reason = "hybrid_comparison"
-    elif (is_current_info or _is_web_query(text, lower)) and not any(ref in lower for ref in ("in this project", "my project", "configured in", "does this project use", "in my local", "according to my", "my document", "local document")):
-        route = Route.WEB
-        reason = "current_information"
-    elif _is_datetime_query(lower):
-        route = Route.WEB
-        reason = "datetime_query"
-    elif _is_generic_chat(lower) or re.search(r"(?i)^(?:remember|note|keep\s+in\s+mind|save)\s+(?:that\s+)?", lower) or any(p in lower for p in ("what is my", "what are my", "who am i", "what do i prefer", "my timezone", "my preference", "my preferences", "what models do i", "do you remember", "what do you know about me")):
-        route = Route.GENERIC_CHAT
-        reason = "generic_chat"
-    elif len(lower.split()) == 1:
-        route = Route.DIRECT
-        reason = "single_word"
-    elif _is_document_metadata(lower):
-        route = Route.DOCUMENT_METADATA
-        reason = "document_metadata"
     elif _is_document_list(lower):
         route = Route.DOCUMENT_LIST
         reason = "document_list"
+    elif _is_document_metadata(lower):
+        route = Route.DOCUMENT_METADATA
+        reason = "document_metadata"
     elif _is_calculator(text, lower):
         route = Route.CALCULATOR
         reason = "calculator"
-    elif _is_web_query(text, lower):
-        route = Route.WEB
-        reason = "web_query"
     elif is_doc_q or has_private_doc:
         if _is_document_detail(lower):
             route = Route.DOCUMENT_DETAIL
@@ -705,6 +876,21 @@ def classify(
         else:
             route = Route.DOCUMENT_QA
             reason = "document_qa_corpus_active"
+    elif _is_datetime_query(lower):
+        route = Route.GENERIC_CHAT
+        reason = "datetime_query"
+    elif (is_current_info or _is_web_query(text, lower)) and not any(ref in lower for ref in ("in this project", "my project", "configured in", "does this project use", "in my local", "according to my", "my document", "local document", "siprahub", "sipraone", "sipra")) and not has_private_doc:
+        route = Route.WEB
+        reason = "current_information"
+    elif _is_web_query(text, lower):
+        route = Route.WEB
+        reason = "web_query"
+    elif _is_generic_chat(lower) or re.search(r"(?i)^(?:remember|note|keep\s+in\s+mind|save)\s+(?:that\s+)?", lower) or any(p in lower for p in ("what is my", "what are my", "who am i", "what do i prefer", "my timezone", "my preference", "my preferences", "what models do i", "do you remember", "what do you know about me")):
+        route = Route.GENERIC_CHAT
+        reason = "generic_chat"
+    elif len(lower.split()) == 1:
+        route = Route.DIRECT
+        reason = "single_word"
     else:
         route = Route.GENERAL_KNOWLEDGE
         reason = "general_knowledge"
@@ -754,7 +940,7 @@ _TOKEN_TIERS = {
     "simple": 1024,
     "moderate": 1536,
     "complex": 2048,
-    "very_complex": 3072,
+    "very_complex": 2048,
 }
 
 # Alias for backward compatibility with regression test suites
@@ -767,14 +953,18 @@ def analyze_complexity(query: str, model_name: str | None = None) -> int:
     Ported from OpenJarvis learning/routing/complexity.py.
     """
     text = (query or "").strip()
-    if not text or len(text.split()) <= 3:
+    if not text:
         tier = "trivial"
+    elif re.search(r"\b(?:summarize|summary|overview|breakdown|all policies|framework|handbook|explain in detail|complete)\b", text, re.IGNORECASE):
+        tier = "complex"
     elif _COMPLEXITY_CODE_PATTERNS.search(text) or _COMPLEXITY_MULTI_STEP_PATTERNS.search(text):
         tier = "complex"
     elif _COMPLEXITY_MATH_PATTERNS.search(text) or _COMPLEXITY_REASONING_PATTERNS.search(text):
         tier = "moderate"
-    elif len(text.split()) > 30:
+    elif len(text.split()) > 20:
         tier = "moderate"
+    elif len(text.split()) <= 3:
+        tier = "simple"
     else:
         tier = "simple"
 

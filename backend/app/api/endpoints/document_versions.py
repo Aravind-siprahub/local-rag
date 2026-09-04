@@ -3,7 +3,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.dependencies import PaginationParams, get_current_user, get_document_service, get_document_version_service
+from app.api.dependencies import (
+    PaginationParams,
+    get_current_user,
+    get_document_service,
+    get_document_version_service,
+    require_document_upload_permission,
+)
 from app.api.security import verify_ownership
 from app.models.user import User
 from app.schemas.actions import DocumentVersionUploadRequest
@@ -27,7 +33,7 @@ router = APIRouter(prefix="/document-versions", tags=["Document Versions"])
 )
 async def create_document_version(
     payload: DocumentVersionUploadRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_document_upload_permission),
     doc_service: DocumentService = Depends(get_document_service),
     service: DocumentVersionService = Depends(get_document_version_service),
 ) -> DocumentVersionResponse:

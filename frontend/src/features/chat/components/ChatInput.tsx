@@ -8,6 +8,7 @@ import { DragDropOverlay } from './DragDropOverlay'
 import type { Message, Attachment } from '../types/chat'
 
 import { uploadDocument } from '@/services/upload.service'
+import { useAuth } from '@/features/auth/hooks/authHooks'
 
 const SUPPORTED_EXTENSIONS = [
   'pdf', 'docx', 'doc', 'txt', 'csv', 'xlsx', 'xls', 'pptx', 'ppt',
@@ -32,13 +33,16 @@ export function ChatInput({
   onSend,
   disabled = false,
   sendDisabled = false,
-  placeholder = 'Ask any question or attach files...',
+  placeholder = 'Ask any question...',
   selectedModel,
   onSelectModel,
   editingMessage,
   onCancelEdit,
   onStop,
 }: ChatInputProps) {
+  const { user } = useAuth()
+  const isAdmin = user?.role?.toLowerCase() === 'admin'
+
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [preservedImageUrl, setPreservedImageUrl] = useState<string | null>(null)
@@ -92,6 +96,11 @@ export function ChatInput({
       }
 
       const isImg = IMAGE_EXTENSIONS.includes(ext)
+      if (!isImg && !isAdmin) {
+        setErrorMsg('Only administrators have permission to upload documents.')
+        return
+      }
+
       const maxSize = isImg ? 10 * 1024 * 1024 : 25 * 1024 * 1024
 
       if (file.size > maxSize) {
@@ -136,7 +145,7 @@ export function ChatInput({
                       ...a,
                       status: 'ready',
                       progress: 100,
-                      document_id: res.document_id || res.id,
+                      document_id: res.document_id || (res as unknown as { id?: string }).id,
                     }
                   : a
               )
@@ -306,7 +315,7 @@ export function ChatInput({
         </div>
       )}
 
-      {editingMessage && preservedImageUrl && !selectedFile && (
+      {editingMessage && preservedImageUrl && attachments.length === 0 && (
         <div className="text-[11px] text-amber-500 px-3 py-1 bg-amber-500/10 rounded-lg border border-amber-500/20 max-w-fit self-start animate-in fade-in-0">
           <strong>Note:</strong> To include the original image in your resubmission, you must re-attach it.
         </div>
@@ -363,21 +372,23 @@ export function ChatInput({
 
           <div className="flex items-center justify-between pt-1 px-1">
             <div className="flex items-center gap-1.5">
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={disabled}
-                className={cn(
-                  'h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground transition-colors',
-                  attachments.length > 0 && 'text-primary bg-primary/10 hover:bg-primary/20',
-                )}
-                title="Attach files (PDF, DOCX, CSV, XLSX, Images...)"
-                aria-label="Attach files"
-              >
-                <Paperclip className="h-4 w-4" />
-              </Button>
+              {isAdmin && (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={disabled}
+                  className={cn(
+                    'h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground transition-colors',
+                    attachments.length > 0 && 'text-primary bg-primary/10 hover:bg-primary/20',
+                  )}
+                  title="Attach files (PDF, DOCX, CSV, XLSX, Images...)"
+                  aria-label="Attach files"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </Button>
+              )}
 
               <ModelSelector
                 selectedModel={selectedModel}

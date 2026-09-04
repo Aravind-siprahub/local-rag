@@ -50,7 +50,12 @@ export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>()
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [selectedModel, setSelectedModel] = useState<string>(() => {
-    return localStorage.getItem('SELECTED_CHAT_MODEL') || 'auto/fast'
+    const saved = localStorage.getItem('SELECTED_CHAT_MODEL')
+    if (!saved || saved === 'auto/fast' || saved === 'omniroute/auto') {
+      localStorage.setItem('SELECTED_CHAT_MODEL', 'local-rag')
+      return 'local-rag'
+    }
+    return saved
   })
 
   const handleSelectModel = (modelId: string) => {
@@ -177,10 +182,14 @@ export function ChatPage() {
   }
 
   const handleDeleteChat = async (id: string) => {
-    await deleteConversation.mutateAsync(id)
     conversationOverlays.delete(id)
     if (activeSessionId === id) {
       handleNewChat()
+    }
+    try {
+      await deleteConversation.mutateAsync(id)
+    } catch (err) {
+      console.error("Failed to delete chat session:", err)
     }
   }
 
@@ -478,8 +487,8 @@ export function ChatPage() {
         <div className="p-3 sm:p-4 bg-background/50 border-t border-border/30 shrink-0">
           <div className="max-w-4xl mx-auto">
             <ChatInput
-              onSend={(msg, file, preservedImageUrl) => {
-                void handleSend(msg, file, preservedImageUrl)
+              onSend={(msg, attachments, primaryFile, preservedImageUrl) => {
+                void handleSend(msg, attachments, primaryFile, preservedImageUrl)
               }}
               onStop={handleStop}
               sendDisabled={currentMessageSending}

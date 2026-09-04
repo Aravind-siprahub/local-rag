@@ -25,6 +25,8 @@ _SHORTHAND_MAP: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bfronted\b", re.IGNORECASE), "frontend"),
     (re.compile(r"\bcrt\b", re.IGNORECASE), "correct"),
     (re.compile(r"\bshparp\b", re.IGNORECASE), "sharp"),
+    (re.compile(r"\b(polcies|policie|policys|polices|plocies)\b", re.IGNORECASE), "policies"),
+    (re.compile(r"\bwfh\b", re.IGNORECASE), "work from home WFH remote work"),
 )
 
 # File extensions & filenames pattern protection
@@ -132,13 +134,6 @@ def normalize_query(query: str) -> NormalizedQueryResult:
     elif re.search(r"\bearth\s+(?:is\s+)?2nd?\s+planet\s+or\s+3rd?\s+planet\b|\bearth\s+(?:is\s+)?2\s+planet\s+or\s+3\s+planet\b", norm_lower):
         norm = "Is Earth the 2nd or 3rd planet from the Sun?"
         retrieval_q = norm
-    elif re.search(r"\bearth\s+(?:which|number)\s+planet\b|\bwhich\s+planet\s+is\s+earth\b", norm_lower):
-        norm = "Which planet is Earth from the Sun?"
-        retrieval_q = norm
-    elif "leave policy" in norm_lower and "what" in norm_lower:
-        retrieval_q = "What is the company leave policy?"
-    elif "leave" in norm_lower and ("how many" in norm_lower or "count" in norm_lower):
-        retrieval_q = "How many leave days are provided in the leave policy?"
     else:
         # Generic conversational lead-in cleaning for RAG retrieval query
         clean_search = re.sub(

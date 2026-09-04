@@ -7,7 +7,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import PaginationParams, get_current_user, get_db, get_document_service, get_document_upload_service
+from app.api.dependencies import (
+    PaginationParams,
+    get_current_user,
+    get_db,
+    get_document_service,
+    get_document_upload_service,
+    require_document_upload_permission,
+)
 from app.api.file_utils import read_upload_within_limit
 from app.api.security import verify_ownership
 from app.core.config import get_settings
@@ -28,7 +35,6 @@ from app.processing.processor import DocumentProcessor
 from app.embeddings.worker import EmbeddingWorker
 from app.storage.s3_storage_service import S3StorageService
 from app.storage.supabase_storage_service import SupabaseStorageService
-from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +48,17 @@ async def _run_ingestion_background(document_id: uuid.UUID, parse_job_id: uuid.U
     BackgroundJobRunner.enqueue_document(document_id)
 
 
-
 @router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED, summary="Create a document")
 async def create_document(
     payload: DocumentCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_document_upload_permission),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
+    if payload.user_id and str(payload.user_id) != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot create document on behalf of another user.",
+        )
     document = await service.create_document(
         user_id=current_user.id, title=payload.title, description=payload.description, tags=payload.tags
     )
@@ -67,7 +77,7 @@ async def create_document(
 )
 async def upload_document(
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_document_upload_permission),
     title: str | None = Form(default=None, description="Defaults to the uploaded filename if omitted."),
     file: UploadFile = File(..., description="PDF, DOCX, TXT, or Markdown (.md/.markdown) file."),
     service: DocumentUploadService = Depends(get_document_upload_service),
@@ -110,7 +120,7 @@ async def upload_document(
 )
 async def process_document(
     document_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_document_upload_permission),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Manually trigger or retry full ingestion pipeline for a document."""
@@ -300,7 +310,7 @@ async def update_document(
 async def set_current_version(
     document_id: uuid.UUID,
     payload: SetCurrentVersionRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_document_upload_permission),
     service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
     document = await service.get(document_id)
@@ -321,7 +331,7 @@ async def set_current_version(
 async def reindex_document(
     document_id: uuid.UUID,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_document_upload_permission),
     session: AsyncSession = Depends(get_db),
 ) -> DocumentResponse:
     service = DocumentService(session)

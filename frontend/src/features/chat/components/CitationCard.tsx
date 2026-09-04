@@ -60,7 +60,7 @@ export function CitationCard({ citation }: CitationCardProps) {
             </a>
           ) : (
             <div className="text-[10px] bg-muted/60 px-1.5 py-0.5 rounded text-muted-foreground/80 font-mono">
-              {(citation.similarity_score * 100).toFixed(0)}% match
+              {Math.min(100, Math.max(0, Math.round(citation.similarity_score * 100)))}% match
             </div>
           )}
           <button 

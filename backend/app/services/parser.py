@@ -360,23 +360,45 @@ class DocumentParser:
         heading_style_names = {"Title", "Heading 1", "Heading 2", "Heading 3",
                                "Heading 4", "Heading 5", "Heading 6"}
 
+        def _classify_docx_para(p: Paragraph) -> DocumentBlock | None:
+            p_text = p.text.strip()
+            if not p_text:
+                return None
+            p_style = p.style.name if p.style and p.style.name else ""
+            is_heading_style = bool(p_style and (p_style in heading_style_names or p_style.startswith("Heading")))
+            non_empty_runs = [r for r in p.runs if r.text.strip()]
+            is_all_bold = bool(non_empty_runs) and all(bool(r.bold) for r in non_empty_runs)
+
+            is_heading = False
+            level = 1
+            if is_heading_style:
+                is_heading = True
+                level = self._heading_level_from_style(p_style)
+            elif len(p_text) <= 80 and not p_text.endswith("."):
+                if is_all_bold:
+                    is_heading = True
+                    level = 1 if any(kw in p_text.lower() for kw in ("policy", "framework", "conduct", "overview", "handbook", "summary", "exit", "verification")) else 2
+                elif re.match(r"^(?:[0-9]+[\.\)]|[A-Z][\.\)])\s+[A-Z]", p_text):
+                    is_heading = True
+                    level = 2
+                elif any(p_text.lower().endswith(sfx) for sfx in ("policy", "framework", "guidelines", "overview")):
+                    is_heading = True
+                    level = 1
+
+            if is_heading:
+                block_type = BlockType.HEADING if level <= 1 else BlockType.SUBHEADING
+                return DocumentBlock(block_type=block_type, text=p_text, level=level)
+            elif (p_style and ("list" in p_style.lower() or "bullet" in p_style.lower())) or self._looks_like_list(p_text):
+                return DocumentBlock(block_type=BlockType.LIST, text=p_text)
+            else:
+                return DocumentBlock(block_type=BlockType.PARAGRAPH, text=p_text)
+
         for element in document.element.body:
             if element.tag.endswith("p"):
                 paragraph = Paragraph(element, document)
-                text = paragraph.text.strip()
-                if not text:
-                    continue
-                style_name = paragraph.style.name if paragraph.style and paragraph.style.name else ""
-                if style_name and (style_name in heading_style_names or style_name.startswith("Heading")):
-                    level = self._heading_level_from_style(style_name)
-                    block_type = BlockType.HEADING if level <= 1 else BlockType.SUBHEADING
-                    blocks.append(DocumentBlock(
-                        block_type=block_type, text=text, level=level
-                    ))
-                elif self._looks_like_list(text):
-                    blocks.append(DocumentBlock(block_type=BlockType.LIST, text=text))
-                else:
-                    blocks.append(DocumentBlock(block_type=BlockType.PARAGRAPH, text=text))
+                classified = _classify_docx_para(paragraph)
+                if classified:
+                    blocks.append(classified)
             elif element.tag.endswith("tbl"):
                 table = Table(element, document)
                 rows: list[str] = []
@@ -395,9 +417,9 @@ class DocumentParser:
         # Fallback if body iteration produced 0 blocks
         if not blocks:
             for paragraph in document.paragraphs:
-                text = paragraph.text.strip()
-                if text:
-                    blocks.append(DocumentBlock(block_type=BlockType.PARAGRAPH, text=text))
+                classified = _classify_docx_para(paragraph)
+                if classified:
+                    blocks.append(classified)
 
         if not blocks:
             raise CorruptedFileError(f"DOCX {filename!r} has no extractable text.")
@@ -775,13 +797,22 @@ class DocumentParser:
     @staticmethod
     def _looks_like_list(text: str) -> bool:
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not lines:
+            return False
         if len(lines) < 2:
-            return bool(_MD_LIST_RE.match(text))
+            return (
+                bool(_MD_LIST_RE.match(text))
+                or bool(re.match(r"^[-*+•–—·\u2022\u2013\u2014\uf0b7]\s+", text))
+                or bool(re.match(r"^\d+[.)]\s+", text))
+                or bool(re.match(r"^[A-Z][a-z]+(?:\s+[A-Za-z]+)?\s+[–—\-]\s+.+$", text))
+            )
         list_lines = sum(
             1 for ln in lines
-            if re.match(r"^[-*+•]\s+", ln) or re.match(r"^\d+[.)]\s+", ln)
+            if re.match(r"^[-*+•–—·\u2022\u2013\u2014\uf0b7]\s+", ln)
+            or re.match(r"^\d+[.)]\s+", ln)
+            or re.match(r"^[A-Z][a-z]+(?:\s+[A-Za-z]+)?\s+[–—\-]\s+.+$", ln)
         )
-        return list_lines >= len(lines) * 0.6
+        return list_lines >= len(lines) * 0.5
 
     @staticmethod
     def _looks_like_code(text: str) -> bool:

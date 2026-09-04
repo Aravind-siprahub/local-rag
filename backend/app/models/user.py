@@ -34,8 +34,24 @@ class User(TimestampMixin, Base):
     )
     is_active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
     is_verified: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    verification_otp_hash: Mapped[str | None] = mapped_column(nullable=True)
+    verification_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    verification_attempts: Mapped[int] = mapped_column(nullable=False, server_default=text("0"), default=0)
+    last_otp_sent_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    is_2fa_enabled: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(nullable=True)
+    recovery_codes_hash: Mapped[str | None] = mapped_column(nullable=True)
     last_login_at: Mapped[datetime | None]
     deleted_at: Mapped[datetime | None]
+
+    @property
+    def email_verified(self) -> bool:
+        """Alias for is_verified."""
+        return self.is_verified
+
+    @email_verified.setter
+    def email_verified(self, val: bool) -> None:
+        self.is_verified = val
 
     documents: Mapped[list[Document]] = relationship(back_populates="owner")
     document_versions_uploaded: Mapped[list[DocumentVersion]] = relationship(back_populates="uploaded_by_user")

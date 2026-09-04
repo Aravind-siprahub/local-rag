@@ -58,7 +58,84 @@ class UserResponse(UserBase, TimestampSchema, ORMModel):
     role: UserRole
     is_active: bool
     is_verified: bool
+    is_2fa_enabled: bool = False
     last_login_at: datetime | None = None
 
 
 UserListResponse = PaginatedResponse[UserResponse]
+
+
+# --- 2FA Schemas --------------------------------------------------------------
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str | None = None
+
+
+class TwoFactorSetupResponse(BaseModel):
+    totp_secret: str
+    provisioning_uri: str
+    qr_code_data_url: str
+    backup_codes: list[str]
+    temp_token: str | None = None
+    message: str = "Scan the QR code with Google Authenticator or Microsoft Authenticator, save your recovery codes, and submit the 6-digit verification code."
+
+
+class TwoFactorVerifyRequest(BaseModel):
+    temp_token: str | None = None
+    code: str  # Can be 6-digit TOTP or recovery code (e.g. XXXX-XXXX)
+    is_backup_code: bool = False
+
+
+class TwoFactorChallengeResponse(BaseModel):
+    requires_2fa: bool = True
+    requires_2fa_setup: bool = False
+    temp_token: str
+    message: str = "Please provide your 6-digit authenticator code or recovery code to complete sign in."
+
+
+# --- Email Verification Schemas -----------------------------------------------
+
+class RegistrationResponse(BaseModel):
+    status: str = "verification_required"
+    email: str
+    message: str = "Verification code sent to your email. Please verify to complete registration."
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyEmailResponse(BaseModel):
+    status: str = "verified"
+    message: str = "Email successfully verified."
+    access_token: str | None = None
+    token_type: str = "bearer"
+    user: UserResponse | None = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    status: str = "sent"
+    message: str = "If an account exists with this email, a 6-digit password reset code has been sent."
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: PasswordField
+
+
+class ResetPasswordResponse(BaseModel):
+    status: str = "success"
+    message: str = "Password has been successfully reset. Please log in with your new password."
+

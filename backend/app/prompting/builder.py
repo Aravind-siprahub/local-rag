@@ -152,111 +152,22 @@ def _build_context(
     max_context_chars: int,
     question: str = "",
 ) -> tuple[list[RetrievedChunkContext], str]:
-    """Select chunks that fit within the context budget, apply passage trimming, and format them."""
+    """Select chunks that fit within the context budget, apply passage trimming, and format them.
+
+    NOTE: Chunks passed here are already cross-encoder reranked. Their similarity_score
+    holds cross-encoder logit values (range -10 to +10), NOT cosine similarity [0,1].
+    We bypass cosine threshold filtering (threshold=0.0) to prevent silent chunk drops.
+    """
     if not retrieved_chunks:
         return [], ""
 
-    included: list[RetrievedChunkContext] = []
-    formatted_parts: list[str] = []
-    used_chars = 0
+    from app.rag.context_builder import ContextBuilder
 
-    for result in retrieved_chunks:
-        context_index = len(included) + 1
-        title = getattr(result, "document_title", "Unknown Document")
-        section = getattr(result, "section_title", "General") or "General"
-        page = str(getattr(result, "page_number", 1) or 1)
-        chunk_id = str(result.chunk_id)
-
-        # Apply simple truncation only — do NOT use passage trimming around keywords.
-        # The trim function removes sentences that don't contain query words, which silently
-        # strips answer content when it's in a different sentence from the matched keyword.
-        effective_text = result.chunk_text if len(result.chunk_text) <= 3500 else result.chunk_text[:3500].rstrip() + "..."
-
-        chunk_block = format_chunk(
-            context_index,
-            effective_text,
-            title=title,
-            section=section,
-            page=page,
-            chunk_id=chunk_id,
-        )
-        separator_len = 2 if formatted_parts else 0  # "\n\n" between blocks
-
-        if used_chars + separator_len + len(chunk_block) <= max_context_chars:
-            included.append(
-                RetrievedChunkContext(
-                    chunk_id=result.chunk_id,
-                    chunk_text=effective_text,
-                    document_id=result.document_id,
-                    document_version_id=result.document_version_id,
-                    similarity_score=result.similarity_score,
-                    rank=result.rank,
-                    context_index=context_index,
-                    document_title=getattr(result, "document_title", None),
-                    section_title=getattr(result, "section_title", None),
-                    page_number=getattr(result, "page_number", None),
-                )
-            )
-            formatted_parts.append(chunk_block)
-            used_chars += separator_len + len(chunk_block)
-            continue
-
-        remaining = max_context_chars - used_chars - separator_len
-        empty_block = format_chunk(
-            context_index,
-            "",
-            title=title,
-            section=section,
-            page=page,
-            chunk_id=chunk_id,
-        )
-        template_len = len(empty_block)
-        is_single_chunk = len(retrieved_chunks) == 1
-
-        if remaining <= template_len:
-            if not is_single_chunk or used_chars > 0:
-                break
-
-        if is_single_chunk and remaining <= template_len:
-            allowed_text_chars = max(10, remaining - 10)
-        else:
-            allowed_text_chars = remaining - template_len
-
-        truncated_text = _truncate_text(effective_text, allowed_text_chars)
-        if not truncated_text.strip():
-            if not is_single_chunk:
-                break
-            truncated_text = "..."
-
-        truncated_block = format_chunk(
-            context_index,
-            truncated_text,
-            title=title,
-            section=section,
-            page=page,
-            chunk_id=chunk_id,
-        )
-
-        included.append(
-            RetrievedChunkContext(
-                chunk_id=result.chunk_id,
-                chunk_text=truncated_text,
-                document_id=result.document_id,
-                document_version_id=result.document_version_id,
-                similarity_score=result.similarity_score,
-                rank=result.rank,
-                context_index=context_index,
-                document_title=getattr(result, "document_title", None),
-                section_title=getattr(result, "section_title", None),
-                page_number=getattr(result, "page_number", None),
-            )
-        )
-        formatted_parts.append(truncated_block)
-        break
-
-    context_text = "\n\n".join(formatted_parts)
-    return included, context_text
-
+    # Use 0.0 threshold — cosine filtering was already applied by the retriever before reranking.
+    # Using default settings.SIMILARITY_THRESHOLD here incorrectly filters by logit scores.
+    builder = ContextBuilder(similarity_threshold=0.0, max_context_chars=max_context_chars)
+    result = builder.build_context(retrieved_chunks, query=question)
+    return result.selected_chunks, result.formatted_context
 
 
 def _truncate_text(text: str, max_chars: int) -> str:

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
+import { AuthStore } from '@/features/auth/utils/authStore'
 import { getHealth, listSystemSettings, listUsers, upsertSystemSetting } from '@/services'
 import type { SystemSetting } from '@/types'
 
@@ -34,6 +35,13 @@ export function useSettings() {
   }, [settingsQuery.data?.items])
 
   const activeUser = useMemo(() => {
+    const authUser = AuthStore.getUser()
+    if (authUser?.email && usersQuery.data?.items) {
+      const match = usersQuery.data.items.find(
+        (u) => u.email.toLowerCase() === authUser.email.toLowerCase(),
+      )
+      if (match) return match
+    }
     return usersQuery.data?.items.find((u) => u.is_active) ?? usersQuery.data?.items[0] ?? null
   }, [usersQuery.data?.items])
 

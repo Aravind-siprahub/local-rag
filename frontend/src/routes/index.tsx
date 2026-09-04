@@ -4,6 +4,7 @@ import { AppLayout } from '@/layouts/AppLayout'
 import { AuthLayout } from '@/layouts/AuthLayout'
 import { Login } from '@/features/auth/pages/Login'
 import { Signup } from '@/features/auth/pages/Signup'
+import { ForgotPassword } from '@/features/auth/pages/ForgotPassword'
 import {
   DashboardPage,
   DocumentsPage,
@@ -22,6 +23,7 @@ export const appRouter = createBrowserRouter([
     children: [
       { path: ROUTES.login,  element: <Login /> },
       { path: ROUTES.signup, element: <Signup /> },
+      { path: ROUTES.forgotPassword, element: <ForgotPassword /> },
     ],
   },
   // Application Dashboard Routes

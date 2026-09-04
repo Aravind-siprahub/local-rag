@@ -70,3 +70,12 @@ class ChatMessageService(BaseService[ChatMessage, uuid.UUID, ChatMessageReposito
         self, session_id: uuid.UUID, *, limit: int = 200, offset: int = 0
     ) -> list[ChatMessage]:
         return await self.repository.list_by_session(session_id, limit=limit, offset=offset)
+
+    async def delete_message(self, message_id: uuid.UUID) -> bool:
+        msg = await self.repository.get(message_id)
+        if msg is None:
+            return False
+        await self.repository.delete(message_id)
+        await self.session.commit()
+        return True
+

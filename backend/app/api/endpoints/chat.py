@@ -465,6 +465,20 @@ async def ask_chat_stream(
             _stream_logger.error("[IMAGE] supabase_upload_failed (stream) error=%s", e)
             raise HTTPException(status_code=500, detail="Image upload failed. Please try again.")
 
+    if not image_storage_path and attachments_meta:
+        for att in attachments_meta:
+            sp = att.get("storage_path")
+            mime = str(att.get("mime_type") or "").lower()
+            fname = str(att.get("filename") or "").lower()
+            is_img = mime.startswith("image/") or any(fname.endswith(f".{ext}") for ext in ("png", "jpg", "jpeg", "webp"))
+            if sp and is_img:
+                image_storage_path = sp
+                image_name = image_name or att.get("filename")
+                image_mime = image_mime or (mime if mime.startswith("image/") else "image/png")
+                image_size = image_size or att.get("size")
+                logger.info("[IMAGE] extracted image_storage_path=%s from attachments_meta", image_storage_path)
+                break
+
     if document_id is None and attachments_meta:
         for att in attachments_meta:
             doc_id_val = att.get("document_id")
@@ -503,8 +517,19 @@ async def ask_chat_stream(
         model=req_model,
     )
 
+    async def _stream_with_cleanup():
+        try:
+            async for item in generator:
+                yield item
+        finally:
+            if hasattr(rag, "close"):
+                try:
+                    await rag.close()
+                except Exception:
+                    pass
+
     return StreamingResponse(
-        generator,
+        _stream_with_cleanup(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

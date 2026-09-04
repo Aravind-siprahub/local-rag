@@ -23,6 +23,26 @@ export function useAuth() {
 
     window.addEventListener('auth:unauthorized', handleAuthChange)
     window.addEventListener('auth:change', handleAuthChange)
+
+    // Sync fresh profile from backend /auth/me to ensure user role is always up-to-date
+    if (AuthStore.getAccessToken()) {
+      authApi.getCurrentUser().then((profile) => {
+        if (profile) {
+          const normalized: User = {
+            id: profile.id,
+            email: profile.email,
+            fullName: profile.fullName || (profile as unknown as { full_name?: string }).full_name || profile.email.split('@')[0],
+            role: (profile.role as User['role']) || 'member',
+            createdAt: profile.createdAt,
+          }
+          AuthStore.setUser(normalized)
+          setUser(normalized)
+        }
+      }).catch(() => {
+        // Ignore network failure on background sync
+      })
+    }
+
     return () => {
       window.removeEventListener('auth:unauthorized', handleAuthChange)
       window.removeEventListener('auth:change', handleAuthChange)
@@ -54,13 +74,17 @@ export function useLogin() {
   return useMutation({
     mutationFn: async (credentials: LoginCredentials) => {
       const data = await authApi.login(credentials)
-      AuthStore.setSession(data.accessToken, data.user, data.refreshToken)
-      AuthStore.setRememberedEmail(credentials.email, Boolean(credentials.rememberMe))
+      if (data.auth) {
+        AuthStore.setSession(data.auth.accessToken, data.auth.user)
+        AuthStore.setRememberedEmail(credentials.email, Boolean(credentials.rememberMe))
+      }
       return data
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(AUTH_QUERY_KEY, data.user)
-      navigate(ROUTES.dashboard, { replace: true })
+      if (data.auth) {
+        queryClient.setQueryData(AUTH_QUERY_KEY, data.auth.user)
+        navigate(ROUTES.dashboard, { replace: true })
+      }
     },
   })
 }
@@ -69,21 +93,13 @@ export function useLogin() {
  * Custom Hook for User Sign Up / Registration Mutation
  */
 export function useRegister() {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-
   return useMutation({
     mutationFn: async (credentials: SignupCredentials) => {
-      const data = await authApi.register(credentials)
-      AuthStore.setSession(data.accessToken, data.user, data.refreshToken)
-      return data
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData(AUTH_QUERY_KEY, data.user)
-      navigate(ROUTES.dashboard, { replace: true })
+      return await authApi.register(credentials)
     },
   })
 }
+
 
 /**
  * Custom Hook for User Logout

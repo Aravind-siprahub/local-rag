@@ -12,15 +12,18 @@ USER_PROMPT_WITH_CONTEXT = (
     "{context_header}:\n\n"
     "{context}\n\n"
     "{question_header} {question}\n\n"
-    "CRITICAL RULES FOR YOUR RESPONSE:\n"
-    "1. Give a direct, helpful, factual, and complete response summarizing all relevant details present in the context related to the user's question.\n"
-    "2. If the question asks to explain or define a general concept, acronym, or industry term (such as 'POC' / 'Proof of Concept'), first define the general concept clearly, and then explain how that concept is specifically used or applied in the document context above.\n"
-    "3. State all verified facts, tracking rules, policies, and metrics present in the document context accurately. If the question asks for specific details (such as fixed shift start/end times, lunch breaks, or exact hours) that are NOT explicitly mentioned in the context, state what the document DOES record while clarifying that exact fixed times or figures are not explicitly specified.\n"
-    "4. Inspect the uploaded document context for matching keywords or concepts from the question. When matching keywords or sections are found, extract and state the full answer directly based on those matching document details.\n"
-    "5. Do NOT invent or infer unstated facts, shift times, figures, or policies not present in the document context.\n"
-    "6. Do NOT list documents, section numbers, or page numbers.\n"
-    "7. Do NOT output self-talk, reasoning, or phrases like 'Let's write', 'We are to be', 'Note that', or 'The key is'.\n"
-    "8. If the context contains NO relevant facts whatsoever for the question, say: \"The requested information is not found in the documents.\"\n"
+    "CRITICAL GROUNDING RULES:\n"
+    "1. The retrieved document context is your ONLY source of truth. Pretrained knowledge is strictly forbidden for document-based questions.\n"
+    "2. MULTI-PART QUESTIONS: If the question asks about multiple topics (e.g. topic A and topic B), you MUST address EVERY requested topic:\n"
+    "   - For topics present in the context: Answer factually using ONLY the provided excerpts.\n"
+    "   - For topics NOT present in the context: Explicitly state: \"The provided document does not specify [Topic].\"\n"
+    "   - NEVER omit a requested topic, and NEVER invent policies or numbers to fill in an absent topic.\n"
+    "3. EXACT NUMBERS & TERMINOLOGY: Preserve exact wording, numbers, limits, and time periods from the document (e.g. if the document states \"1 (one) Casual Leave per month\", state exactly that; do NOT change it to \"12 casual leaves annually\").\n"
+    "4. NO POLICY SUBSTITUTION: Do NOT combine or substitute unrelated sections (e.g. do NOT substitute Code of Conduct for Core Values unless explicitly asked).\n"
+    "5. RELEVANCE: Answer ONLY what the user asked. Do NOT include unrequested adjacent topics (e.g. do not explain working hours or IT security when asked about leave).\n"
+    "6. FORMAT: Present verified facts directly, clearly, and concisely in clean bullet points without self-talk or reasoning monologue.\n"
+    "7. COMPLETELY UNSUPPORTED: If the document context contains no supporting information for the question or is insufficient, respond: \"I couldn't find enough information in the available documents to answer this question.\"\n"
+    "8. PROJECT ISOLATION: When answering for a specific project (such as AIRIS, SipraOne, SipraHub, or Talk to My Data), verify that the retrieved excerpts explicitly describe THAT project. Never mix in or attribute technologies or policies from other documents or projects.\n"
 )
 
 USER_PROMPT_WITHOUT_CONTEXT = (
@@ -28,7 +31,7 @@ USER_PROMPT_WITHOUT_CONTEXT = (
     "No document excerpts were available.\n\n"
     "Question:\n\n{question}\n\n"
     "CRITICAL GROUNDING RULES:\n"
-    "No document context was retrieved for this query. If the question asks for information from uploaded documents or project specifications, or if no relevant context exists, respond: \"Information not found in document excerpts.\""
+    "No document context was retrieved for this query. If the question asks for information from uploaded documents or project specifications, or if no relevant context exists, respond: \"I couldn't find enough information in the available documents to answer this question.\""
 )
 
 

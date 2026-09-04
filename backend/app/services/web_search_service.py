@@ -23,6 +23,35 @@ from app.tools.web_search import (
 logger = logging.getLogger(__name__)
 
 
+def is_article_url(url: str) -> bool:
+    """Validate if a URL points to a specific article rather than a category, topic, tag, portal, or index page."""
+    if not url:
+        return False
+
+    url_lower = url.lower().strip()
+    parsed = urllib.parse.urlparse(url_lower)
+    path = parsed.path.rstrip("/")
+
+    # Root domain URLs without an article path are not specific articles
+    if not path or path in ("", "/index.html", "/home", "/news", "/technology", "/technology/openai", "/latest/openai", "/technology/cybersecurity"):
+        return False
+
+    # Block category, topic, search, tag, newsroom, portal, and index pages
+    forbidden_path_patterns = (
+        "/topics/", "/topic/", "/tag/", "/tags/", "/search/", "/label/",
+        "/newsroom", "/company-announcements", "/category/", "/categories/",
+        "/archive/", "/feed/", "/labels/", "/rss/", "/all-news", "/verticals/",
+        "/latest/openai", "/technology/openai"
+    )
+    if any(pattern in url_lower for pattern in forbidden_path_patterns):
+        return False
+
+    if "news.google.com/topics" in url_lower or "news.google.com/search" in url_lower:
+        return False
+
+    return True
+
+
 class WebSearchService:
     """Service handling web search execution, page fetching, deduplication, and context construction."""
 
@@ -102,6 +131,11 @@ class WebSearchService:
                 )
                 continue
 
+            # Article URL validation (reject category, topic, tag, newsroom pages)
+            if not is_article_url(clean_url):
+                logger.info("[FILTERED_RESULTS REJECT] Non-article URL rejected: %s", clean_url)
+                continue
+
             seen_urls.add(clean_url)
             domain = hit.source or urllib.parse.urlparse(clean_url).netloc.replace("www.", "")
 
@@ -119,28 +153,71 @@ class WebSearchService:
             if len(unique_hits) >= limit:
                 break
 
-        # 3. Optional Deep Page Text Extraction
+        # Fallback: If strict article filtering excluded all results, include all SSRF-safe hits
+        if not unique_hits:
+            seen_urls.clear()
+            for hit in raw_result.hits:
+                if not hit.url:
+                    continue
+                clean_url = hit.url.strip().rstrip("/")
+                if clean_url in seen_urls:
+                    continue
+                is_safe, _ = is_safe_url(clean_url)
+                if not is_safe:
+                    continue
+                seen_urls.add(clean_url)
+                domain = hit.source or urllib.parse.urlparse(clean_url).netloc.replace("www.", "")
+                unique_hits.append(
+                    WebSearchHit(
+                        title=hit.title or "Web Search Result",
+                        url=clean_url,
+                        snippet=hit.snippet or "",
+                        source=domain or "web",
+                        published_at=hit.published_at,
+                        content=hit.content,
+                    )
+                )
+                if len(unique_hits) >= limit:
+                    break
+
+        # 3. Fast Parallel Deep Page Text Extraction (asyncio.gather)
         fetch_ms = 0
         pages_fetched_count = 0
         if fetch_pages and unique_hits:
+            import asyncio
             fetch_start = time.monotonic()
-            for idx, hit in enumerate(unique_hits[:max_pages_to_fetch]):
+            targets = unique_hits[:max_pages_to_fetch]
+
+            async def _fetch_one(hit: WebSearchHit) -> None:
                 if hit.content:
-                    continue  # already has content
+                    return
                 try:
-                    extracted_text = await self.page_fetcher.fetch_and_extract(
+                    extracted_text, pub_date, headline = await self.page_fetcher.fetch_and_extract(
                         hit.url,
                         max_chars=2500,
                         request_id=req_id,
                     )
+                    if pub_date and not hit.published_at:
+                        hit.published_at = pub_date
+                    if headline and (not hit.title or hit.title.lower().startswith(("http", "www.")) or "/" in hit.title):
+                        hit.title = headline
                     if extracted_text:
                         hit.content = extracted_text
-                        pages_fetched_count += 1
-                        logger.info("PAGE_FETCH_DEBUG: url=%s status=200 content_length=%d", hit.url, len(extracted_text))
-                    else:
-                        logger.info("PAGE_FETCH_DEBUG: url=%s status=empty content_length=0", hit.url)
                 except Exception as fetch_exc:
-                    logger.info("PAGE_FETCH_DEBUG: url=%s status=error error=%s", hit.url, fetch_exc)
+                    logger.debug("PAGE_FETCH_DEBUG: url=%s error=%s", hit.url, fetch_exc)
+
+            try:
+                # Concurrent fetch across all targets with 2.5s hard timeout
+                await asyncio.wait_for(
+                    asyncio.gather(*[_fetch_one(h) for h in targets], return_exceptions=True),
+                    timeout=2.5,
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.info("[WEB SEARCH SERVICE] Page fetching 2.5s timeout reached. Continuing with gathered snippets.")
+            except Exception as gather_exc:
+                logger.warning("[WEB SEARCH SERVICE] Parallel page fetch error: %s", gather_exc)
+
+            pages_fetched_count = sum(1 for h in targets if h.content)
             fetch_ms = int((time.monotonic() - fetch_start) * 1000)
 
         total_ms = int((time.monotonic() - start_time) * 1000)
@@ -164,7 +241,7 @@ class WebSearchService:
 
 
 def format_web_context(hits: Sequence[WebSearchHit]) -> str:
-    """Format web search hits into clean context string for LLM prompting."""
+    """Format web search hits into clean context string combining snippet and extracted page body for LLM prompting."""
     if not hits:
         return "No web search context available."
 
@@ -172,11 +249,18 @@ def format_web_context(hits: Sequence[WebSearchHit]) -> str:
     for idx, hit in enumerate(hits, start=1):
         domain_str = f" [{hit.source}]" if hit.source else ""
         date_str = f" (Published: {hit.published_at})" if hit.published_at else ""
-        content_body = (hit.content or hit.snippet or "").strip()
+        snippet_part = hit.snippet.strip() if hit.snippet else ""
+        content_part = hit.content.strip() if hit.content else ""
+
+        if content_part and snippet_part and snippet_part not in content_part:
+            combined_body = f"{snippet_part}\n{content_part}"
+        else:
+            combined_body = content_part or snippet_part or "No text content extracted."
+
         sections.append(
             f"Result [{idx}] {hit.title}{domain_str}{date_str}\n"
             f"URL: {hit.url}\n"
-            f"Content: {content_body}"
+            f"Content Summary & Body:\n{combined_body}"
         )
 
     return "\n\n".join(sections)

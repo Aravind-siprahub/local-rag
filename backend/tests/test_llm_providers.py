@@ -243,7 +243,7 @@ def test_factory_model_and_url_selection():
         # 4. OmniRoute Gateway
         client_omni = get_llm_client(provider="omniroute")
         assert isinstance(client_omni, OmniRouteLLMClient)
-        assert client_omni.model == "omniroute/auto"
+        assert client_omni.model == "auto"
         assert client_omni.base_url == "http://localhost:8000/v1"
 
 

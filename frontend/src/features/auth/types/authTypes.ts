@@ -7,7 +7,7 @@ export interface User {
   email: string
   fullName: string
   avatarUrl?: string
-  role?: 'user' | 'admin'
+  role?: 'admin' | 'hr' | 'user' | 'member'
   createdAt?: string
 }
 
@@ -38,9 +38,69 @@ export interface ApiErrorResponse {
   errors?: Record<string, string[]>
 }
 
-export interface AuthState {
-  user: User | null
-  accessToken: string | null
-  isAuthenticated: boolean
-  isLoading: boolean
+export interface TwoFactorSetupData {
+  totpSecret: string
+  provisioningUri: string
+  qrCodeDataUrl: string
+  backupCodes: string[]
+  tempToken?: string
+  message?: string
 }
+
+export interface TwoFactorVerifyPayload {
+  tempToken?: string
+  code: string
+  isBackupCode?: boolean
+}
+
+export interface LoginResult {
+  requires2FA: boolean
+  requires2FASetup?: boolean
+  tempToken?: string
+  auth?: AuthResponse
+  setupData?: TwoFactorSetupData
+}
+
+export interface RegisterResult {
+  status: string
+  email: string
+  message: string
+}
+
+export interface VerifyEmailPayload {
+  email: string
+  code: string
+}
+
+export interface ResendVerificationPayload {
+  email: string
+}
+
+export interface VerifyEmailResponse {
+  status: string
+  message: string
+  access_token?: string
+  token_type?: string
+  user?: User
+}
+
+export interface ForgotPasswordPayload {
+  email: string
+}
+
+export interface ForgotPasswordResponse {
+  status: string
+  message: string
+}
+
+export interface ResetPasswordPayload {
+  email: string
+  code: string
+  new_password: string
+}
+
+export interface ResetPasswordResponse {
+  status: string
+  message: string
+}
+

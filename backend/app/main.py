@@ -196,7 +196,18 @@ async def lifespan(app: FastAPI):
                                         await ing_session.commit()
                                     except Exception as exc:
                                         await ing_session.rollback()
-                                        logger.warning("Startup ingestion error for doc %s: %s", doc_id, exc)
+                                        if "No DocumentVersion found" in str(exc):
+                                            try:
+                                                d_stmt = select(Document).where(Document.id == doc_id)
+                                                target_doc = (await ing_session.execute(d_stmt)).scalar_one_or_none()
+                                                if target_doc:
+                                                    target_doc.status = DocumentStatus.FAILED
+                                                    await ing_session.commit()
+                                            except Exception:
+                                                pass
+                                            logger.info("Startup skipped unversioned document %s (marked as failed).", doc_id)
+                                        else:
+                                            logger.warning("Startup ingestion error for doc %s: %s", doc_id, exc)
                             except Exception as outer_exc:
                                 logger.warning("Startup ingestion session error for doc %s: %s", doc_id, outer_exc)
 

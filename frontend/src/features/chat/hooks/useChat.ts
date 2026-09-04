@@ -30,7 +30,33 @@ export function useChat() {
 
   const deleteConversation = useMutation({
     mutationFn: (id: string) => chatService.deleteConversation(id),
-    onSuccess: () => {
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: chatKeys.conversations() })
+      const previous = queryClient.getQueryData<any>(chatKeys.conversations())
+
+      if (previous) {
+        if (Array.isArray(previous.items)) {
+          queryClient.setQueryData(chatKeys.conversations(), {
+            ...previous,
+            items: previous.items.filter((c: any) => c.id !== id),
+            total: Math.max(0, (previous.total || previous.items.length) - 1),
+          })
+        } else if (Array.isArray(previous)) {
+          queryClient.setQueryData(
+            chatKeys.conversations(),
+            previous.filter((c: any) => c.id !== id)
+          )
+        }
+      }
+
+      return { previous }
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(chatKeys.conversations(), context.previous)
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: chatKeys.conversations() })
     },
   })

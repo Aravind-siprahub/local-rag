@@ -82,6 +82,32 @@ async def get_current_user(
     return user
 
 
+UPLOAD_ALLOWED_ROLES: set[str] = {"admin"}
+
+
+def can_upload_documents(user: User | None) -> bool:
+    """Return True if the user has permission to upload documents."""
+    if not user or not user.role:
+        return False
+    role_val = getattr(user.role, "value", str(user.role)).lower()
+    return role_val in UPLOAD_ALLOWED_ROLES
+
+
+async def require_document_upload_permission(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Authorize document upload actions.
+
+    Currently restricted to Admin users. Raises HTTP 403 Forbidden if unauthorized.
+    """
+    if not can_upload_documents(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to upload documents.",
+        )
+    return current_user
+
+
 def get_user_service(session: AsyncSession = Depends(get_db)) -> UserService:
     return UserService(session)
 

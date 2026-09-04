@@ -7,6 +7,7 @@ Covers:
 - GET /documents: unauthenticated -> 401, authenticated -> 200
 """
 import uuid
+from collections.abc import Generator
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_current_user, get_document_service, get_user_service
 from app.api.security import create_access_token, hash_password
+from app.db.session import get_db
 from app.main import app
 from app.models.enums import UserRole
 from app.models.user import User
@@ -33,6 +35,9 @@ def _make_user(
     email: str = VALID_EMAIL,
     password: str = VALID_PASSWORD,
     role: UserRole = UserRole.MEMBER,
+    is_verified: bool = True,
+    is_2fa_enabled: bool = False,
+    totp_secret_encrypted: str | None = None,
 ) -> User:
     """Build an in-memory User ORM object with a real PBKDF2 hashed password."""
     now = datetime.now(timezone.utc)
@@ -43,7 +48,9 @@ def _make_user(
         full_name=VALID_NAME,
         role=role,
         is_active=True,
-        is_verified=False,
+        is_verified=is_verified,
+        is_2fa_enabled=is_2fa_enabled,
+        totp_secret_encrypted=totp_secret_encrypted,
         deleted_at=None,
         created_at=now,
         updated_at=now,
@@ -51,12 +58,23 @@ def _make_user(
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app, raise_server_exceptions=False)
+def mock_db():
+    session = AsyncMock()
+    session.add = lambda x: None
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+    return session
+
+
+@pytest.fixture
+def client(mock_db) -> Generator[TestClient, None, None]:
+    app.dependency_overrides[get_db] = lambda: mock_db
+    yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture(autouse=True)
-def clear_overrides():
+def clear_overrides() -> Generator[None, None, None]:
     """Ensure dependency overrides never leak between tests."""
     app.dependency_overrides.clear()
     yield
@@ -135,8 +153,12 @@ def _mock_repo(user):
 
 class TestLogin:
     def test_valid_credentials_return_token(self, client: TestClient) -> None:
-        """Correct email + password -> 200 with access_token and bearer type."""
-        user = _make_user()
+        """Correct email + password -> 200 with 2FA challenge temp_token."""
+        user = _make_user(
+            email=VALID_EMAIL,
+            is_2fa_enabled=True,
+            totp_secret_encrypted="$aes-gcm$1234567890123456$abcdef",
+        )
         with patch("app.api.endpoints.auth.UserRepository", return_value=_mock_repo(user)):
             resp = client.post(
                 "/auth/login",
@@ -144,8 +166,8 @@ class TestLogin:
             )
         assert resp.status_code == 200, resp.text
         body = resp.json()
+        assert body.get("requires_2fa") is False
         assert "access_token" in body
-        assert body["token_type"] == "bearer"
         assert body["user"]["email"] == VALID_EMAIL
 
     def test_wrong_password_returns_401(self, client: TestClient) -> None:

@@ -3,7 +3,7 @@ import asyncio
 import json
 from app.db.session import AsyncSessionLocal
 from app.models.document import Document
-from app.models.chat import ChatSession
+from app.models.chat_session import ChatSession
 from app.services.chat_session_service import ChatSessionService
 from app.services.chat_message_service import ChatMessageService
 from app.rag.service import RAGService

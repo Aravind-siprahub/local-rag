@@ -40,11 +40,23 @@ class Planner:
                 )
             )
 
-        is_web = route == Route.WEB or _is_explicit_web_query(query)
+        has_doc_kw = _has_document_keywords(query)
+        is_explicit_web = any(kw in query.lower() for kw in ("search web", "web search", "search online", "search internet", "search google", "online", "internet", "google"))
+
         if has_image:
-            is_doc = has_doc_filter or _has_document_keywords(query)
+            is_doc = has_doc_filter or has_doc_kw
         else:
-            is_doc = (route in (Route.DOCUMENT_QA, Route.RAG) or has_doc_filter or _has_document_keywords(query))
+            is_doc = (
+                route in (Route.DOCUMENT_QA, Route.RAG, Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL, Route.HYBRID)
+                or has_doc_filter
+                or has_doc_kw
+            )
+
+        is_web = (route in (Route.WEB, Route.HYBRID) or _is_explicit_web_query(query))
+
+        # If this is a document-grounded query, do not run web search unless explicitly requested or HYBRID
+        if is_doc and not is_explicit_web and route != Route.HYBRID:
+            is_web = False
 
         if is_web:
             plan.append(
@@ -56,7 +68,7 @@ class Planner:
                 )
             )
 
-        if is_doc and (not is_web or has_doc_filter):
+        if is_doc:
             plan.append(
                 PlanStep(
                     step_number=len(plan) + 1,
@@ -94,21 +106,29 @@ def _has_document_keywords(query: str) -> bool:
             "document", "doc", "file", "prd", "pdf", "policy", "architecture",
             "frontend", "backend", "framework", "database", "stack", "deployment",
             "talk to my data", "siprahub", "airis", "process manager", "port",
+            "leave", "handbook", "hr", "core values", "values", "code of conduct",
         )
     )
 
 
 def _is_explicit_web_query(query: str) -> bool:
     q_low = query.lower()
-    web_verbs = (
-        "search web", "web search", "search online", "search internet", "latest version", "weather",
-        "current date", "news", "today", "google", "online", "latest news",
-        "current price", "current prices", "recent release", "recent releases",
-        "current documentation", "event", "events", "price of", "latest",
-        "recent", "release date", "stock price", "current info", "live search",
-        "look up", "lookup", "search github", "find on github", "search reddit",
-        "search documentation", "verify online", "check online", "find information about",
-        "find information on", "search google", "search internet",
-        "realtime", "real-time", "search for"
+    explicit_web_cues = (
+        "search web", "web search", "search online", "search internet",
+        "search google", "google it", "google search", "online search", "live search",
+        "verify online", "check online", "find on google", "search on google",
+        "search on duckduckgo", "search reddit", "search github", "find on github",
+        "weather", "latest news", "current news", "stock price", "current price",
     )
-    return any(kw in q_low for kw in web_verbs)
+    if any(kw in q_low for kw in explicit_web_cues):
+        return True
+
+    # Secondary web indicators only if NOT referencing documents or local company/project entities
+    if _has_document_keywords(query):
+        return False
+
+    general_web = (
+        "current date", "today", "latest version", "recent release", "recent releases",
+        "price of", "release date", "realtime", "real-time", "current info",
+    )
+    return any(kw in q_low for kw in general_web)
