@@ -176,6 +176,11 @@ _DOC_QA_CUE_WORDS = (
     "probation", "bgv", "posh", "wfh", "shift", "timing", "leave",
     "attendance", "appraisal", "frontend", "backend", "database", "framework",
     "siprahub", "sipra", "diagram", "chart",
+    # Performance / HR sub-question terms
+    "performance", "rating", "ratings", "outcome", "outcomes", "review",
+    "evaluation", "assessment", "improvement", "pip", "score", "grade",
+    "resignation", "notice", "separation", "onboarding", "confirmation",
+    "increment", "promotion", "feedback", "kpi", "objective", "goal",
 )
 
 _DOC_QA_ACTION_WORDS = (
@@ -563,7 +568,15 @@ def _is_corpus_document_qa(
     if not has_entity and context_texts:
         context_blob = " ".join(t.lower() for t in context_texts if t)
         if context_blob and _matches_document_entity(context_blob, document_titles):
-            anaphora_cues = [" it ", " this ", " that ", " the system ", " the project ", " the tool ", " the app ", " the codebase ", " the document ", " the file ", " the code ", " they "]
+            anaphora_cues = [
+                " it ", " this ", " that ", " the system ", " the project ", " the tool ",
+                " the app ", " the codebase ", " the document ", " the file ", " the code ",
+                " they ", " them ", " those ",
+                # Sub-question follow-up patterns
+                "what about", "how about", "and the", "tell me more", "more about",
+                "what are the", "explain more", "give more", "elaborate", "also",
+                "and also", "what else", "in addition", "furthermore",
+            ]
             has_anaphora = any(cue in f" {lower} " for cue in anaphora_cues) or _has_project_info_cues(lower)
             if has_anaphora:
                 has_entity = True

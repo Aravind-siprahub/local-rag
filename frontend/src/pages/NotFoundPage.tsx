@@ -12,8 +12,8 @@ export function NotFoundPage() {
       <p className="max-w-md text-muted-foreground">
         The page you are looking for does not exist or has been moved.
       </p>
-      <Link to={ROUTES.dashboard} className={cn(buttonVariants())}>
-        Back to dashboard
+      <Link to={ROUTES.chat} className={cn(buttonVariants())}>
+        Back to Chat
       </Link>
     </div>
   )

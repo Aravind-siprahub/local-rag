@@ -53,6 +53,7 @@ ALLOWED_EXTENSIONS: dict[str, tuple[str, ...]] = {
     ".markdown": ("text/markdown", "text/x-markdown", "text/plain"),
     ".csv": ("text/csv", "application/csv", "text/plain"),
     ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"),
+    ".xls": ("application/vnd.ms-excel", "application/msexcel", "application/x-msexcel"),
     ".pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation",),
     ".json": ("application/json", "text/plain"),
 }

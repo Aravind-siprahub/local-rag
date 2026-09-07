@@ -320,8 +320,8 @@ class SemanticChunker:
             return False
         meaningful = re.sub(r"\s+", "", text)
         if len(meaningful) < self.config.min_meaningful_chars:
-            # Allow shorter atomic types (FAQ, code snippets, lists) or items under an active section/breadcrumb
-            if chunk.content_type in (ContentType.CODE, ContentType.FAQ, ContentType.LIST):
+            # Allow shorter atomic types (FAQ, code snippets, lists, tables) or items under an active section/breadcrumb
+            if chunk.content_type in (ContentType.CODE, ContentType.FAQ, ContentType.LIST, ContentType.TABLE):
                 pass
             elif (chunk.breadcrumb or chunk.section) and len(meaningful) >= 15:
                 pass

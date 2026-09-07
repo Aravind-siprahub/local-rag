@@ -83,7 +83,7 @@ export function useLogin() {
     onSuccess: (data) => {
       if (data.auth) {
         queryClient.setQueryData(AUTH_QUERY_KEY, data.auth.user)
-        navigate(ROUTES.dashboard, { replace: true })
+        navigate(ROUTES.chat, { replace: true })
       }
     },
   })

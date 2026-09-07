@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Any
 
 from docx import Document as DocxDocument
 from pypdf import PdfReader
@@ -17,6 +18,7 @@ _SUPPORTED_EXTENSIONS = frozenset({
     ".markdown",
     ".csv",
     ".xlsx",
+    ".xls",
     ".pptx",
     ".json",
     ".log",
@@ -52,10 +54,14 @@ def parse_file(content: bytes, filename: str, mime_type: str | None = None) -> s
     try:
         if extension == ".pdf":
             return _parse_pdf(content, filename)
-        if extension in (".docx", ".doc"):
+        if extension == ".docx":
             return _parse_docx(content, filename)
-        if extension == ".xlsx":
-            return _parse_xlsx(content, filename)
+        if extension == ".doc":
+            return _parse_doc(content, filename)
+        if extension in (".xlsx", ".xls"):
+            return _parse_spreadsheet(content, filename, extension)
+        if extension == ".csv":
+            return _parse_csv(content, filename)
         if extension == ".pptx":
             return _parse_pptx(content, filename)
         return _parse_plain_text(content, filename)
@@ -98,7 +104,7 @@ def _parse_pdf(content: bytes, filename: str) -> str:
             parts.append(page_text.strip())
 
     if not parts:
-        raise CorruptedFileError(f"PDF file {filename!r} contains no extractable text.")
+        raise CorruptedFileError("No extractable text found. This PDF may require OCR.")
 
     return "\n\n".join(parts)
 
@@ -139,24 +145,139 @@ def _parse_docx(content: bytes, filename: str) -> str:
     return extracted_text
 
 
-def _parse_xlsx(content: bytes, filename: str) -> str:
+def _parse_doc(content: bytes, filename: str) -> str:
+    if content.startswith(b"PK\x03\x04"):
+        return _parse_docx(content, filename)
     try:
-        import openpyxl
-
-        workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        from sharepoint2text import read_bytes  # type: ignore[import-untyped]
+        docs = list(read_bytes(content, extension=".doc"))
         parts: list[str] = []
-        for sheet_name in workbook.sheetnames:
-            sheet = workbook[sheet_name]
-            parts.append(f"--- Sheet: {sheet_name} ---")
-            for row in sheet.iter_rows(values_only=True):
-                row_str = " | ".join(str(cell).strip() for cell in row if cell is not None and str(cell).strip())
-                if row_str:
-                    parts.append(row_str)
+        for doc in docs:
+            if hasattr(doc, "units") and doc.units:
+                for unit in doc.units:
+                    t = getattr(unit, "text", "") or ""
+                    if t and t.strip():
+                        parts.append(t.strip())
+            elif hasattr(doc, "full_text") and doc.full_text and doc.full_text.strip():
+                parts.append(doc.full_text.strip())
         if not parts:
-            raise CorruptedFileError(f"XLSX file {filename!r} contains no extractable data.")
-        return "\n".join(parts)
+            raise CorruptedFileError(f"DOC file {filename!r} contains no extractable text.")
+        return "\n\n".join(parts)
+    except ParsingError:
+        raise
     except Exception as exc:
-        raise CorruptedFileError(f"XLSX file {filename!r} is corrupted or invalid: {exc}") from exc
+        raise CorruptedFileError(f"DOC file {filename!r} is corrupted or cannot be parsed: {exc}") from exc
+
+
+def _format_structured_rows(sheet_name: str, rows: list[list[Any]]) -> str:
+    if not rows:
+        return ""
+    header_idx = -1
+    headers: list[str] = []
+    for idx, row in enumerate(rows):
+        non_empty = [str(c).strip() for c in row if c is not None and str(c).strip()]
+        if non_empty:
+            header_idx = idx
+            headers = [
+                str(c).strip() if c is not None and str(c).strip() else f"Column {col_i + 1}"
+                for col_i, c in enumerate(row)
+            ]
+            break
+
+    if header_idx == -1:
+        return ""
+
+    lines: list[str] = [f"--- Sheet: {sheet_name} ---"]
+    for row in rows[header_idx + 1:]:
+        pairs = []
+        for col_i, cell in enumerate(row):
+            if cell is not None:
+                val_str = str(cell).strip()
+                if val_str:
+                    if isinstance(cell, float) and cell.is_integer():
+                        val_str = str(int(cell))
+                    h = headers[col_i] if col_i < len(headers) else f"Column {col_i + 1}"
+                    pairs.append(f"{h}: {val_str}")
+        if pairs:
+            lines.append(" | ".join(pairs))
+
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
+def _parse_spreadsheet(content: bytes, filename: str, extension: str) -> str:
+    parts: list[str] = []
+    if extension == ".xlsx":
+        try:
+            import openpyxl
+
+            workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+                rows = [list(r) for r in sheet.iter_rows(values_only=True)]
+                sheet_text = _format_structured_rows(sheet_name, rows)
+                if sheet_text:
+                    parts.append(sheet_text)
+        except Exception as exc:
+            raise CorruptedFileError(f"XLSX file {filename!r} is corrupted or invalid: {exc}") from exc
+    elif extension == ".xls":
+        try:
+            import xlrd  # type: ignore[import-untyped]
+
+            workbook = xlrd.open_workbook(file_contents=content)
+            for sheet_name in workbook.sheet_names():
+                sheet = workbook.sheet_by_name(sheet_name)
+                rows = [[sheet.cell_value(r, c) for c in range(sheet.ncols)] for r in range(sheet.nrows)]
+                sheet_text = _format_structured_rows(sheet_name, rows)
+                if sheet_text:
+                    parts.append(sheet_text)
+        except Exception as exc:
+            raise CorruptedFileError(f"XLS file {filename!r} is corrupted or invalid: {exc}") from exc
+
+    if not parts:
+        raise CorruptedFileError(f"Spreadsheet file {filename!r} contains no extractable data.")
+    return "\n\n".join(parts)
+
+
+def _parse_csv(content: bytes, filename: str) -> str:
+    import csv
+
+    for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            text = content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise CorruptedFileError(f"CSV file {filename!r} uses an unsupported text encoding.")
+
+    if not text.strip():
+        raise CorruptedFileError(f"CSV file {filename!r} is empty.")
+
+    delimiter = ","
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        delimiter = dialect.delimiter
+    except Exception:
+        first_line = text.split("\n", 1)[0]
+        counts = {d: first_line.count(d) for d in (",", ";", "\t", "|")}
+        best_delim = max(counts, key=lambda d: counts[d])
+        if counts[best_delim] > 0:
+            delimiter = best_delim
+
+    try:
+        reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+        rows = [list(r) for r in reader]
+    except Exception as exc:
+        raise CorruptedFileError(f"CSV file {filename!r} is corrupted or invalid: {exc}") from exc
+
+    base_name = Path(filename).stem
+    formatted = _format_structured_rows(base_name, rows)
+    if not formatted:
+        raise CorruptedFileError(f"CSV file {filename!r} contains no extractable data.")
+    return formatted
 
 
 def _parse_pptx(content: bytes, filename: str) -> str:
@@ -168,8 +289,9 @@ def _parse_pptx(content: bytes, filename: str) -> str:
         for slide_idx, slide in enumerate(prs.slides, 1):
             parts.append(f"--- Slide {slide_idx} ---")
             for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text and shape.text.strip():
-                    parts.append(shape.text.strip())
+                text_val = getattr(shape, "text", None)
+                if text_val and text_val.strip():
+                    parts.append(text_val.strip())
         if not parts:
             raise CorruptedFileError(f"PPTX file {filename!r} contains no extractable text.")
         return "\n".join(parts)

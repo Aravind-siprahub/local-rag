@@ -6,7 +6,6 @@ import { cn } from '@/lib/utils'
 import type { Message, Citation } from '../types/chat'
 import { Button } from '@/components/ui/button'
 import { AttachmentCard } from './AttachmentCard'
-import { CitationsSection } from './CitationsSection'
 
 
 
@@ -21,7 +20,7 @@ interface ChatMessageProps {
 
 export function ChatMessage({
   message,
-  citations,
+  citations: _citations,
   onEdit,
   onRegenerate,
   isSending,
@@ -182,18 +181,6 @@ export function ChatMessage({
               </div>
             )}
 
-            {/* Render Citations / Sources for assistant messages */}
-            {!isUser && (
-              <CitationsSection
-                citations={
-                  (message.citations && message.citations.length > 0)
-                    ? message.citations
-                    : ((message as unknown as { sources?: typeof citations }).sources && (message as unknown as { sources?: typeof citations }).sources!.length > 0)
-                      ? (message as unknown as { sources?: typeof citations }).sources!
-                      : citations
-                }
-              />
-            )}
           </div>
 
           {/* Action Bar & Model Used Badge */}

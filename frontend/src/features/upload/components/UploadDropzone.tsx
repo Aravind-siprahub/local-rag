@@ -85,7 +85,7 @@ export function UploadDropzone({ onFilesSelected, disabled = false }: UploadDrop
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".pdf,.docx,.txt,.md,.markdown"
+        accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.md,.markdown"
         onChange={handleFileChange}
         className="sr-only"
         aria-label="Upload document files"
@@ -122,7 +122,7 @@ export function UploadDropzone({ onFilesSelected, disabled = false }: UploadDrop
       </div>
 
       <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-muted-foreground/80 border-t border-border/40 pt-4 w-full max-w-md">
-        <span>Accepted: <strong className="font-mono text-foreground/80">.pdf, .docx, .txt, .md</strong></span>
+        <span>Accepted: <strong className="font-mono text-foreground/80">.pdf, .docx, .doc, .xlsx, .xls, .csv, .txt, .md</strong></span>
         <span>•</span>
         <span>Max size: <strong className="font-mono text-foreground/80">25 MB</strong></span>
       </div>

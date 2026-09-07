@@ -50,6 +50,7 @@ class Planner:
                 route in (Route.DOCUMENT_QA, Route.RAG, Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL, Route.HYBRID)
                 or has_doc_filter
                 or has_doc_kw
+                or _is_followup_in_doc_context(query, state)
             )
 
         is_web = (route in (Route.WEB, Route.HYBRID) or _is_explicit_web_query(query))
@@ -96,6 +97,51 @@ class Planner:
             query, route.value, len(plan), [s.target_tool for s in plan]
         )
         return plan
+
+
+def _is_followup_in_doc_context(query: str, state: AgentState) -> bool:
+    """Return True when this query is a short follow-up to a prior document discussion.
+
+    Detects anaphoric questions ("what about X?", "and Y?", "tell me more about") that
+    arrive after the user was already discussing document content. Without this,
+    such short queries miss all document keyword triggers and get routed to
+    GENERAL_KNOWLEDGE, bypassing retrieval entirely.
+    """
+    q_low = query.lower().strip()
+
+    # Must look short/anaphoric — longer queries with keywords already route correctly
+    is_short_or_anaphoric = (
+        len(query.split()) <= 12
+        or any(cue in q_low for cue in (
+            "what about", "how about", "tell me more", "more about", "and the",
+            "what are the", "and what about", "also tell", "also what", "what else",
+            "explain more", "give more detail", "more detail on", "elaborate",
+            "can you explain", "can you tell", "could you explain", "and also",
+        ))
+    )
+    if not is_short_or_anaphoric:
+        return False
+
+    # Check recent conversation for document-related content
+    history = getattr(state, "conversation_context", None) or []
+    if not history:
+        return False
+
+    # Look at the last 6 turns for any doc-related content
+    recent = history[-6:]
+    doc_content_keywords = (
+        "document", "file", "policy", "handbook", "prd", "uploaded",
+        "leave", "probation", "notice", "appraisal", "performance",
+        "siprahub", "sipra", "airis", "frontend", "backend", "deployment",
+        "according to", "the document says", "based on the document",
+        "the provided", "retrieved", "framework", "rating", "outcome",
+    )
+    for turn in recent:
+        content = str(turn.get("content", "")).lower()
+        if any(kw in content for kw in doc_content_keywords):
+            return True
+
+    return False
 
 
 def _has_document_keywords(query: str) -> bool:
