@@ -22,54 +22,75 @@ NOT_SPECIFIED_PHRASE = "I couldn't find enough information in the available docu
 DOCUMENT_NOT_SPECIFIED_PHRASE = "The provided document does not specify this information."
 
 
+# Semantic synonym map for common HR / document topics
+_TOPIC_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "core values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
+    "values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
+    "company values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
+    "our values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
+    "ratings": ("rating", "score", "grade", "evaluation", "appraisal", "assessment", "review", "result", "outcome", "rating"),
+    "performance ratings": ("performance", "appraisal", "rating", "score", "grade", "evaluation", "assessment", "review", "outcome", "result"),
+    "outcomes": ("outcome", "result", "consequence", "impact", "effect", "output", "achievement"),
+    "performance outcomes": ("performance", "outcome", "result", "achievement", "appraisal", "rating", "score"),
+    "notice period": ("notice", "period", "resignation", "relieving", "exit", "handover"),
+    "probation": ("probation", "probationary", "trial", "confirmation", "onboarding"),
+}
+
+# Stopwords to strip from topic keyword matching
+_TOPIC_STOPWORDS = frozenset({
+    "the", "a", "an", "our", "their", "its", "rules", "rule", "policy",
+    "policies", "guidelines", "guideline", "details", "detail", "process",
+    "about", "what", "how", "when", "why", "which", "available", "types",
+    "and", "or", "for", "in", "of", "to", "at",
+    "is", "are", "was", "were", "do", "does", "did", "have", "has", "had",
+    "using", "used", "use", "uses", "stack", "stacks", "tech", "matrix", "selection",
+})
+
+
 def topic_has_evidence(topic: str, context_text: str) -> bool:
-    """Check whether a requested topic has supporting evidence in retrieved document chunks."""
+    """Check whether a requested topic has supporting evidence in retrieved document chunks.
+
+    Uses partial keyword overlap (≥50%) rather than requiring ALL keywords verbatim,
+    preventing over-refusal when documents use synonymous terminology.
+    """
     if not topic or not topic.strip() or not context_text:
         return False
 
     t_clean = topic.strip().lower()
     c_lower = context_text.lower()
 
-    # Exact phrase check
+    # 1. Exact phrase check
     if t_clean in c_lower:
         return True
 
-    # Substantive keyword check (strip stopwords and generic conversational verbs)
-    stopwords = {
-        "the", "a", "an", "our", "their", "its", "rules", "rule", "policy",
-        "policies", "guidelines", "guideline", "details", "detail", "process",
-        "about", "what", "how", "when", "why", "which", "available", "types",
-        "and", "or", "for", "in", "of", "to", "at",
-        "is", "are", "was", "were", "do", "does", "did", "have", "has", "had",
-        "using", "used", "use", "uses", "stack", "stacks", "tech", "matrix", "selection",
-    }
-    words = [w for w in re.findall(r"\b[a-z0-9]+\b", t_clean) if w not in stopwords]
-    if not words:
-        words = [w for w in re.findall(r"\b[a-z0-9]+\b", t_clean) if len(w) >= 3]
-
-    # Semantic equivalents for conceptual/cultural topics
-    conceptual_equivalents = {
-        "core values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
-        "values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
-        "company values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
-        "our values": ("code of conduct", "conduct", "principles", "commitments", "ethics", "standards", "values", "culture", "integrity", "accountability"),
-    }
-    for concept_phrase, equivs in conceptual_equivalents.items():
+    # 2. Semantic equivalents / synonym map
+    for concept_phrase, equivs in _TOPIC_SYNONYMS.items():
         if concept_phrase in t_clean:
             if any(eq in c_lower for eq in equivs):
                 return True
 
-    # If all substantive words are found in context
+    # 3. Substantive keyword extraction
+    words = [w for w in re.findall(r"\b[a-z0-9]+\b", t_clean) if w not in _TOPIC_STOPWORDS]
+    if not words:
+        words = [w for w in re.findall(r"\b[a-z0-9]+\b", t_clean) if len(w) >= 3]
+    if not words:
+        return True  # No substantive words to check — don't block the answer
+
+    # 4. All words present
     if all(w in c_lower for w in words):
         return True
 
-    # For multi-word topics, if any strong key noun is missing, evidence is missing
-    # (e.g. for "sick leave", if "sick" is missing from context, topic is unsupported)
-    for w in words:
-        if len(w) >= 3 and w not in c_lower:
-            return False
+    # 5. Partial overlap: if ≥50% of substantive keywords match, treat as supported.
+    #    This handles synonym variation (e.g. "ratings" ↔ "appraisal", "outcomes" ↔ "results").
+    matched = sum(1 for w in words if w in c_lower)
+    if len(words) > 0 and matched / len(words) >= 0.5:
+        return True
 
-    return True
+    # 6. For very short 1-word topics, a single keyword match is sufficient
+    if len(words) == 1 and matched >= 1:
+        return True
+
+    return False
 
 
 def topic_is_acknowledged_as_missing(topic: str, answer_text: str) -> bool:
@@ -104,6 +125,36 @@ def topic_is_acknowledged_as_missing(topic: str, answer_text: str) -> bool:
         rf"not\s+(?:explicitly\s+)?(?:specified|mentioned|stated|covered)\s+in\s+the\s+provided\s+document",
     ]
     return any(bool(re.search(p, ans_lower)) for p in missing_patterns)
+
+
+def _is_substantive_answer(answer: str) -> bool:
+    """Return True when the LLM produced a meaningful, non-refusal answer.
+
+    Used to decide whether to trust the LLM's answer over the keyword-based
+    topic evidence check, which can falsely flag topics as unsupported when
+    the document uses different terminology (e.g. 'appraisal' vs 'rating').
+    """
+    if not answer or not answer.strip():
+        return False
+    a = answer.strip().lower()
+    refusal_phrases = (
+        "i couldn't find",
+        "i could not find",
+        "not found in the document",
+        "the provided document does not specify",
+        "the provided documents do not specify",
+        "not specified in the provided document",
+        "not mentioned in the provided document",
+        "does not contain information",
+        "information not found",
+        "no information available",
+        "insufficient information",
+        "no document context",
+    )
+    if any(phrase in a for phrase in refusal_phrases):
+        return False
+    # Require at least 30 characters of meaningful text
+    return len(answer.strip()) >= 30
 
 
 def validate_and_reconcile_answer(
@@ -155,6 +206,18 @@ def validate_and_reconcile_answer(
     if not supported_topics and unsupported_topics:
         # Check if the answer already correctly declared not specified
         if topic_is_acknowledged_as_missing(unsupported_topics[0], ans_clean):
+            return ans_clean
+
+        # Trust the LLM's answer if it already produced substantive content.
+        # The keyword-based topic check can miss synonym variations (e.g. "ratings" vs
+        # "appraisal"). If the LLM returned a non-refusal answer from retrieved chunks,
+        # do NOT override it — the LLM saw the actual text and the validator did not.
+        if _is_substantive_answer(ans_clean):
+            logger.info(
+                "[ANSWER VALIDATOR] Topic keywords unmatched but LLM produced substantive answer. "
+                "Trusting LLM. topics=%s",
+                unsupported_topics,
+            )
             return ans_clean
 
         # Special case: If asked about Core Values / Company Values

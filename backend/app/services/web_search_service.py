@@ -96,10 +96,20 @@ class WebSearchService:
         # 1. Execute search provider
         search_start = time.monotonic()
         try:
+            import inspect
+            sig = inspect.signature(self.provider.search)
+            has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            call_kwargs = {}
+            if has_kwargs or "request_id" in sig.parameters:
+                call_kwargs["request_id"] = req_id
+            if has_kwargs or "max_results" in sig.parameters:
+                call_kwargs["max_results"] = limit
+            if has_kwargs or "recency_days" in sig.parameters:
+                call_kwargs["recency_days"] = None
+
             raw_result = await self.provider.search(
                 query,
-                max_results=limit,
-                request_id=req_id,
+                **call_kwargs,
             )
         except WebSearchError:
             raise

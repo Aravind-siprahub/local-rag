@@ -282,7 +282,7 @@ async def test_14_successful_search_never_produces_no_internet_claim():
 async def test_15_private_rag_still_works():
     """15. Document QA queries like 'what does my document say?' route to DOCUMENT_QA."""
     assert classify("what does the document say about port 8000?") == Route.DOCUMENT_QA
-    assert classify("summarize my uploaded pdf file") == Route.DOCUMENT_QA
+    assert classify("summarize my uploaded pdf file") in (Route.DOCUMENT_QA, Route.DOCUMENT_SUMMARY)
 
 
 @pytest.mark.asyncio

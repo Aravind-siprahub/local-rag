@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import pytest
 
@@ -108,6 +108,7 @@ class FakeLLMClient:
         temperature: float | None = None,
         images: list[bytes] | None = None,
         model: str | None = None,
+        request_id: str | None = None,
     ) -> LLMResponse:
         self.calls.append(
             {
@@ -118,6 +119,7 @@ class FakeLLMClient:
                 "temperature": temperature,
                 "images": images,
                 "model": model,
+                "request_id": request_id,
             }
         )
         
@@ -136,6 +138,28 @@ class FakeLLMClient:
             token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
             finish_reason="stop",
         )
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+        temperature: float | None = None,
+        images: list[bytes] | None = None,
+        model: str | None = None,
+        request_id: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        resp = await self.generate(
+            system_prompt,
+            user_prompt,
+            num_predict=num_predict,
+            temperature=temperature,
+            images=images,
+            model=model,
+            request_id=request_id,
+        )
+        yield resp.answer
 
     async def close(self) -> None:
         return None
@@ -266,8 +290,7 @@ class TestAgentRouterAsk:
     @pytest.mark.asyncio
     async def test_earth_query_routes_direct_and_normalizes(self) -> None:
         llm = FakeLLMClient(answer="Earth is the 3rd planet from the Sun.")
-        service, session, retriever, _, web = _make_service(retriever=FakeRetriever(), user_id=uuid.uuid4())
-        service.llm_client = llm
+        service, session, retriever, _, web = _make_service(retriever=FakeRetriever(), user_id=uuid.uuid4(), llm=llm)
 
         response = await service.ask(session.id, "earth is 2 planet or 3 planet")
 

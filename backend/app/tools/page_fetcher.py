@@ -251,6 +251,12 @@ class PageFetcher:
             client = await self._get_client()
             logger.info("[ARTICLE_FETCH START] url=%r request_id=%s", url, req_id)
             response = await client.get(url)
+
+            if response.status_code == 403 and "wikipedia.org" in url.lower():
+                response = await client.get(
+                    url,
+                    headers={"User-Agent": "LocalRAGBot/1.0 (https://localrag.internal; info@localrag.org)"}
+                )
             
             if response.status_code != 200:
                 logger.warning("[ARTICLE_FETCH HTTP ERROR] url=%r status=%d request_id=%s", url, response.status_code, req_id)

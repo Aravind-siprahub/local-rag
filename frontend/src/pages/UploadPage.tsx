@@ -1,17 +1,6 @@
-import { FileTextIcon, RefreshCwIcon } from 'lucide-react'
+import { FileTextIcon } from 'lucide-react'
 import { useState } from 'react'
 
-import { EmptyState } from '@/components/EmptyState'
-import { ErrorState } from '@/components/ErrorState'
-import { LoadingState } from '@/components/LoadingState'
-import { Button } from '@/components/ui/button'
-import {
-  DeleteDocumentDialog,
-  DocumentDetailDrawer,
-  DocumentsCardList,
-  DocumentsTable,
-} from '@/features/documents/components'
-import { useDocumentsList } from '@/features/documents/hooks'
 import {
   UnsupportedFileDialog,
   UploadDropzone,
@@ -20,7 +9,6 @@ import {
   useUploadQueue,
 } from '@/features/upload'
 import { useAuth } from '@/features/auth/hooks/authHooks'
-import type { DocumentListItem } from '@/types'
 
 export function UploadPage() {
   const { user } = useAuth()
@@ -44,30 +32,9 @@ export function UploadPage() {
   } = useUploadQueue()
 
   const [isDialogOpen, setIsDialogOpen] = useState(true)
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<DocumentListItem | null>(null)
-
-  // Recent Uploads query reusing documents feature list
-  const documentsQuery = useDocumentsList()
 
   // Backend is reachable AND we have a user to associate uploads with
   const hasBackendAvailable = isBackendReachable && Boolean(primaryUser) && !isUserLoading
-
-  const handleView = (documentId: string) => {
-    setSelectedDocumentId(documentId)
-  }
-
-  const handleDelete = (item: DocumentListItem) => {
-    setDeleteTarget(item)
-  }
-
-  const handleDeleted = (documentId: string) => {
-    setDeleteTarget(null)
-    if (selectedDocumentId === documentId) {
-      setSelectedDocumentId(null)
-    }
-    void documentsQuery.refetch()
-  }
 
   if (user && !isAdmin) {
     return (
@@ -134,88 +101,6 @@ export function UploadPage() {
           </div>
         </div>
       </div>
-
-      {/* Recent Uploads Section */}
-      <div className="space-y-4 pt-4 border-t border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">Recent Knowledge Base Ingestions</h2>
-            <p className="text-xs text-muted-foreground">
-              Review recently processed documents and their pipeline statuses in your local database.
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              void documentsQuery.refetch()
-            }}
-            disabled={documentsQuery.isLoading}
-          >
-            <RefreshCwIcon className={`size-3.5 mr-1.5 ${documentsQuery.isLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-        </div>
-
-        {documentsQuery.isLoading ? <LoadingState rows={4} /> : null}
-
-        {documentsQuery.isError ? (
-          <ErrorState
-            title="Could not load recent uploads"
-            error={documentsQuery.error}
-            onRetry={() => {
-              void documentsQuery.refetch()
-            }}
-          />
-        ) : null}
-
-        {!documentsQuery.isLoading && !documentsQuery.isError && documentsQuery.items.length === 0 ? (
-          <EmptyState
-            title="No uploaded documents yet"
-            description="Use the dropzone above to queue and ingest your first document file."
-            icon={<FileTextIcon className="size-5" />}
-          />
-        ) : null}
-
-        {!documentsQuery.isLoading && !documentsQuery.isError && documentsQuery.items.length > 0 ? (
-          <>
-            <DocumentsTable
-              items={documentsQuery.items.slice(0, 5)}
-              onView={handleView}
-              onDelete={handleDelete}
-            />
-            <DocumentsCardList
-              items={documentsQuery.items.slice(0, 5)}
-              onView={handleView}
-              onDelete={handleDelete}
-            />
-          </>
-        ) : null}
-      </div>
-
-      {/* Document Detail Drawer */}
-      <DocumentDetailDrawer
-        documentId={selectedDocumentId}
-        open={Boolean(selectedDocumentId)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setSelectedDocumentId(null)
-          }
-        }}
-      />
-
-      {/* Delete Confirmation Dialog */}
-      <DeleteDocumentDialog
-        target={deleteTarget}
-        open={Boolean(deleteTarget)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setDeleteTarget(null)
-          }
-        }}
-        onDeleted={handleDeleted}
-      />
 
       {/* Unsupported File Warning Dialog */}
       <UnsupportedFileDialog

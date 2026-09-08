@@ -62,15 +62,24 @@ def _validate_web_answer(
     clean = (clean_answer or raw).strip()
 
     # 1. JSON detection (extract 'answer' field if LLM output raw JSON)
-    if raw.startswith("{"):
+    if raw.startswith("{") or ("{" in raw and "}" in raw):
         try:
-            parsed = _json.loads(raw)
+            json_str = raw
+            if "```" in json_str:
+                m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", json_str, re.DOTALL)
+                if m:
+                    json_str = m.group(1)
+            parsed = _json.loads(json_str)
             if isinstance(parsed, dict):
                 extracted = (parsed.get("answer") or "").strip()
                 if extracted:
                     clean = extracted
+                else:
+                    return concise_text
+            else:
+                return concise_text
         except Exception:
-            pass
+            return concise_text
 
     if not clean:
         return concise_text
@@ -86,10 +95,38 @@ def _validate_web_answer(
         "no internet access",
         "cannot search the web",
         "cannot browse the web",
+        "do not have access to real-time",
+        "dont have access to real-time",
+        "don't have access to real-time",
+        "no access to real-time",
+        "cannot provide real-time",
+        "real-time market data",
+        "market data feeds",
     )
     if any(phrase in clean.lower() for phrase in disclaimer_phrases):
         logger.info("[WEB ANSWER FALLBACK] Disallowed disclaimer response. Using web summary.")
         return concise_text
+
+    # 3. Check for completely unrelated plain text answer
+    if concise_text:
+        stopwords = {
+            "a", "an", "the", "in", "on", "at", "to", "for", "of", "and", "or", "is", "are",
+            "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+            "what", "when", "where", "who", "which", "why", "how", "this", "that", "these",
+            "those", "it", "its", "as", "by", "with", "from", "into", "during", "before",
+            "after", "above", "below", "between", "under", "again", "further", "then", "once",
+            "here", "there", "all", "any", "both", "each", "few", "more", "most", "other",
+            "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too",
+            "very", "can", "will", "just", "should", "now"
+        }
+        answer_words = {w.lower() for w in re.findall(r"\b[a-zA-Z0-9_]{2,}\b", clean) if w.lower() not in stopwords}
+        query_words = {w.lower() for w in re.findall(r"\b[a-zA-Z0-9_]{2,}\b", original_query) if w.lower() not in stopwords}
+        evidence_words = {w.lower() for w in re.findall(r"\b[a-zA-Z0-9_]{2,}\b", concise_text) if w.lower() not in stopwords}
+        context_words = query_words | evidence_words
+
+        if answer_words and context_words and not (answer_words & context_words):
+            logger.info("[WEB ANSWER FALLBACK] Answer has zero topical overlap with query/evidence. Using fallback.")
+            return concise_text
 
     return clean
 
@@ -522,14 +559,21 @@ class RAGService:
         provider_match = re.search(r"\b(omniroute|openrouter|nvidia|ollama|qwen3?|nemotron|llama\d?)\b", blob, re.IGNORECASE)
         model_match = re.search(r"\b(omniroute/auto|auto/fast|nemotron-4-340b|qwen3:8b)\b", blob, re.IGNORECASE)
 
-        if provider_match or model_match:
+        # Split at sentence boundaries or formatting instructions
+        first_part = re.split(r"(?i)\b(?:give me|please provide|provide me|list out|list 5|list \d+|summarize in|tell me what|and paste)\b", q_raw)[0].strip()
+        target = first_part or q_raw
+
+        site_prefix = ""
+        site_match = re.search(r"\b(site:[^\s]+)\s*", target, re.IGNORECASE)
+        if site_match:
+            site_prefix = site_match.group(1).lower() + " "
+            target = (target[:site_match.start()] + target[site_match.end():]).strip()
+
+        if not site_prefix and (provider_match or model_match) and any(w in q_lower for w in ("doc", "docs", "documentation", "api", "official", "spec")):
             prov = provider_match.group(1) if provider_match else "omniroute"
             mod = model_match.group(1) if model_match else ""
             return f"{prov} {mod} official documentation latest api".strip()
 
-        # Split at sentence boundaries or formatting instructions
-        first_part = re.split(r"(?i)\b(?:give me|please provide|provide me|list out|list 5|list \d+|summarize in|tell me what|and paste)\b", q_raw)[0].strip()
-        target = first_part or q_raw
         clean = re.sub(
             r"(?i)\b(?:verify\s+(?:whether|if)\s+(?:this\s+)?(?:latest\s+)?(?:ai\s+)?claim\s+is\s+true\s+(?:using\s+(?:current\s+)?(?:web\s+)?sources)?[:\s]*)\b",
             "",
@@ -543,6 +587,8 @@ class RAGService:
         clean = re.sub(r"(?i)\b(?:with\s+headline|short\s+summary|headline|publication\s+date|and\s+a\s+summary|source|sources)\b", "", clean)
         clean = re.sub(r"[?!.,;:]+", " ", clean)
         clean = re.sub(r"\s+", " ", clean).strip()
+        if site_prefix:
+            clean = f"{site_prefix}{clean}".strip()
         if not clean:
             clean = "current industry standards for IT companies WFH policy"
         result_str = clean[:120] or (q_raw[:120] if q_raw else "") or "query"
@@ -738,7 +784,7 @@ class RAGService:
         if image or image_storage_path:
             route = Route.DIRECT
         elif retrieval_filters and (retrieval_filters.document_id or getattr(retrieval_filters, "document_ids", None) or retrieval_filters.document_version_id):
-            if route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT, Route.WEB):
+            if route in (Route.GENERAL_KNOWLEDGE, Route.GENERIC_CHAT, Route.DIRECT):
                 route = Route.DOCUMENT_QA
 
         logger.info(
@@ -747,7 +793,10 @@ class RAGService:
         )
 
         if route not in (Route.DOCUMENT_QA, Route.RAG, Route.HYBRID, Route.DOCUMENT_SUMMARY, Route.DOCUMENT_DETAIL):
-            if route == Route.WEB:
+            from app.rag.intent_router import _is_datetime_query
+            if _is_datetime_query((norm_q or question).lower()):
+                yield f"data: {json.dumps({'type': 'status', 'message': 'Checking current date and time...'})}\n\n"
+            elif route == Route.WEB:
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Searching the web for live information...'})}\n\n"
             elif route == Route.CALCULATOR:
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Calculating...'})}\n\n"
@@ -756,35 +805,40 @@ class RAGService:
             else:
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Synthesizing response...'})}\n\n"
 
-            res = await self._ask_non_rag(
-                route=route,
-                session_id=session_id,
-                question=question.strip(),
-                user_message_id=user_message.id,
-                start_mono=start_mono,
-                request_id=req_id,
-                norm_q=norm_q,
-                image=image,
-            )
-            sources_payload = [
-                {
-                    "chunk_id": str(s.chunk_id),
-                    "document_id": str(s.document_id),
-                    "similarity_score": s.similarity_score,
-                    "rank": s.rank,
-                    "document_title": s.document_title,
-                    "section_title": s.section_title,
-                    "url": s.url,
-                    "domain": s.domain,
-                    "source_type": getattr(s, "source_type", "local"),
-                }
-                for s in (res.sources or [])
-            ]
-            retrieval_mode_val = getattr(res, "retrieval_mode", "local")
-            yield f"data: {json.dumps({'type': 'meta', 'sources': sources_payload, 'user_message_id': str(user_message.id), 'retrieval_mode': retrieval_mode_val})}\n\n"
-            yield f"data: {json.dumps({'type': 'token', 'content': res.answer})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(res.assistant_message_id), 'processing_time_ms': res.processing_time_ms})}\n\n"
-            return
+            try:
+                res = await self._ask_non_rag(
+                    route=route,
+                    session_id=session_id,
+                    question=question.strip(),
+                    user_message_id=user_message.id,
+                    start_mono=start_mono,
+                    request_id=req_id,
+                    norm_q=norm_q,
+                    image=image,
+                )
+                sources_payload = [
+                    {
+                        "chunk_id": str(s.chunk_id),
+                        "document_id": str(s.document_id),
+                        "similarity_score": s.similarity_score,
+                        "rank": s.rank,
+                        "document_title": s.document_title,
+                        "section_title": s.section_title,
+                        "url": s.url,
+                        "domain": s.domain,
+                        "source_type": getattr(s, "source_type", "local"),
+                    }
+                    for s in (res.sources or [])
+                ]
+                retrieval_mode_val = getattr(res, "retrieval_mode", "local")
+                yield f"data: {json.dumps({'type': 'meta', 'sources': sources_payload, 'user_message_id': str(user_message.id), 'retrieval_mode': retrieval_mode_val})}\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'content': res.answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'assistant_message_id': str(res.assistant_message_id), 'processing_time_ms': res.processing_time_ms})}\n\n"
+                return
+            except Exception as non_rag_exc:
+                logger.error("[NON-RAG STREAM ERROR] request_id=%s route=%s error=%s", req_id, route, non_rag_exc, exc_info=True)
+                yield f"data: {json.dumps({'type': 'error', 'message': str(non_rag_exc)})}\n\n"
+                return
 
         # If scoped to a document that is currently processing in background, wait for processing to complete
         if retrieval_filters.document_id and self.session is not None:
@@ -1644,7 +1698,39 @@ class RAGService:
     ) -> RAGResponse:
         """Handle DOCUMENT_LIST / DOCUMENT_METADATA / WEB / CALCULATOR / DIRECT without vector retrieval."""
         res: RAGResponse
-        if route == Route.DOCUMENT_LIST:
+        from app.rag.intent_router import _is_datetime_query
+        q_check = (norm_q or question).lower()
+        if _is_datetime_query(q_check):
+            from datetime import datetime
+            now_dt = datetime.now()
+            date_str = now_dt.strftime("%A, %B %d, %Y")
+            time_str = now_dt.strftime("%I:%M %p")
+            if "time" in q_check and "date" not in q_check:
+                dt_ans = f"The current time is {time_str}."
+            elif "date" in q_check and "time" not in q_check:
+                dt_ans = f"Today's date is {date_str}."
+            else:
+                dt_ans = f"Today's date and time is {date_str} at {time_str}."
+
+            total_ms = int((time.monotonic() - start_mono) * 1000)
+            assistant_msg = await self.messages.create_message(
+                session_id=session_id,
+                role=MessageRole.ASSISTANT,
+                content=dt_ans,
+                model_used="system-datetime",
+                latency_ms=total_ms,
+                generation_time_ms=total_ms,
+            )
+            res = RAGResponse(
+                answer=dt_ans,
+                sources=[],
+                token_usage=None,
+                model="system-datetime",
+                processing_time_ms=total_ms,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_msg.id,
+            )
+        elif route == Route.DOCUMENT_LIST:
             chat_session = await self.sessions.get(session_id)
             res = await self._ask_document_list(
                 session_id=session_id,
@@ -1669,47 +1755,14 @@ class RAGService:
                 start_mono=start_mono,
             )
         elif route == Route.WEB:
-            from app.rag.intent_router import _is_datetime_query
-            q_check = (norm_q or question).lower()
-            if _is_datetime_query(q_check):
-                from datetime import datetime
-                now_dt = datetime.now()
-                date_str = now_dt.strftime("%A, %B %d, %Y")
-                time_str = now_dt.strftime("%I:%M %p")
-                if "time" in q_check and "date" not in q_check:
-                    dt_ans = f"The current time is {time_str}."
-                elif "date" in q_check and "time" not in q_check:
-                    dt_ans = f"Today's date is {date_str}."
-                else:
-                    dt_ans = f"Today's date and time is {date_str} at {time_str}."
-
-                total_ms = int((time.monotonic() - start_mono) * 1000)
-                assistant_msg = await self.messages.create_message(
-                    session_id=session_id,
-                    role=MessageRole.ASSISTANT,
-                    content=dt_ans,
-                    model_used="system-datetime",
-                    latency_ms=total_ms,
-                    generation_time_ms=total_ms,
-                )
-                res = RAGResponse(
-                    answer=dt_ans,
-                    sources=[],
-                    token_usage=None,
-                    model="system-datetime",
-                    processing_time_ms=total_ms,
-                    user_message_id=user_message_id,
-                    assistant_message_id=assistant_msg.id,
-                )
-            else:
-                res = await self._ask_web(
-                    session_id=session_id,
-                    question=question,
-                    user_message_id=user_message_id,
-                    start_mono=start_mono,
-                    request_id=request_id,
-                    route=route,
-                )
+            res = await self._ask_web(
+                session_id=session_id,
+                question=question,
+                user_message_id=user_message_id,
+                start_mono=start_mono,
+                request_id=request_id,
+                route=route,
+            )
         elif image is not None:
             res = await self._ask_direct(
                 session_id=session_id,
@@ -2093,15 +2146,28 @@ class RAGService:
                         idx, h.url, h.title, h.source, pub_date, cnt_len
                     )
 
+                from datetime import datetime
+                now_dt = datetime.now()
+                now_str = now_dt.strftime("%A, %B %d, %Y")
+                time_str = now_dt.strftime("%I:%M %p")
                 web_user_prompt = (
+                    f"=== CURRENT TEMPORAL CONTEXT (REAL-TIME) ===\n"
+                    f"Today's Date: {now_str}\n"
+                    f"Current Time: {time_str}\n"
+                    f"Current Year: {now_dt.year}\n"
+                    f"Always interpret terms like 'today', 'now', 'current', 'latest', or recent events relative to this current date.\n\n"
                     f"=== RETRIEVED LIVE SEARCH RESULTS ===\n\n{web_context}\n\n"
                     f"=== USER QUESTION ===\n\n{question}\n\n"
                     f"CRITICAL ANSWERING INSTRUCTIONS:\n"
                     f"1. Directly answer the question in the very first sentence with the exact fact, name, date, entity, score, or outcome requested (e.g. 'India won the 2024 ICC Men's T20 World Cup...').\n"
-                    f"2. Follow up with key supporting details and context from the retrieved search results.\n"
-                    f"3. Do NOT provide vague meta-talk about how information is corroborated across sources without stating the direct answer.\n"
-                    f"4. Attach direct inline Markdown citations [Source Name](URL) supporting your statements.\n"
-                    f"5. NEVER mention internal OCR, PaddleOCR, document parsers, vector indexes, or system implementation details."
+                    f"2. PORTFOLIO & ROLE DISAMBIGUATION: If the jurisdiction or government has separate departments or portfolios (such as School Education vs. Higher Education), clearly identify and distinguish each portfolio and its respective minister/holder rather than treating them as a single role or making conflicting statements.\n"
+                    f"3. CONFLICT & RECENCY RESOLUTION: Base your answer strictly on the retrieved live search results. Prioritize current verified facts over speculative future projections or outdated articles. If sources report different holders across portfolios or timelines, clearly differentiate them without producing contradictory claims.\n"
+                    f"4. Follow up with key supporting details and context from the retrieved search results.\n"
+                    f"5. Do NOT provide vague meta-talk about how information is corroborated across sources without stating the direct answer.\n"
+                    f"6. Attach direct inline Markdown citations [Source Name](URL) supporting your statements.\n"
+                    f"7. Evaluate any references to 'today', 'now', 'recent', or 'latest' against the Current Temporal Context above.\n"
+                    f"8. NEVER mention internal OCR, PaddleOCR, document parsers, vector indexes, or system implementation details.\n"
+                    f"9. COMMODITY & MARKET RATES: When asked for prices or rates (e.g. gold, petrol, diesel, silver, currency, stocks), quote the exact current rates and figures from the live search results, noting the specific date and location/city (e.g. Chennai / Tamil Nadu) specified in the search snippets."
                 )
 
                 logger.info("[LLM_CONTEXT] length=%d prompt_sample=%r", len(web_user_prompt), web_user_prompt[:250])
@@ -2373,6 +2439,17 @@ class RAGService:
         else:
             direct_sys_prompt = get_settings().GENERAL_CHAT_SYSTEM_PROMPT
 
+        from datetime import datetime
+        now_dt = datetime.now()
+        temporal_context = (
+            f"\n\nCURRENT TEMPORAL CONTEXT (REAL-TIME):\n"
+            f"Today's Date: {now_dt.strftime('%A, %B %d, %Y')}\n"
+            f"Current Time: {now_dt.strftime('%I:%M %p')}\n"
+            f"Current Year: {now_dt.year}\n"
+            f"Use this current date and year as the ground truth for any questions concerning the present, current year, or 'today'."
+        )
+        direct_sys_prompt = f"{direct_sys_prompt}{temporal_context}"
+
         long_term_memory_context = ""
         if self.session is not None:
             try:
@@ -2395,17 +2472,39 @@ class RAGService:
             from app.llm.factory import get_llm_client
             active_client = get_llm_client(model=get_settings().ollama_vision_model)
 
-        llm_response = await active_client.generate(
-            direct_sys_prompt,
-            query_text,
-            num_predict=1024,
-            images=[image] if image else None,
-            model=get_settings().ollama_vision_model if image else None,
-        )
-        llm_ms = int((time.monotonic() - llm_start) * 1000)
-        answer_text = sanitize_response(llm_response.answer, question=question).strip()
-        llm_model_name = llm_response.model_name
-        token_usage = llm_response.token_usage
+        try:
+            llm_response = await active_client.generate(
+                direct_sys_prompt,
+                query_text,
+                num_predict=1024,
+                images=[image] if image else None,
+                model=get_settings().ollama_vision_model if image else None,
+            )
+            llm_ms = int((time.monotonic() - llm_start) * 1000)
+            answer_text = sanitize_response(llm_response.answer, question=question).strip()
+            llm_model_name = llm_response.model_name
+            token_usage = llm_response.token_usage
+        except Exception as gen_exc:
+            logger.warning("[GENERAL KNOWLEDGE] Primary generation failed: %s. Attempting fallback.", gen_exc)
+            from app.llm.ollama_client import get_global_ollama_client
+            fallback_client = get_global_ollama_client()
+            try:
+                llm_response = await fallback_client.generate(
+                    direct_sys_prompt,
+                    query_text,
+                    num_predict=1024,
+                    images=[image] if image else None,
+                )
+                llm_ms = int((time.monotonic() - llm_start) * 1000)
+                answer_text = sanitize_response(llm_response.answer, question=question).strip()
+                llm_model_name = getattr(fallback_client, "model", "ollama")
+                token_usage = llm_response.token_usage
+            except Exception as fb_exc:
+                logger.error("[GENERAL KNOWLEDGE] Fallback generation also failed: %s", fb_exc)
+                answer_text = "I am temporarily unable to generate a response because the upstream AI model services are unavailable. Please try again shortly or select a different model."
+                llm_ms = int((time.monotonic() - llm_start) * 1000)
+                llm_model_name = "service-unavailable"
+                token_usage = None
 
         if not answer_text:
             answer_text = "I could not generate an answer right now."

@@ -7,10 +7,11 @@ import { computeDocumentStats, sortByCreatedAtDesc } from '@/utils'
 const DASHBOARD_DOCUMENT_LIMIT = 100
 const RECENT_UPLOADS_LIMIT = 5
 
-export function useDashboardDocuments() {
+export function useDashboardDocuments(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['documents', 'dashboard', DASHBOARD_DOCUMENT_LIMIT],
     queryFn: () => listDocuments({ limit: DASHBOARD_DOCUMENT_LIMIT, offset: 0 }),
+    enabled: options?.enabled,
     select: (response) => {
       const sorted = sortByCreatedAtDesc(response.items)
       const stats: DocumentStats = computeDocumentStats(response.items, response.total)

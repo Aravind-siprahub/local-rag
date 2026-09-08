@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _SUPPORTED_EXTENSIONS = frozenset({
     ".pdf", ".docx", ".doc", ".txt", ".md", ".markdown",
-    ".xlsx", ".pptx", ".html", ".htm",
+    ".xlsx", ".xls", ".csv", ".pptx", ".html", ".htm",
 })
 
 _PAGE_NUMBER_RE = re.compile(r"^\s*\d{1,4}\s*$", re.MULTILINE)
@@ -208,10 +208,16 @@ class DocumentParser:
     ) -> tuple[list[DocumentBlock], int, str, str]:
         if extension == ".pdf":
             return (*self._parse_pdf(content, filename), "pymupdf")
-        if extension in (".docx", ".doc"):
+        if extension == ".docx":
             return (*self._parse_docx(content, filename), "python-docx")
+        if extension == ".doc":
+            return (*self._parse_doc(content, filename), "sharepoint2text")
         if extension == ".xlsx":
             return (*self._parse_xlsx(content, filename), "openpyxl")
+        if extension == ".xls":
+            return (*self._parse_xls(content, filename), "xlrd")
+        if extension == ".csv":
+            return (*self._parse_csv(content, filename), "csv-parser")
         if extension == ".pptx":
             return (*self._parse_pptx(content, filename), "python-pptx")
         if extension in (".html", ".htm"):
@@ -233,7 +239,7 @@ class DocumentParser:
         try:
             import fitz  # PyMuPDF
 
-            pdf_doc = fitz.open(stream=content, filetype="pdf")
+            pdf_doc: Any = fitz.open(stream=content, filetype="pdf")
             page_count = len(pdf_doc)
 
             for page_idx, page in enumerate(pdf_doc, start=1):
@@ -283,7 +289,7 @@ class DocumentParser:
                 ))
 
         if not blocks:
-            raise CorruptedFileError(f"PDF {filename!r} has no extractable text.")
+            raise CorruptedFileError("No extractable text found. This PDF may require OCR.")
 
         combined = "\n\n".join(b.text for b in blocks)
         return blocks, page_count, self._detect_language(combined)
@@ -428,6 +434,117 @@ class DocumentParser:
         combined = "\n\n".join(b.text for b in blocks)
         return blocks, 0, self._detect_language(combined)
 
+    def _parse_doc(
+        self, content: bytes, filename: str
+    ) -> tuple[list[DocumentBlock], int, str]:
+        if content.startswith(b"PK\x03\x04"):
+            return self._parse_docx(content, filename)
+
+        try:
+            from sharepoint2text import read_bytes  # type: ignore[import-untyped]
+            docs = list(read_bytes(content, extension=".doc"))
+        except Exception as exc:
+            raise CorruptedFileError(f"DOC file {filename!r} is corrupted or cannot be parsed: {exc}") from exc
+
+        blocks: list[DocumentBlock] = []
+        for doc in docs:
+            if hasattr(doc, "units") and doc.units:
+                for unit in doc.units:
+                    unit_title = getattr(unit, "title", None)
+                    if unit_title and unit_title.strip():
+                        heading_path = getattr(unit, "heading_path", []) or []
+                        level = min(len(heading_path) + 1, 6) if heading_path else 1
+                        block_type = BlockType.HEADING if level <= 1 else BlockType.SUBHEADING
+                        blocks.append(DocumentBlock(block_type=block_type, text=unit_title.strip(), level=level))
+
+                    unit_text = getattr(unit, "text", "") or ""
+                    if unit_text and unit_text.strip():
+                        kind = str(getattr(unit, "kind", "") or "").lower()
+                        if "table" in kind:
+                            blocks.append(DocumentBlock(block_type=BlockType.TABLE, text=unit_text.strip()))
+                        elif "list" in kind:
+                            blocks.append(DocumentBlock(block_type=BlockType.LIST, text=unit_text.strip()))
+                        elif "heading" in kind:
+                            blocks.append(DocumentBlock(block_type=BlockType.HEADING, text=unit_text.strip()))
+                        else:
+                            for p in self._split_paragraphs(unit_text.strip()):
+                                blocks.append(DocumentBlock(block_type=BlockType.PARAGRAPH, text=p))
+            elif hasattr(doc, "full_text") and doc.full_text and doc.full_text.strip():
+                for p in self._split_paragraphs(doc.full_text.strip()):
+                    blocks.append(DocumentBlock(block_type=BlockType.PARAGRAPH, text=p))
+
+        if not blocks:
+            raise CorruptedFileError(f"DOC {filename!r} has no extractable text.")
+
+        blocks = self._merge_consecutive_lists(blocks)
+        combined = "\n\n".join(b.text for b in blocks)
+        return blocks, 0, self._detect_language(combined)
+
+    def _extract_structured_sheet_blocks(
+        self, sheet_name: str, rows: list[list[Any]], filename: str, batch_size: int = 40
+    ) -> list[DocumentBlock]:
+        if not rows:
+            return []
+
+        header_idx = -1
+        headers: list[str] = []
+        for idx, row in enumerate(rows):
+            non_empty = [str(c).strip() for c in row if c is not None and str(c).strip()]
+            if non_empty:
+                header_idx = idx
+                headers = [
+                    str(c).strip() if c is not None and str(c).strip() else f"Column {col_i + 1}"
+                    for col_i, c in enumerate(row)
+                ]
+                break
+
+        if header_idx == -1:
+            return []
+
+        data_rows: list[tuple[int, str]] = []
+        for row_num, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
+            pairs: list[str] = []
+            for col_i, cell in enumerate(row):
+                if cell is not None:
+                    val_str = str(cell).strip()
+                    if val_str:
+                        if isinstance(cell, float) and cell.is_integer():
+                            val_str = str(int(cell))
+                        h = headers[col_i] if col_i < len(headers) else f"Column {col_i + 1}"
+                        pairs.append(f"{h}: {val_str}")
+            if pairs:
+                data_rows.append((row_num, " | ".join(pairs)))
+
+        if not data_rows:
+            header_summary = " | ".join(h for h in headers if not h.startswith("Column "))
+            if header_summary:
+                return [DocumentBlock(
+                    block_type=BlockType.TABLE,
+                    text=f"Sheet: {sheet_name}\nHeaders: {header_summary}",
+                    metadata={"sheet": sheet_name, "row_count": 0},
+                )]
+            return []
+
+        blocks: list[DocumentBlock] = []
+        for i in range(0, len(data_rows), batch_size):
+            batch = data_rows[i : i + batch_size]
+            r_start = batch[0][0]
+            r_end = batch[-1][0]
+            lines = [f"Sheet: {sheet_name} (Rows {r_start}-{r_end})"]
+            lines.extend(r_text for _, r_text in batch)
+            blocks.append(DocumentBlock(
+                block_type=BlockType.TABLE,
+                text="\n".join(lines),
+                metadata={
+                    "sheet": sheet_name,
+                    "row_start": r_start,
+                    "row_end": r_end,
+                    "row_count": len(batch),
+                },
+            ))
+
+        return blocks
+
     def _parse_xlsx(
         self, content: bytes, filename: str
     ) -> tuple[list[DocumentBlock], int, str]:
@@ -441,22 +558,77 @@ class DocumentParser:
         blocks: list[DocumentBlock] = []
         for sheet_name in workbook.sheetnames:
             sheet = workbook[sheet_name]
-            rows: list[str] = []
+            rows: list[list[Any]] = []
             for row in sheet.iter_rows(values_only=True):
-                cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
-                if cells:
-                    rows.append(" | ".join(cells))
-            if rows:
-                table_text = f"Sheet: {sheet_name}\n" + "\n".join(rows)
-                blocks.append(DocumentBlock(
-                    block_type=BlockType.TABLE,
-                    text=table_text,
-                    metadata={"sheet": sheet_name, "row_count": len(rows)},
-                ))
+                rows.append(list(row))
+            sheet_blocks = self._extract_structured_sheet_blocks(sheet_name, rows, filename)
+            blocks.extend(sheet_blocks)
 
         workbook.close()
         if not blocks:
             raise CorruptedFileError(f"XLSX {filename!r} has no extractable data.")
+
+        combined = "\n\n".join(b.text for b in blocks)
+        return blocks, 0, self._detect_language(combined)
+
+    def _parse_xls(
+        self, content: bytes, filename: str
+    ) -> tuple[list[DocumentBlock], int, str]:
+        import xlrd  # type: ignore[import-untyped]
+
+        try:
+            workbook = xlrd.open_workbook(file_contents=content)
+        except Exception as exc:
+            raise CorruptedFileError(f"XLS {filename!r} is corrupted: {exc}") from exc
+
+        blocks: list[DocumentBlock] = []
+        for sheet_name in workbook.sheet_names():
+            sheet = workbook.sheet_by_name(sheet_name)
+            if sheet.nrows == 0:
+                continue
+            rows: list[list[Any]] = []
+            for r in range(sheet.nrows):
+                rows.append([sheet.cell_value(r, c) for c in range(sheet.ncols)])
+            sheet_blocks = self._extract_structured_sheet_blocks(sheet_name, rows, filename)
+            blocks.extend(sheet_blocks)
+
+        if not blocks:
+            raise CorruptedFileError(f"XLS {filename!r} has no extractable data.")
+
+        combined = "\n\n".join(b.text for b in blocks)
+        return blocks, 0, self._detect_language(combined)
+
+    def _parse_csv(
+        self, content: bytes, filename: str
+    ) -> tuple[list[DocumentBlock], int, str]:
+        import csv
+
+        text = self._decode_text(content, filename)
+        if not text.strip():
+            raise CorruptedFileError(f"CSV file {filename!r} is empty.")
+
+        delimiter = ","
+        sample = text[:4096]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            delimiter = dialect.delimiter
+        except Exception:
+            first_line = text.split("\n", 1)[0]
+            counts = {d: first_line.count(d) for d in (",", ";", "\t", "|")}
+            best_delim = max(counts, key=lambda d: counts[d])
+            if counts[best_delim] > 0:
+                delimiter = best_delim
+
+        try:
+            reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+            rows = [list(r) for r in reader]
+        except Exception as exc:
+            raise CorruptedFileError(f"CSV file {filename!r} is corrupted: {exc}") from exc
+
+        base_name = Path(filename).stem
+        blocks = self._extract_structured_sheet_blocks(base_name, rows, filename)
+        if not blocks:
+            raise CorruptedFileError(f"CSV file {filename!r} contains no extractable data.")
 
         combined = "\n\n".join(b.text for b in blocks)
         return blocks, 0, self._detect_language(combined)
@@ -479,9 +651,10 @@ class DocumentParser:
             slide_body: list[str] = []
 
             for shape in slide.shapes:
-                if not hasattr(shape, "text") or not shape.text.strip():
+                shape_text = getattr(shape, "text", "") or ""
+                if not shape_text.strip():
                     continue
-                text = shape.text.strip()
+                text = shape_text.strip()
                 if not slide_title and shape == slide.shapes[0]:
                     slide_title = text
                     blocks.append(DocumentBlock(
@@ -619,8 +792,9 @@ class DocumentParser:
                 while line_idx < len(lines) and _MD_TABLE_ROW_RE.match(lines[line_idx]):
                     table_lines.append(lines[line_idx])
                     line_idx += 1
+                formatted_table = self._format_markdown_table(table_lines)
                 blocks.append(DocumentBlock(
-                    block_type=BlockType.TABLE, text="\n".join(table_lines)
+                    block_type=BlockType.TABLE, text=formatted_table
                 ))
                 continue
 
@@ -638,6 +812,8 @@ class DocumentParser:
 
             # Fenced code block.
             if line.strip().startswith("```"):
+                first_fence = line.strip()
+                code_lang = first_fence.lstrip("`").strip()
                 fence_lines = [line]
                 line_idx += 1
                 while line_idx < len(lines):
@@ -648,9 +824,11 @@ class DocumentParser:
                     line_idx += 1
                 code_text = "\n".join(fence_lines)
                 inner = _MD_CODE_FENCE_RE.search(code_text)
+                clean_code = inner.group(1).strip() if inner else code_text
                 blocks.append(DocumentBlock(
                     block_type=BlockType.CODE,
-                    text=inner.group(1).strip() if inner else code_text,
+                    text=clean_code,
+                    metadata={"language": code_lang} if code_lang else {},
                 ))
                 continue
 
@@ -793,6 +971,41 @@ class DocumentParser:
         pipe_lines = sum(1 for ln in lines if "|" in ln and ln.count("|") >= 2)
         tab_lines = sum(1 for ln in lines if "\t" in ln)
         return pipe_lines >= 2 or tab_lines >= 2
+
+    @staticmethod
+    def _format_markdown_table(table_lines: list[str]) -> str:
+        """Convert markdown table lines to structured header-prefixed rows."""
+        if not table_lines:
+            return ""
+        raw_rows: list[list[str]] = []
+        for line in table_lines:
+            stripped = line.strip()
+            if stripped.startswith("|"):
+                stripped = stripped[1:]
+            if stripped.endswith("|"):
+                stripped = stripped[:-1]
+            cells = [c.strip() for c in stripped.split("|")]
+            raw_rows.append(cells)
+
+        if not raw_rows:
+            return "\n".join(table_lines)
+
+        headers = [c if c else f"Column {i + 1}" for i, c in enumerate(raw_rows[0])]
+        data_rows: list[str] = []
+        for row in raw_rows[1:]:
+            if all(re.match(r"^:?-+:?$", c) for c in row if c):
+                continue
+            pairs: list[str] = []
+            for col_i, cell in enumerate(row):
+                if cell:
+                    h = headers[col_i] if col_i < len(headers) else f"Column {col_i + 1}"
+                    pairs.append(f"{h}: {cell}")
+            if pairs:
+                data_rows.append(" | ".join(pairs))
+
+        if data_rows:
+            return "\n".join(data_rows)
+        return "\n".join(table_lines)
 
     @staticmethod
     def _looks_like_list(text: str) -> bool:

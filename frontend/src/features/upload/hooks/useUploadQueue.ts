@@ -7,7 +7,7 @@ import { getDocument, getHealth, uploadDocument } from '@/services'
 import type { RejectedFile, UploadQueueItem } from '@/types'
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024 // 25 MB
-const ACCEPTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.markdown']
+const ACCEPTED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.txt', '.md', '.markdown']
 
 export function useUploadQueue() {
   const queryClient = useQueryClient()
@@ -32,7 +32,7 @@ export function useUploadQueue() {
   const validateFile = useCallback((file: File, existingQueue: UploadQueueItem[]): string | null => {
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
     if (!ACCEPTED_EXTENSIONS.includes(ext)) {
-      return `Unsupported file format (${ext || 'unknown'}). Accepted formats: PDF, DOCX, TXT, MD.`
+      return `Unsupported file format (${ext || 'unknown'}). Accepted formats: PDF, DOCX, DOC, XLSX, XLS, CSV, TXT, MD.`
     }
 
     if (file.size > MAX_FILE_SIZE_BYTES) {

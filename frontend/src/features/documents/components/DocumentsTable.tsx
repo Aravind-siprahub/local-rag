@@ -32,7 +32,6 @@ export function DocumentsTable({ items, onView, onDelete }: DocumentsTableProps)
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>Title</TableHead>
-            <TableHead>Filename</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Version</TableHead>
             <TableHead>Created</TableHead>
@@ -47,16 +46,13 @@ export function DocumentsTable({ items, onView, onDelete }: DocumentsTableProps)
               className="cursor-pointer"
               onClick={() => onView(item.document.id)}
             >
-              <TableCell className="max-w-[220px]">
+              <TableCell className="max-w-70">
                 <div className="truncate font-medium">{item.document.title}</div>
                 {item.document.description ? (
                   <div className="truncate text-xs text-muted-foreground">
                     {item.document.description}
                   </div>
                 ) : null}
-              </TableCell>
-              <TableCell className="max-w-[180px] truncate text-muted-foreground">
-                {item.filename ?? '—'}
               </TableCell>
               <TableCell>
                 <DocumentPipelineStatusBadge status={item.displayStatus} />
