@@ -321,6 +321,21 @@ export function ChatInput({
     }
   }
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+      const files = Array.from(e.clipboardData.files)
+      const imageFiles = files.filter(
+        (f) =>
+          f.type.startsWith('image/') ||
+          IMAGE_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(`.${ext}`))
+      )
+      if (imageFiles.length > 0) {
+        e.preventDefault()
+        processFiles(imageFiles)
+      }
+    }
+  }
+
   const hasActiveImage = attachments.some((a) =>
     a.mime_type.startsWith('image/') || IMAGE_EXTENSIONS.some((ext) => a.filename.toLowerCase().endsWith(`.${ext}`))
   ) || Boolean(preservedImageUrl)
@@ -429,7 +444,11 @@ export function ChatInput({
             ref={fileInputRef}
             onChange={handleFileChange}
             multiple
-            accept=".pdf,.docx,.doc,.txt,.csv,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg,.webp"
+            accept={
+              isAdmin
+                ? '.pdf,.docx,.doc,.txt,.csv,.xlsx,.xls,.pptx,.ppt,.png,.jpg,.jpeg,.webp'
+                : '.png,.jpg,.jpeg,.webp,image/*'
+            }
             className="hidden"
             id="chat-file-input"
           />
@@ -443,6 +462,7 @@ export function ChatInput({
             onChange={(e) => setInput(e.target.value)}
             onInput={adjustHeight}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
               sendDisabled && !disabled
                 ? 'Generating response… you can still browse other chats'
@@ -462,23 +482,22 @@ export function ChatInput({
 
           <div className="flex items-center justify-between pt-1 px-1">
             <div className="flex items-center gap-1.5">
-              {isAdmin && (
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={disabled}
-                  className={cn(
-                    'h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground transition-colors',
-                    attachments.length > 0 && 'text-primary bg-primary/10 hover:bg-primary/20',
-                  )}
-                  title="Attach files (PDF, DOCX, CSV, XLSX, Images...)"
-                  aria-label="Attach files"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </Button>
-              )}
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled}
+                className={cn(
+                  'h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground transition-colors',
+                  attachments.length > 0 && 'text-primary bg-primary/10 hover:bg-primary/20',
+                )}
+                title={isAdmin ? 'Attach files (PDF, DOCX, CSV, XLSX, Images...)' : 'Attach image for vision analysis'}
+                aria-label={isAdmin ? 'Attach files' : 'Attach image'}
+                id="chat-attach-btn"
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
 
               <ModelSelector
                 selectedModel={selectedModel}
