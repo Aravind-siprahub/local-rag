@@ -24,6 +24,7 @@ USER_PROMPT_WITH_CONTEXT = (
     "6. FORMAT: Present verified facts directly, clearly, and concisely in clean bullet points without self-talk or reasoning monologue.\n"
     "7. COMPLETELY UNSUPPORTED: If the document context contains no supporting information for the question or is insufficient, respond: \"I couldn't find enough information in the available documents to answer this question.\"\n"
     "8. PROJECT ISOLATION: When answering for a specific project (such as AIRIS, SipraOne, SipraHub, or Talk to My Data), verify that the retrieved excerpts explicitly describe THAT project. Never mix in or attribute technologies or policies from other documents or projects.\n"
+    "9. INLINE CITATIONS: Every factual statement or claim derived from the retrieved documents MUST include an inline citation matching the exact citation tag provided for that chunk in its header (e.g. [New HR Framework.docx, p. 12] or [Sales_Report.xlsx, Sheet: Q2]). Place the citation immediately after the sentence or fact it supports. Never fabricate or guess citations, page numbers, or sections.\n"
 )
 
 USER_PROMPT_WITHOUT_CONTEXT = (

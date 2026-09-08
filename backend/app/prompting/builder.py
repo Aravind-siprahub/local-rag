@@ -27,6 +27,8 @@ class RetrievedChunkContext:
     document_title: str | None = None
     section_title: str | None = None
     page_number: int | None = None
+    citation_label: str | None = None
+    source_location: str | None = None
 
 
 @dataclass(frozen=True)

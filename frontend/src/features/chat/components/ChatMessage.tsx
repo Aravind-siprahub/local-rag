@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Bot, User, Copy, Check, X, FileText, Globe, Layers, Pencil, RefreshCw, Cpu } from 'lucide-react'
@@ -7,8 +7,6 @@ import type { Message, Citation } from '../types/chat'
 import { Button } from '@/components/ui/button'
 import { AttachmentCard } from './AttachmentCard'
 
-
-
 interface ChatMessageProps {
   message: Message
   citations?: Citation[]
@@ -16,6 +14,110 @@ interface ChatMessageProps {
   onRegenerate?: (message: Message) => void
   isSending?: boolean
   disableRegenerate?: boolean
+}
+
+// Extract string text from React children to check for citation-only blocks
+function getTextFromChildren(children: React.ReactNode): string {
+  if (typeof children === 'string') return children
+  if (typeof children === 'number') return String(children)
+  if (Array.isArray(children)) return children.map(getTextFromChildren).join('')
+  if (children && typeof children === 'object' && 'props' in (children as any)) {
+    return getTextFromChildren((children as any).props?.children)
+  }
+  return ''
+}
+
+function isCitationOnlyParagraph(children: React.ReactNode): boolean {
+  const text = getTextFromChildren(children).trim()
+  if (!text) return false
+  const stripped = text
+    .replace(/\[(?:[^\[\]\n]+\.(?:docx?|pdf|txt|md|xlsx?|pptx?|csv)[^\[\]\n]*|C\d+)\]/gi, '')
+    .replace(/[,\s]+/g, '')
+    .trim()
+  return stripped.length === 0
+}
+
+// Helper to render inline RAG citation chips with clean alignment
+function renderInlineCitations(text: string, citations: Citation[] = []) {
+  const parts: (string | React.ReactElement)[] = []
+  const citationRegex = /\[((?:[^\[\]\n]+\.(?:docx?|pdf|txt|md|xlsx?|pptx?|csv)[^\[\]\n]*)|(?:C\d+))\]/gi
+  let lastIdx = 0
+  let match: RegExpExecArray | null
+
+  while ((match = citationRegex.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      parts.push(text.substring(lastIdx, match.index))
+    }
+    const rawTag = match[1].trim()
+    const matchedCit = citations.find(c => {
+      if (c.citation_label && c.citation_label.includes(rawTag)) return true
+      if (c.citation_id && c.citation_id.toLowerCase() === rawTag.toLowerCase()) return true
+      if (c.document_title && rawTag.toLowerCase().includes(c.document_title.toLowerCase())) return true
+      if (c.file_name && rawTag.toLowerCase().includes(c.file_name.toLowerCase())) return true
+      return false
+    })
+
+    const tooltip = matchedCit?.chunk_text
+      ? `${matchedCit.document_title || matchedCit.file_name || 'Document'}${matchedCit.source_location ? ` • ${matchedCit.source_location}` : ''}\n\n"${matchedCit.chunk_text.slice(0, 200)}..."`
+      : rawTag
+
+    const partsTag = rawTag.split(',')
+    const docPart = partsTag[0].trim()
+    const locPart = partsTag.slice(1).join(',').trim()
+
+    // Clean up location display for sleek badge (extract leaf section if breadcrumbs exist)
+    let cleanLoc = locPart
+    for (const sep of ['→', '->', '>']) {
+      if (cleanLoc.includes(sep)) {
+        cleanLoc = cleanLoc.split(sep).pop()?.trim() || cleanLoc
+      }
+    }
+    cleanLoc = cleanLoc.replace(/^Section:\s*/i, '')
+
+    parts.push(
+      <span
+        key={`cit-${match.index}`}
+        className="group/cit inline-flex items-center gap-1.5 text-[11px] leading-none font-medium text-primary bg-primary/10 hover:bg-primary/15 transition-all rounded-md px-2 py-1 mx-0.5 border border-primary/20 cursor-default select-none align-middle shadow-2xs"
+        title={tooltip}
+      >
+        <FileText className="w-3.5 h-3.5 text-primary/70 shrink-0" />
+        <span className="font-medium tracking-normal text-foreground/90 max-w-50 sm:max-w-75 truncate">
+          {docPart}
+        </span>
+        {cleanLoc && (
+          <span className="text-[10px] text-muted-foreground/80 pl-1.5 border-l border-primary/25 max-w-45 sm:max-w-60 truncate font-normal">
+            {cleanLoc}
+          </span>
+        )}
+      </span>
+    )
+    lastIdx = match.index + match[0].length
+  }
+
+  if (lastIdx === 0) {
+    return text
+  }
+
+  if (lastIdx < text.length) {
+    parts.push(text.substring(lastIdx))
+  }
+
+  return parts
+}
+
+function processChildrenWithCitations(children: React.ReactNode, citations: Citation[] = []): React.ReactNode {
+  if (typeof children === 'string') {
+    return renderInlineCitations(children, citations)
+  }
+  if (Array.isArray(children)) {
+    return children.map((child, idx) => {
+      if (typeof child === 'string') {
+        return <span key={idx}>{renderInlineCitations(child, citations)}</span>
+      }
+      return child
+    })
+  }
+  return children
 }
 
 export function ChatMessage({
@@ -29,6 +131,7 @@ export function ChatMessage({
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
   const [isLightboxOpen, setIsLightboxOpen] = useState(false)
+  const activeCitations = _citations || (message as any).citations || (message as any).sources || []
 
   const handleCopy = () => {
     if (!message.content) return
@@ -36,6 +139,29 @@ export function ChatMessage({
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
+
+  // Preprocess markdown to ensure citations at the end of lists are detached into their own block
+  // so they don't get trapped or awkwardly indented inside <li> tags
+  const formattedContent = useMemo(() => {
+    if (!message.content) return ''
+    let text = message.content
+
+    // 1. If a list item ends with a citation tag (e.g. "- Item text [Doc.docx...]"),
+    // split the citation into its own block so it doesn't get trapped inside the <li>
+    text = text.replace(
+      /((?:^|\n)\s*(?:[-*•]|\d+\.)\s+[^\n]+?)\s*(\[(?:[^\[\]\n]+\.(?:docx?|pdf|txt|md|xlsx?|pptx?|csv)[^\[\]\n]*|C\d+)\])\s*$/gim,
+      '$1\n\n$2'
+    )
+
+    // 2. If a citation is immediately on the line below a list item without a blank line
+    // e.g. "- Item text\n[Doc.docx...]" -> "- Item text\n\n[Doc.docx...]"
+    text = text.replace(
+      /((?:^|\n)\s*(?:[-*•]|\d+\.)\s+[^\n]+)\n(\s*\[(?:[^\[\]\n]+\.(?:docx?|pdf|txt|md|xlsx?|pptx?|csv)[^\[\]\n]*|C\d+)\]\s*)/gim,
+      '$1\n\n$2'
+    )
+
+    return text
+  }, [message.content])
 
   // Handle ESC key for lightbox modal
   useEffect(() => {
@@ -92,11 +218,23 @@ export function ChatMessage({
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
-                      p: ({ children }) => (
-                        <p className="mb-3 last:mb-0 leading-relaxed text-sm text-foreground/90 font-sans">
-                          {children}
-                        </p>
-                      ),
+                      p: ({ children }) => {
+                        if (isCitationOnlyParagraph(children)) {
+                          return (
+                            <div className="mt-3.5 pt-2 border-t border-border/40 flex items-center flex-wrap gap-2 text-xs text-muted-foreground w-full not-prose">
+                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider select-none">
+                                Source:
+                              </span>
+                              {processChildrenWithCitations(children, activeCitations)}
+                            </div>
+                          )
+                        }
+                        return (
+                          <p className="mb-3 last:mb-0 leading-relaxed text-sm text-foreground/90 font-sans">
+                            {processChildrenWithCitations(children, activeCitations)}
+                          </p>
+                        )
+                      },
                       ul: ({ children }) => (
                         <ul className="list-disc pl-5 space-y-1.5 my-3 text-sm text-foreground/90">
                           {children}
@@ -108,7 +246,7 @@ export function ChatMessage({
                         </ol>
                       ),
                       li: ({ children }) => (
-                        <li className="text-foreground/90 leading-relaxed pl-0.5">{children}</li>
+                        <li className="text-foreground/90 leading-relaxed pl-0.5">{processChildrenWithCitations(children, activeCitations)}</li>
                       ),
                       h1: ({ children }) => (
                         <h1 className="text-base font-bold text-foreground mt-4 mb-2 font-display">
@@ -141,12 +279,12 @@ export function ChatMessage({
                       },
                       blockquote: ({ children }) => (
                         <blockquote className="border-l-2 border-primary/30 pl-3 italic text-muted-foreground/80 my-3">
-                          {children}
+                          {processChildrenWithCitations(children, activeCitations)}
                         </blockquote>
                       ),
                     }}
                   >
-                    {message.content}
+                    {formattedContent}
                   </ReactMarkdown>
                 )}
               </div>

@@ -21,6 +21,10 @@ class SourceCitation:
     url: str | None = None
     domain: str | None = None
     source_type: str = "local"
+    file_name: str | None = None
+    source_location: str | None = None
+    citation_id: str | None = None
+    citation_label: str | None = None
 
 
 @dataclass(frozen=True)

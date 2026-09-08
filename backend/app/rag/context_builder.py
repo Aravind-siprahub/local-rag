@@ -14,13 +14,14 @@ from typing import Any, Sequence
 
 from app.core.config import get_settings
 from app.prompting.builder import RetrievedChunkContext
+from app.rag.citations import build_citation_label
 from app.retrieval.ranking import RankedResult
 
 logger = logging.getLogger(__name__)
 
 # Standard fallback message when no relevant context is available
 STANDARDIZED_UNANSWERABLE_MESSAGE = (
-    "I couldn't find enough information in the available documents to answer this question."
+    "I could not find enough information in the available documents to answer this question."
 )
 
 
@@ -161,12 +162,23 @@ class ContextBuilder:
             cid = getattr(item, "chunk_id", None)
             doc_id = getattr(item, "document_id", None) or uuid.uuid4()
             score = float(getattr(item, "similarity_score", 0.0))
+            meta = getattr(item, "metadata_", None) or getattr(item, "metadata", None) or {}
+            source_loc = getattr(item, "source_location", None) or meta.get("source_location")
+
+            citation_label = build_citation_label(
+                document_title=title,
+                page_number=page,
+                section_title=section,
+                source_location=source_loc,
+                metadata=meta,
+            )
 
             header_parts = [f"Document: {title}"]
             if page is not None and page > 0:
                 header_parts.append(f"Page: {page}")
             if section and section.strip():
                 header_parts.append(f"Section: {section.strip()}")
+            header_parts.append(f"Citation: {citation_label}")
             header = " | ".join(header_parts)
 
             chunk_block = f"[Chunk {idx}] ({header})\n{trimmed_text}"
@@ -187,6 +199,8 @@ class ContextBuilder:
                         document_title=title,
                         section_title=section,
                         page_number=page,
+                        citation_label=citation_label,
+                        source_location=source_loc,
                     )
                 )
             elif len(capped_chunks) == 1 and not selected_contexts:
@@ -207,6 +221,8 @@ class ContextBuilder:
                         document_title=title,
                         section_title=section,
                         page_number=page,
+                        citation_label=citation_label,
+                        source_location=source_loc,
                     )
                 )
                 break

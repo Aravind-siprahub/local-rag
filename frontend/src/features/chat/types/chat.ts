@@ -11,6 +11,12 @@ export interface Citation {
   url?: string
   domain?: string
   source_type?: 'local' | 'web'
+  document_name?: string
+  file_name?: string
+  relevance_score?: number
+  source_location?: string
+  citation_id?: string
+  citation_label?: string
 }
 
 export interface ChatTokenUsageResponse {

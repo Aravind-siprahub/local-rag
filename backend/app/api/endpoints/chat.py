@@ -605,6 +605,12 @@ def _to_chat_response(result: RAGResponse) -> ChatResponse:
                 url=getattr(source, "url", None),
                 domain=getattr(source, "domain", None),
                 source_type=getattr(source, "source_type", "local"),
+                document_name=getattr(source, "document_title", None),
+                file_name=getattr(source, "file_name", None) or getattr(source, "document_title", None),
+                relevance_score=source.similarity_score,
+                source_location=getattr(source, "source_location", None),
+                citation_id=getattr(source, "citation_id", None),
+                citation_label=getattr(source, "citation_label", None),
             )
             for source in result.sources
         ],

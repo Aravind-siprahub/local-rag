@@ -106,6 +106,9 @@ class Chunk(BaseModel):
     language: str = "en"
     text: str = ""
     embedding: list[float] | None = None
+    file_name: str = ""
+    file_type: str = ""
+    source_location: str = ""
     char_start: int | None = None
     char_end: int | None = None
 
@@ -115,6 +118,9 @@ class Chunk(BaseModel):
             "id": self.id,
             "document_id": str(self.document_id),
             "document_name": self.document_name,
+            "file_name": self.file_name or self.document_name,
+            "file_type": self.file_type,
+            "source_location": self.source_location,
             "page_number": self.page_number,
             "section": self.section,
             "subsection": self.subsection,

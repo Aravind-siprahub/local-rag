@@ -96,6 +96,12 @@ class ChatCitationResponse(BaseModel):
     url: str | None = None
     domain: str | None = None
     source_type: str = "local"
+    document_name: str | None = None
+    file_name: str | None = None
+    relevance_score: float | None = None
+    source_location: str | None = None
+    citation_id: str | None = None
+    citation_label: str | None = None
 
 
 class ChatResponse(BaseModel):

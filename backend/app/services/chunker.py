@@ -95,6 +95,7 @@ class SemanticChunker:
         char_offset: int,
     ) -> list[Chunk]:
         content_type = self._block_to_content_type(block.block_type)
+        block_meta = getattr(block, "metadata", None) or {}
 
         # Atomic blocks — never split.
         if block.block_type in (
@@ -109,6 +110,7 @@ class SemanticChunker:
                 page_number=block.page_number or 0,
                 char_start=char_offset,
                 char_end=char_offset + len(block.text),
+                metadata=block_meta,
             )]
 
         # Headings become context only — not standalone chunks unless they carry body text.
@@ -126,11 +128,13 @@ class SemanticChunker:
                 page_number=block.page_number or 0,
                 char_start=char_offset,
                 char_end=char_offset + len(block.text),
+                metadata=block_meta,
             )]
 
         return self._split_paragraph_block(
             block.text, document, hierarchy, content_type,
             block.page_number or 0, char_offset,
+            metadata=block_meta,
         )
 
     def _split_paragraph_block(
@@ -141,6 +145,7 @@ class SemanticChunker:
         content_type: ContentType,
         page_number: int,
         char_offset: int,
+        metadata: dict[str, Any] | None = None,
     ) -> list[Chunk]:
         """Split oversized paragraphs on paragraph/sentence boundaries with overlap."""
         paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
@@ -163,12 +168,14 @@ class SemanticChunker:
                         text=chunk_text, document=document, hierarchy=hierarchy,
                         content_type=content_type, page_number=page_number,
                         char_start=part_start, char_end=part_start + len(chunk_text),
+                        metadata=metadata,
                     ))
                     current_parts = []
                     current_tokens = 0
 
                 sentence_chunks = self._split_on_sentences(
-                    para, document, hierarchy, content_type, page_number, char_offset
+                    para, document, hierarchy, content_type, page_number, char_offset,
+                    metadata=metadata,
                 )
                 chunks.extend(sentence_chunks)
                 part_start = char_offset + len(para)
@@ -180,6 +187,7 @@ class SemanticChunker:
                     text=chunk_text, document=document, hierarchy=hierarchy,
                     content_type=content_type, page_number=page_number,
                     char_start=part_start, char_end=part_start + len(chunk_text),
+                    metadata=metadata,
                 ))
                 # Overlap: carry trailing paragraph(s) within overlap budget.
                 overlap_parts = self._compute_overlap(current_parts)
@@ -196,6 +204,7 @@ class SemanticChunker:
                 text=chunk_text, document=document, hierarchy=hierarchy,
                 content_type=content_type, page_number=page_number,
                 char_start=part_start, char_end=part_start + len(chunk_text),
+                metadata=metadata,
             ))
 
         return chunks
@@ -208,6 +217,7 @@ class SemanticChunker:
         content_type: ContentType,
         page_number: int,
         char_offset: int,
+        metadata: dict[str, Any] | None = None,
     ) -> list[Chunk]:
         """Last-resort split on sentence boundaries (never mid-sentence)."""
         sentences = re.split(r"(?<=[.!?])\s+", text)
@@ -224,6 +234,7 @@ class SemanticChunker:
                     text=chunk_text, document=document, hierarchy=hierarchy,
                     content_type=content_type, page_number=page_number,
                     char_start=part_start, char_end=part_start + len(chunk_text),
+                    metadata=metadata,
                 ))
                 overlap = self._compute_overlap(current)
                 current = overlap
@@ -239,6 +250,7 @@ class SemanticChunker:
                 text=chunk_text, document=document, hierarchy=hierarchy,
                 content_type=content_type, page_number=page_number,
                 char_start=part_start, char_end=part_start + len(chunk_text),
+                metadata=metadata,
             ))
 
         return chunks
@@ -270,6 +282,7 @@ class SemanticChunker:
         page_number: int,
         char_start: int,
         char_end: int,
+        metadata: dict[str, Any] | None = None,
     ) -> Chunk:
         heading_prefix = ""
         if hierarchy.breadcrumb and not text.lower().startswith(hierarchy.breadcrumb.lower()):
@@ -279,10 +292,60 @@ class SemanticChunker:
 
         chunk_text = f"{heading_prefix}{text}" if heading_prefix else text
         chunk_id = self._generate_chunk_id(document.document_id, chunk_text, char_start)
+
+        ext = (document.source_format or "").lower().strip(".")
+        filename = document.document_name
+        source_loc = ""
+
+        # Extract sheet name and rows if available
+        sheet = None
+        r_start = None
+        r_end = None
+        if metadata:
+            sheet = metadata.get("sheet")
+            r_start = metadata.get("row_start")
+            r_end = metadata.get("row_end")
+        if not sheet:
+            sheet_m = re.search(r"(?i)\bSheet:\s*([^\n\r,\)]+)", text)
+            if sheet_m:
+                sheet = sheet_m.group(1).strip()
+
+        if ext in ("xlsx", "xls", "csv") or sheet:
+            if sheet:
+                if r_start is not None and r_end is not None:
+                    source_loc = f"Sheet: {sheet}, Rows {r_start}-{r_end}"
+                else:
+                    source_loc = f"Sheet: {sheet}"
+        elif ext == "pdf":
+            if page_number and page_number > 0:
+                source_loc = f"p. {page_number}"
+        elif ext in ("docx", "doc"):
+            if page_number and page_number > 0:
+                source_loc = f"p. {page_number}"
+            elif hierarchy.section:
+                source_loc = f"Section: {hierarchy.section}"
+            elif hierarchy.breadcrumb:
+                source_loc = f"Section: {hierarchy.breadcrumb}"
+        elif ext in ("md", "markdown"):
+            if hierarchy.section:
+                source_loc = hierarchy.section
+            elif hierarchy.breadcrumb:
+                source_loc = hierarchy.breadcrumb
+        else:
+            if page_number and page_number > 0:
+                source_loc = f"p. {page_number}"
+            elif hierarchy.section:
+                source_loc = f"Section: {hierarchy.section}"
+            elif hierarchy.breadcrumb:
+                source_loc = f"Section: {hierarchy.breadcrumb}"
+
         return Chunk(
             id=chunk_id,
             document_id=document.document_id,
             document_name=document.document_name,
+            file_name=filename,
+            file_type=ext,
+            source_location=source_loc,
             page_number=page_number,
             section=hierarchy.section,
             subsection=hierarchy.subsection,

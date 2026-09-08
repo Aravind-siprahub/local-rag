@@ -471,7 +471,7 @@ class RAGService:
             document_titles=document_titles,
         )
 
-        answer_text = agent_state.final_answer or "I couldn't find enough information in the available documents to answer this question."
+        answer_text = agent_state.final_answer or "I could not find enough information in the available documents to answer this question."
         if agent_state.retrieved_documents:
             from app.rag.validator import validate_and_reconcile_answer
             answer_text = validate_and_reconcile_answer(question, answer_text, agent_state.retrieved_documents)
@@ -481,12 +481,30 @@ class RAGService:
         if _is_refusal_response(answer_text):
             sources = []
         else:
-            raw_sources = _sources_from_chunks(agent_state.retrieved_documents)
-            sources = _validate_and_deduplicate_sources(
-                raw_sources,
-                effective_threshold,
-                max_sources=getattr(settings, "FINAL_CONTEXT", 3),
+            from app.rag.citations import validate_and_sanitize_citations
+            answer_text, verified_cits = validate_and_sanitize_citations(
+                answer_text,
+                agent_state.retrieved_documents,
+                similarity_threshold=effective_threshold,
             )
+            sources = [
+                SourceCitation(
+                    chunk_id=vc["chunk_id"],
+                    chunk_text=vc["chunk_text"],
+                    document_id=vc["document_id"],
+                    document_version_id=vc.get("document_version_id"),
+                    similarity_score=vc["similarity_score"],
+                    rank=vc["rank"],
+                    document_title=vc["document_title"],
+                    section_title=vc["section_title"],
+                    page_number=vc["page_number"],
+                    file_name=vc["file_name"],
+                    source_location=vc["source_location"],
+                    citation_id=vc.get("citation_id"),
+                    citation_label=vc.get("citation_label"),
+                )
+                for vc in verified_cits
+            ]
 
         total_ms = int((time.monotonic() - start_mono) * 1000)
 
@@ -1017,20 +1035,38 @@ class RAGService:
                 req_id, r_idx, doc_name, path, score, snip
             )
 
-        sources_data = [
-            {
+        from app.rag.citations import build_citation_label
+        sources_data = []
+        for idx, c in enumerate(deduped_chunks, start=1):
+            title = getattr(c, "document_title", "Unknown")
+            page = getattr(c, "page_number", None)
+            section = getattr(c, "section_title", None)
+            meta = getattr(c, "metadata_", None) or getattr(c, "metadata", None) or {}
+            source_loc = getattr(c, "source_location", None) or meta.get("source_location")
+            label = build_citation_label(
+                document_title=title,
+                page_number=page,
+                section_title=section,
+                source_location=source_loc,
+                metadata=meta,
+            )
+            sources_data.append({
                 "chunk_id": str(c.chunk_id),
                 "chunk_text": c.chunk_text,
                 "document_id": str(c.document_id),
-                "document_version_id": str(c.document_version_id),
+                "document_version_id": str(c.document_version_id) if c.document_version_id else None,
                 "similarity_score": round(c.similarity_score, 4),
-                "rank": c.rank,
-                "document_title": getattr(c, "document_title", "Unknown"),
-                "section_title": getattr(c, "section_title", None),
-                "page_number": getattr(c, "page_number", None),
-            }
-            for c in deduped_chunks
-        ]
+                "relevance_score": round(c.similarity_score, 4),
+                "rank": getattr(c, "rank", idx),
+                "document_title": title,
+                "document_name": title,
+                "file_name": title,
+                "section_title": section,
+                "page_number": page,
+                "source_location": source_loc,
+                "citation_id": f"C{idx}",
+                "citation_label": label,
+            })
 
         yield f"data: {json.dumps({'type': 'meta', 'sources': sources_data, 'user_message_id': str(user_message.id)})}\n\n"
 
@@ -1403,6 +1439,7 @@ class RAGService:
 
         if deduped_chunks:
             from app.rag.validator import validate_and_reconcile_answer
+            from app.rag.citations import validate_and_sanitize_citations
             validated_answer = validate_and_reconcile_answer(question, full_answer, deduped_chunks)
             if validated_answer != full_answer:
                 if len(validated_answer) > len(full_answer) and validated_answer.startswith(full_answer):
@@ -1411,6 +1448,20 @@ class RAGService:
                 elif not streamed_to_client:
                     yield f"data: {json.dumps({'type': 'token', 'content': validated_answer})}\n\n"
                 full_answer = validated_answer
+
+            effective_threshold = similarity_threshold if similarity_threshold is not None else settings.SIMILARITY_THRESHOLD
+            sanitized_answer, _ = validate_and_sanitize_citations(
+                full_answer,
+                deduped_chunks,
+                similarity_threshold=effective_threshold,
+            )
+            if sanitized_answer != full_answer:
+                if len(sanitized_answer) > len(full_answer) and sanitized_answer.startswith(full_answer):
+                    diff_text = sanitized_answer[len(full_answer):]
+                    yield f"data: {json.dumps({'type': 'token', 'content': diff_text})}\n\n"
+                elif not streamed_to_client:
+                    yield f"data: {json.dumps({'type': 'token', 'content': sanitized_answer})}\n\n"
+                full_answer = sanitized_answer
         elif not streamed_to_client:
             yield f"data: {json.dumps({'type': 'token', 'content': full_answer})}\n\n"
 
@@ -2657,38 +2708,62 @@ class RAGService:
 
 
 def _sources_from_chunks(chunks: list[RankedResult]) -> list[SourceCitation]:
-    return [
-        SourceCitation(
-            chunk_id=chunk.chunk_id,
-            chunk_text=chunk.chunk_text,
-            document_id=chunk.document_id,
-            document_version_id=chunk.document_version_id,
-            similarity_score=chunk.similarity_score,
-            rank=getattr(chunk, "rank", 1),
-            document_title=getattr(chunk, "document_title", None),
-            section_title=getattr(chunk, "section_title", None),
-            page_number=getattr(chunk, "page_number", None),
+    from app.rag.citations import build_citation_label
+    res = []
+    for idx, chunk in enumerate(chunks, start=1):
+        title = getattr(chunk, "document_title", None)
+        page = getattr(chunk, "page_number", None)
+        sec = getattr(chunk, "section_title", None)
+        meta = getattr(chunk, "metadata_", None) or {}
+        source_loc = getattr(chunk, "source_location", None) or meta.get("source_location")
+        label = build_citation_label(title, page, sec, source_loc, meta)
+        res.append(
+            SourceCitation(
+                chunk_id=chunk.chunk_id,
+                chunk_text=chunk.chunk_text,
+                document_id=chunk.document_id,
+                document_version_id=chunk.document_version_id,
+                similarity_score=chunk.similarity_score,
+                rank=getattr(chunk, "rank", idx),
+                document_title=title,
+                section_title=sec,
+                page_number=page,
+                file_name=title,
+                source_location=source_loc,
+                citation_id=f"C{idx}",
+                citation_label=label,
+            )
         )
-        for chunk in chunks
-    ]
-
+    return res
 
 
 def _sources_from_prompt(prompt: Prompt) -> list[SourceCitation]:
-    return [
-        SourceCitation(
-            chunk_id=chunk.chunk_id,
-            chunk_text=chunk.chunk_text,
-            document_id=chunk.document_id,
-            document_version_id=chunk.document_version_id,
-            similarity_score=chunk.similarity_score,
-            rank=chunk.rank,
-            document_title=getattr(chunk, "document_title", None),
-            section_title=getattr(chunk, "section_title", None),
-            page_number=getattr(chunk, "page_number", None),
+    from app.rag.citations import build_citation_label
+    res = []
+    for idx, chunk in enumerate(prompt.retrieved_chunks, start=1):
+        title = getattr(chunk, "document_title", None)
+        page = getattr(chunk, "page_number", None)
+        sec = getattr(chunk, "section_title", None)
+        source_loc = getattr(chunk, "source_location", None)
+        label = getattr(chunk, "citation_label", None) or build_citation_label(title, page, sec, source_loc)
+        res.append(
+            SourceCitation(
+                chunk_id=chunk.chunk_id,
+                chunk_text=chunk.chunk_text,
+                document_id=chunk.document_id,
+                document_version_id=chunk.document_version_id,
+                similarity_score=chunk.similarity_score,
+                rank=chunk.rank,
+                document_title=title,
+                section_title=sec,
+                page_number=page,
+                file_name=title,
+                source_location=source_loc,
+                citation_id=f"C{idx}",
+                citation_label=label,
+            )
         )
-        for chunk in prompt.retrieved_chunks
-    ]
+    return res
 
 
 def _validate_and_deduplicate_sources(
