@@ -1,11 +1,12 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { SendHorizontal, Paperclip, Pencil, Square } from 'lucide-react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { SendHorizontal, Paperclip, Pencil, Square, Mic, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ModelSelector } from './ModelSelector'
 import { AttachmentCard } from './AttachmentCard'
 import { DragDropOverlay } from './DragDropOverlay'
 import type { Message, Attachment } from '../types/chat'
+import { useSpeechRecognition } from '../hooks/useSpeechRecognition'
 
 import { uploadDocument } from '@/services/upload.service'
 import { useAuth } from '@/features/auth/hooks/authHooks'
@@ -51,7 +52,54 @@ export function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const dragCounterRef = useRef(0)
-  const cannotSend = Boolean(disabled || sendDisabled)
+
+  // Voice Search / Speech Recognition Hook
+  const preVoiceInputRef = useRef<string>('')
+
+  const handleTranscript = useCallback((text: string, isFinal: boolean) => {
+    if (isFinal && text.trim()) {
+      setInput(() => {
+        const base = preVoiceInputRef.current.trim()
+        return base ? `${base} ${text.trim()}` : text.trim()
+      })
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+      }
+    }
+  }, [])
+
+  const handleVoiceCancel = useCallback(() => {
+    setInput(preVoiceInputRef.current)
+    if (textareaRef.current) {
+      textareaRef.current.focus()
+    }
+  }, [])
+
+  const {
+    isSupported: isSpeechSupported,
+    status: speechStatus,
+    interimTranscript,
+    errorMessage: speechError,
+    startListening,
+    stopListening,
+    cancelListening,
+    clearError: clearSpeechError,
+  } = useSpeechRecognition({
+    onTranscript: handleTranscript,
+    onCancel: handleVoiceCancel,
+    defaultLanguage: 'en-US',
+  })
+
+  const handleToggleVoice = () => {
+    if (speechStatus === 'recording') {
+      stopListening()
+    } else {
+      preVoiceInputRef.current = input
+      startListening()
+    }
+  }
+
+  const cannotSend = Boolean(disabled || sendDisabled || speechStatus === 'processing')
 
   // Sync state when entering Edit mode
   useEffect(() => {
@@ -72,16 +120,17 @@ export function ChatInput({
     }
   }, [editingMessage])
 
-  const handleInput = () => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`
-    }
-  }
+  const adjustHeight = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = '0px'
+    const scrollH = el.scrollHeight
+    el.style.height = `${Math.max(48, Math.min(scrollH, 360))}px`
+  }, [])
 
-  useEffect(() => {
-    handleInput()
-  }, [input])
+  useLayoutEffect(() => {
+    adjustHeight()
+  }, [input, adjustHeight])
 
   const processFiles = (files: FileList | File[]) => {
     setErrorMsg(null)
@@ -256,7 +305,7 @@ export function ChatInput({
     clearAllAttachments(false)
     if (onCancelEdit) onCancelEdit()
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = '48px'
     }
   }
 
@@ -309,9 +358,18 @@ export function ChatInput({
         </div>
       )}
 
-      {errorMsg && (
-        <div className="text-xs text-destructive px-3 py-1.5 bg-destructive/10 rounded-lg border border-destructive/20 max-w-fit self-start animate-in fade-in-0">
-          {errorMsg}
+      {(errorMsg || speechError) && (
+        <div className="flex items-center justify-between text-xs text-destructive px-3 py-1.5 bg-destructive/10 rounded-lg border border-destructive/20 max-w-fit self-start animate-in fade-in-0 gap-2">
+          <span>{errorMsg || speechError}</span>
+          {speechError && (
+            <button
+              type="button"
+              onClick={clearSpeechError}
+              className="text-[10px] underline hover:text-foreground cursor-pointer"
+            >
+              Dismiss
+            </button>
+          )}
         </div>
       )}
 
@@ -336,6 +394,35 @@ export function ChatInput({
           </div>
         )}
 
+        {/* Voice recording / processing status banner */}
+        {speechStatus === 'recording' && (
+          <div className="flex items-center justify-between px-3 py-1.5 bg-destructive/10 border border-destructive/20 rounded-lg text-xs text-destructive animate-in fade-in-0 mb-1.5 mx-1">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-destructive opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-destructive"></span>
+              </span>
+              <span className="font-medium">
+                Listening in English... {interimTranscript ? `"${interimTranscript}"` : 'Speak now'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={cancelListening}
+              className="text-[11px] underline hover:text-foreground transition-colors ml-2 cursor-pointer font-medium"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {speechStatus === 'processing' && (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 border border-primary/20 rounded-lg text-xs text-primary animate-in fade-in-0 mb-1.5 mx-1">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span className="font-medium">Transcribing speech...</span>
+          </div>
+        )}
+
         <div className="relative flex flex-col w-full">
           <input
             type="file"
@@ -354,18 +441,21 @@ export function ChatInput({
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onInput={adjustHeight}
             onKeyDown={handleKeyDown}
             placeholder={
               sendDisabled && !disabled
                 ? 'Generating response… you can still browse other chats'
                 : editingMessage
                 ? 'Modify your message and press Resubmit...'
+                : speechStatus === 'recording'
+                ? 'Listening in English... speak now'
                 : placeholder
             }
-            disabled={disabled}
+            disabled={disabled || speechStatus === 'processing'}
             className={cn(
-              'flex-1 min-h-11 max-h-56 w-full resize-none bg-transparent px-3 py-3 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/50',
-              'scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent',
+              'w-full min-h-12 max-h-90 resize-none bg-transparent px-3.5 py-3 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed text-foreground placeholder:text-muted-foreground/50',
+              'scrollbar-thin scrollbar-thumb-muted-foreground/35 hover:scrollbar-thumb-muted-foreground/50 scrollbar-track-transparent',
             )}
             rows={1}
           />
@@ -398,27 +488,65 @@ export function ChatInput({
               />
             </div>
 
-            <Button
-              size="icon"
-              onClick={sendDisabled && onStop ? onStop : handleSend}
-              disabled={sendDisabled ? false : ((!input.trim() && attachments.length === 0 && !preservedImageUrl) || cannotSend)}
-              className={cn(
-                'h-8 w-8 shrink-0 rounded-lg shadow-xs transition-all active:scale-95 border border-transparent',
-                sendDisabled
-                  ? 'bg-destructive/10 text-destructive hover:bg-destructive/20 border-destructive/20'
-                  : 'bg-primary hover:bg-primary/90 text-primary-foreground disabled:bg-muted/40 disabled:text-muted-foreground/30 disabled:border-border/10'
-              )}
-              title={
-                sendDisabled
-                  ? 'Stop generating'
-                  : editingMessage
-                  ? 'Resubmit edited message'
-                  : 'Send message'
-              }
-              aria-label={sendDisabled ? 'Stop generating' : editingMessage ? 'Resubmit edited message' : 'Send message'}
-            >
-              {sendDisabled ? <Square className="h-3 w-3 fill-current" /> : <SendHorizontal className="h-4 w-4" />}
-            </Button>
+            <div className="flex items-center gap-1.5">
+              {/* Voice search microphone button */}
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={handleToggleVoice}
+                disabled={disabled}
+                className={cn(
+                  'h-8 w-8 rounded-lg transition-all',
+                  speechStatus === 'recording'
+                    ? 'text-destructive bg-destructive/15 hover:bg-destructive/25 animate-pulse ring-1 ring-destructive/40'
+                    : speechStatus === 'processing'
+                    ? 'text-primary bg-primary/10'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+                )}
+                title={
+                  !isSpeechSupported
+                    ? 'Speech recognition is not supported in this browser'
+                    : speechStatus === 'recording'
+                    ? 'Recording speech (English)... Click to finish'
+                    : speechStatus === 'processing'
+                    ? 'Transcribing speech...'
+                    : 'Voice search in English (Click to speak)'
+                }
+                aria-label={speechStatus === 'recording' ? 'Stop voice recording' : 'Start voice recording in English'}
+                id="chat-voice-btn"
+              >
+                {speechStatus === 'recording' ? (
+                  <Mic className="h-4 w-4 text-destructive" />
+                ) : speechStatus === 'processing' ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                ) : (
+                  <Mic className="h-4 w-4" />
+                )}
+              </Button>
+
+              <Button
+                size="icon"
+                onClick={sendDisabled && onStop ? onStop : handleSend}
+                disabled={sendDisabled ? false : ((!input.trim() && attachments.length === 0 && !preservedImageUrl) || cannotSend)}
+                className={cn(
+                  'h-8 w-8 shrink-0 rounded-lg shadow-xs transition-all active:scale-95 border border-transparent',
+                  sendDisabled
+                    ? 'bg-destructive/10 text-destructive hover:bg-destructive/20 border-destructive/20'
+                    : 'bg-primary hover:bg-primary/90 text-primary-foreground disabled:bg-muted/40 disabled:text-muted-foreground/30 disabled:border-border/10'
+                )}
+                title={
+                  sendDisabled
+                    ? 'Stop generating'
+                    : editingMessage
+                    ? 'Resubmit edited message'
+                    : 'Send message'
+                }
+                aria-label={sendDisabled ? 'Stop generating' : editingMessage ? 'Resubmit edited message' : 'Send message'}
+              >
+                {sendDisabled ? <Square className="h-3 w-3 fill-current" /> : <SendHorizontal className="h-4 w-4" />}
+              </Button>
+            </div>
           </div>
         </div>
       </div>

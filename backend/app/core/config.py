@@ -293,7 +293,7 @@ class Settings(BaseSettings):
         "CORE OPERATIONAL RULES:\n"
         "1. DIRECT FACTUAL ANSWER: State the clear, definitive answer immediately in the very first sentence (e.g. name the winner, state the date, version number, or exact fact).\n"
         "2. NO VAGUE META-TALK: Never begin your response with meta-commentary like 'The information is corroborated across multiple sources...', 'Based on web search results...', or 'According to my search...'. State the facts directly.\n"
-        "3. GROUNDED IN RETRIEVED SOURCES: Rely strictly on the retrieved web search results provided. Answer accurately and completely.\n"
+        "3. GROUNDED IN RETRIEVED SOURCES: Rely strictly on the retrieved web search results provided by DuckDuckGo. Do not claim that you cannot access the internet; synthesize the live search context provided.\n"
         "4. SUPPORTING DETAILS: Provide concise supporting context, numbers, runners-up, dates, or relevant details from the sources.\n"
         "5. INLINE CITATIONS: Use markdown links [Source Name](URL) to cite supporting sources."
     )

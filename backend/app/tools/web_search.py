@@ -73,62 +73,65 @@ def _clean_ddg_url(raw_url: str) -> str:
     return url
 
 
+def extract_duckduckgo_hits(html_text: str, query: str = "", max_results: int = 10) -> list[WebSearchHit]:
+    """Extract DuckDuckGo search result blocks with complete titles, URLs, and full snippets."""
+    import re
+    hits: list[WebSearchHit] = []
+    seen_urls: set[str] = set()
+
+    result_blocks = re.findall(
+        r'<div[^>]*class="[^"]*result\b[^"]*"[^>]*>(.*?)(?=<div[^>]*class="[^"]*result\b[^"]*"|<!-- result -->|$)',
+        html_text,
+        re.DOTALL
+    )
+    for block in result_blocks:
+        title_match = re.search(r'<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
+        if not title_match:
+            continue
+        raw_url, raw_title = title_match.group(1), title_match.group(2)
+        clean_url = _clean_ddg_url(raw_url)
+        if not clean_url or not clean_url.startswith("http") or "duckduckgo.com" in clean_url:
+            continue
+        if clean_url in seen_urls:
+            continue
+
+        clean_title = re.sub(r'<[^>]+>', '', raw_title).strip()
+        snippet_match = re.search(r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>', block, re.DOTALL)
+        clean_snippet = ""
+        if snippet_match:
+            clean_snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip()
+
+        if not clean_snippet:
+            alt_snippet = re.search(r'class="[^"]*(?:snippet|body)[^"]*"[^>]*>(.*?)</div>', block, re.DOTALL)
+            if alt_snippet:
+                clean_snippet = re.sub(r'<[^>]+>', '', alt_snippet.group(1)).strip()
+
+        seen_urls.add(clean_url)
+        netloc = urllib.parse.urlparse(clean_url).netloc.replace("www.", "")
+        hits.append(
+            WebSearchHit(
+                title=clean_title or f"Result from {netloc}",
+                url=clean_url,
+                snippet=clean_snippet or f"Web search result from {netloc} for query '{query}'",
+                source=netloc or "web",
+            )
+        )
+        if len(hits) >= max_results:
+            break
+
+    return hits
+
+
 class DuckDuckGoHTMLParser(HTMLParser):
     """HTML parser for DuckDuckGo HTML search results."""
 
     def __init__(self):
         super().__init__()
         self.hits: list[WebSearchHit] = []
-        self._current_title: list[str] = []
-        self._current_snippet: list[str] = []
-        self._current_url: str = ""
-        self._in_title: bool = False
-        self._in_snippet: bool = False
 
-    def handle_starttag(self, tag: str, attrs: list) -> None:
-        attrs_dict = dict(attrs)
-        class_name = attrs_dict.get("class", "")
-        classes = class_name.split() if class_name else []
-
-        if tag == "a" and any(c in classes for c in ("result__a", "result__title", "result__url", "large")):
-            self._in_title = True
-            href = attrs_dict.get("href", "")
-            if href:
-                self._current_url = _clean_ddg_url(href)
-        elif tag == "a" and not self._current_url and attrs_dict.get("href"):
-            href = attrs_dict.get("href", "")
-            if "uddg=" in href:
-                self._current_url = _clean_ddg_url(href)
-        elif any(c in classes for c in ("result__snippet", "result__body")):
-            self._in_snippet = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "a" and self._in_title:
-            self._in_title = False
-        elif self._in_snippet:
-            self._in_snippet = False
-            title = "".join(self._current_title).strip()
-            snippet = "".join(self._current_snippet).strip()
-            clean_url = _clean_ddg_url(self._current_url)
-            if snippet and clean_url and clean_url.startswith("http") and "duckduckgo.com" not in clean_url:
-                netloc = urllib.parse.urlparse(clean_url).netloc.replace("www.", "")
-                self.hits.append(
-                    WebSearchHit(
-                        title=title or f"Result from {netloc}",
-                        url=clean_url,
-                        snippet=snippet,
-                        source=netloc or "web",
-                    )
-                )
-            self._current_title = []
-            self._current_snippet = []
-            self._current_url = ""
-
-    def handle_data(self, data: str) -> None:
-        if self._in_title:
-            self._current_title.append(data)
-        elif self._in_snippet:
-            self._current_snippet.append(data)
+    def feed(self, data: str) -> None:
+        super().feed(data)
+        self.hits = extract_duckduckgo_hits(data)
 
 
 class BackupSnippetParser(HTMLParser):

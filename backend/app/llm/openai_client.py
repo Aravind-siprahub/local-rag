@@ -440,3 +440,109 @@ class OmniRouteLLMClient(OpenAICompatibleLLMClient):
             completion_price_per_1m=completion_price_per_1m,
             client=client,
         )
+
+    async def _get_fallback_client(self):
+        settings = get_settings()
+        if settings.OPENROUTER_API_KEY and settings.OPENROUTER_API_KEY.strip():
+            return OpenRouterLLMClient(model=settings.OPENROUTER_MODEL)
+        if settings.NVIDIA_API_KEY and settings.NVIDIA_API_KEY.strip():
+            return NvidiaLLMClient(model=settings.NVIDIA_MODEL)
+        from app.llm.ollama_client import get_global_ollama_client
+        return get_global_ollama_client()
+
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+        response_format: str | None = None,
+        temperature: float | None = None,
+        images: list[bytes] | None = None,
+        model: str | None = None,
+        request_id: str | None = None,
+    ) -> LLMResponse:
+        try:
+            return await super().generate(
+                system_prompt,
+                user_prompt,
+                num_predict=num_predict,
+                response_format=response_format,
+                temperature=temperature,
+                images=images,
+                model=model,
+                request_id=request_id,
+            )
+        except (LLMAPIError, LLMClientError) as exc:
+            err_str = str(exc)
+            is_gateway_failure = (
+                "503" in err_str
+                or "ALL_TARGETS_SKIPPED" in err_str
+                or "502" in err_str
+                or "504" in err_str
+                or "Network connection error" in err_str
+                or "Connection refused" in err_str
+            )
+            if is_gateway_failure:
+                logger.warning("[OMNIROUTE FALLBACK] Gateway failed: %s. Falling back to direct provider.", exc)
+                fallback = await self._get_fallback_client()
+                if fallback and fallback is not self:
+                    return await fallback.generate(
+                        system_prompt,
+                        user_prompt,
+                        num_predict=num_predict,
+                        response_format=response_format,
+                        temperature=temperature,
+                        images=images,
+                        request_id=request_id,
+                    )
+            raise
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        num_predict: int | None = None,
+        temperature: float | None = None,
+        images: list[bytes] | None = None,
+        model: str | None = None,
+        request_id: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        try:
+            async for token in super().generate_stream(
+                system_prompt,
+                user_prompt,
+                num_predict=num_predict,
+                temperature=temperature,
+                images=images,
+                model=model,
+                request_id=request_id,
+            ):
+                yield token
+        except (LLMAPIError, LLMClientError) as exc:
+            err_str = str(exc)
+            is_gateway_failure = (
+                "503" in err_str
+                or "ALL_TARGETS_SKIPPED" in err_str
+                or "502" in err_str
+                or "504" in err_str
+                or "Network connection error" in err_str
+                or "Connection refused" in err_str
+            )
+            if is_gateway_failure:
+                logger.warning("[OMNIROUTE FALLBACK stream] Gateway failed: %s. Falling back to direct provider.", exc)
+                fallback = await self._get_fallback_client()
+                if fallback and fallback is not self:
+                    async for token in fallback.generate_stream(
+                        system_prompt,
+                        user_prompt,
+                        num_predict=num_predict,
+                        temperature=temperature,
+                        images=images,
+                        request_id=request_id,
+                    ):
+                        yield token
+                    return
+            raise
+

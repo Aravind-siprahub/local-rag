@@ -518,9 +518,13 @@ async def ask_chat_stream(
     )
 
     async def _stream_with_cleanup():
+        import json
         try:
             async for item in generator:
                 yield item
+        except Exception as exc:
+            logger.error("[CHAT STREAM ERROR] request_id=%s error=%s", request_id, exc, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
         finally:
             if hasattr(rag, "close"):
                 try:

@@ -621,12 +621,14 @@ def _is_datetime_query(lower: str) -> bool:
 
     # Strict regex matches for current clock/calendar queries
     current_clock_patterns = (
-        r"\b(?:what(?:\s+is|\s*'s)?\s+(?:today(?:'s)?\s+date|the\s+date\s+today|current\s+date|the\s+current\s+date))\b",
+        r"\b(?:what(?:\s+is|\s*'s)?|tell\s+me|show\s+me)?\s*(?:today(?:'s)?\s+date|the\s+date\s+today|the\s+date|current\s+date|the\s+current\s+date)\b",
         r"\b(?:what\s+date\s+is\s+it(?:\s+today)?)\b",
-        r"\b(?:what(?:\s+is|\s*'s)?\s+(?:the\s+time(?:\s+now)?|current\s+time|the\s+current\s+time|time\s+right\s+now))\b",
+        r"\b(?:what(?:\s+is|\s*'s)?|tell\s+me|show\s+me)?\s*(?:the\s+time(?:\s+now)?|current\s+time|the\s+current\s+time|time\s+right\s+now)\b",
         r"\b(?:what\s+time\s+is\s+it(?:\s+now)?)\b",
         r"\b(?:what\s+day\s+is\s+(?:it\s+)?today)\b",
         r"\b(?:today(?:'s)?\s+(?:date|day|time))\b",
+        r"^(?:what\s+is\s+)?today(?:'s)?\s+date\??$",
+        r"^(?:what\s+is\s+)?current\s+(?:date|time)\??$",
     )
     return any(re.search(pat, text, re.IGNORECASE) for pat in current_clock_patterns)
 
@@ -662,6 +664,48 @@ _CURRENT_INFO_CONCEPTS = (
     "since yesterday",
     "compared with last week",
     "what changed",
+    "current minister",
+    "current ministers",
+    "current government official",
+    "current government officials",
+    "latest developments",
+    "latest updates",
+    "latest events",
+    "today's information",
+    "today's events",
+    "today's news",
+    "happening in",
+    "happening today",
+    "current prices",
+    "current price",
+    "current rate",
+    "current rates",
+    "market rate",
+    "market rates",
+    "market price",
+    "market prices",
+    "gold rate",
+    "gold price",
+    "petrol rate",
+    "petrol price",
+    "diesel rate",
+    "diesel price",
+    "fuel rate",
+    "fuel price",
+    "silver rate",
+    "silver price",
+    "commodity rate",
+    "commodity price",
+    "exchange rate",
+    "exchange rates",
+    "dollar rate",
+    "rupee rate",
+    "stock price",
+    "share price",
+    "as of 20",
+    "as of today",
+    "as of now",
+    "who is currently",
 )
 
 
@@ -676,6 +720,13 @@ _WEB_SEARCH_REGEX = re.compile(
     r"search\s+(?:the\s+)?(?:web|online|internet|google|github|reddit|documentation|docs|bing|duckduckgo|repo|repository|live)|"
     r"find\s+(?:\w+\s+){0,2}(?:online|information\s+(?:about|on)?|info\s+(?:about|on)?|on\s+(?:the\s+)?(?:web|internet|google|github|reddit|documentation))|"
     r"verify(?:\s+\w+){0,4}\s+(?:online|web|claim|source|true|false)|"
+    r"who\s+is\s+(?:the\s+|a\s+)?(?:current\s+|new\s+|present\s+)?(?:\w+\s+){0,3}(?:minister|cm|chief\s+minister|pm|prime\s+minister|president|governor|mayor|ceo|leader|chancellor|secretary|director|commissioner|attorney\s+general|chief\s+justice|coach|captain|chairman|chairperson|speaker)\b|"
+    r"who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?(?:ministers?|government\s+officials?|leaders?|cabinet)\b|"
+    r"who\s+(?:currently\s+)?(?:holds|leads|heads|won|is\s+winning)\b|"
+    r"what\s+(?:is\s+happening|happened)\s+(?:in|today|now)\b|"
+    r"(?:what\s+is\s+(?:the\s+)?|current\s+|latest\s+)?(?:\w+\s+){0,3}(?:price|prices|rate|rates|cost|costs|tariff|fare)\s+(?:of|for|in)\b|"
+    r"(?:gold|silver|petrol|diesel|fuel|cng|lpg|gas|crude\s+oil|commodity|commodities|cryptocurrency|crypto|bitcoin|ethereum|stock|stocks|share|shares|nifty|sensex|dollar|usd|inr|rupee|forex|inflation)\s+(?:price|prices|rate|rates|cost|costs|trend|trends|value|today)\b|"
+    r"what\s+(?:is|are)\s+(?:the\s+)?(?:gold|silver|petrol|diesel|fuel|cng|lpg|gas|stock|share|crypto|bitcoin)\s+(?:and\s+\w+\s+)?(?:rates?|prices?|costs?)\b|"
     r"real-?time|live\s+(?:search|info|data|price|score|weather)|"
     r"latest|recent|today|"
     r"last\s+(?:1\s+hour|hour|2\s+hours|24\s+hours|48\s+hours|week|month)|"
@@ -708,11 +759,14 @@ def _is_web_query(text: str, lower: str) -> bool:
         "search the web", "search web", "web search", "search online", "search internet",
         "find online", "look up online", "search for", "google", "browse",
         "latest news", "current version", "what is the latest", "who is the current",
+        "who is a cm", "who is the cm", "who is cm", "who is the pm", "who is pm",
+        "who is the prime minister", "who is prime minister", "who is chief minister", "who is the chief minister",
+        "who is the president", "who is president",
         "latest python", "latest react", "latest version", "current react",
         "look up", "lookup", "search github", "find on github", "search reddit",
         "search documentation", "verify online", "check online", "find information about",
         "find information on", "find public information", "public information", "search google", "search internet",
-        "realtime", "real-time", "live search", "use web search only", "web search only",
+        "realtime", "real-time", "real time", "live search", "use web search only", "web search only",
         "last hour", "last 1 hour", "past hour", "last 24 hours", "what happened in", "since yesterday", "what changed"
     )
     if any(phrase in lower for phrase in web_phrases):
@@ -721,8 +775,11 @@ def _is_web_query(text: str, lower: str) -> bool:
     # Look for keywords indicating real-time info or search queries
     web_keywords = {
         "weather", "tomorrow", "yesterday",
-        "news", "stock", "price", "good friday",
-        "forecast", "temperature", "temp", "latest", "recent", "who won", "today"
+        "news", "stock", "price", "prices", "rate", "rates", "good friday",
+        "forecast", "temperature", "temp", "latest", "recent", "who won", "today",
+        "chief minister", "prime minister", "real-time", "realtime",
+        "minister", "ministers", "government", "official", "officials", "developments", "happening",
+        "petrol", "diesel", "fuel", "gold", "silver", "cng", "lpg", "commodity", "commodities"
     }
     if any(kw in lower for kw in web_keywords):
         return True
