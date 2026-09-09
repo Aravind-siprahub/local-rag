@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter } from 'react-router-dom'
 
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthLayout } from '@/layouts/AuthLayout'
@@ -6,6 +6,7 @@ import { Login } from '@/features/auth/pages/Login'
 import { Signup } from '@/features/auth/pages/Signup'
 import { ForgotPassword } from '@/features/auth/pages/ForgotPassword'
 import {
+  DashboardPage,
   DocumentsPage,
   NotFoundPage,
   ChatPage,
@@ -36,23 +37,19 @@ export const appRouter = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <Navigate to={ROUTES.chat} replace />,
+        element: <DashboardPage />,
+      },
+      {
+        path: 'dashboard',
+        element: <DashboardPage />,
       },
       {
         path: ROUTES.documents.slice(1),
-        element: (
-          <ProtectedRoute requireAdmin>
-            <DocumentsPage />
-          </ProtectedRoute>
-        ),
+        element: <DocumentsPage />,
       },
       {
         path: ROUTES.upload.slice(1),
-        element: (
-          <ProtectedRoute requireAdmin>
-            <UploadPage />
-          </ProtectedRoute>
-        ),
+        element: <UploadPage />,
       },
       {
         path: ROUTES.chat.slice(1),

@@ -82,7 +82,7 @@ async def get_current_user(
     return user
 
 
-UPLOAD_ALLOWED_ROLES: set[str] = {"admin"}
+UPLOAD_ALLOWED_ROLES: set[str] = {"admin", "member", "user", "hr"}
 
 
 def can_upload_documents(user: User | None) -> bool:

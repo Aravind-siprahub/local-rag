@@ -36,50 +36,56 @@
 }
 
 :root {
-  --background: 214 32% 98%;
-  --foreground: 215 28% 12%;
+  --background: 0 0% 97%;
+  --foreground: 0 0% 10%;
   --card: 0 0% 100%;
-  --card-foreground: 215 28% 12%;
+  --card-foreground: 0 0% 10%;
   --popover: 0 0% 100%;
-  --popover-foreground: 215 28% 12%;
-  --primary: 215 88% 54%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 215 88% 54%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 214 24% 92%;
-  --muted-foreground: 215 16% 45%;
-  --accent: 214 24% 92%;
-  --accent-foreground: 215 28% 12%;
+  --popover-foreground: 0 0% 10%;
+  /* Sipra Red: #ce2124 */
+  --primary: 359 72% 47%;
+  --primary-foreground: 0 0% 98%;
+  /* Sipra Dark Charcoal Gray: #4E4E4E */
+  --secondary: 0 0% 31%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 93%;
+  --muted-foreground: 0 0% 40%;
+  /* Sipra Secondary / Accent Gray: #5C5C5C */
+  --accent: 0 0% 36%;
+  --accent-foreground: 0 0% 98%;
   --destructive: 0 72% 51%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 214 20% 88%;
-  --input: 214 20% 88%;
-  --ring: 215 88% 54%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 85%;
+  --input: 0 0% 85%;
+  --ring: 359 72% 47%;
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
   --radius: 0.5rem;
 }
 
 .dark {
-  --background: 215 28% 6%;
-  --foreground: 210 40% 98%;
-  --card: 215 24% 10%;
-  --card-foreground: 210 40% 98%;
-  --popover: 215 24% 10%;
-  --popover-foreground: 210 40% 98%;
-  --primary: 215 88% 54%;
-  --primary-foreground: 215 28% 6%;
-  --secondary: 215 88% 54%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 215 18% 14%;
-  --muted-foreground: 215 16% 65%;
-  --accent: 215 18% 14%;
-  --accent-foreground: 210 40% 98%;
+  --background: 0 0% 8%;
+  --foreground: 0 0% 95%;
+  --card: 0 0% 12%;
+  --card-foreground: 0 0% 95%;
+  --popover: 0 0% 12%;
+  --popover-foreground: 0 0% 95%;
+  /* Sipra Red: #ce2124 */
+  --primary: 359 72% 47%;
+  --primary-foreground: 0 0% 98%;
+  /* Sipra Dark Charcoal Gray: #4E4E4E */
+  --secondary: 0 0% 31%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 16%;
+  --muted-foreground: 0 0% 60%;
+  /* Sipra Secondary / Accent Gray: #5C5C5C */
+  --accent: 0 0% 36%;
+  --accent-foreground: 0 0% 98%;
   --destructive: 0 72% 51%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 215 16% 16%;
-  --input: 215 16% 16%;
-  --ring: 215 88% 54%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 0 0% 20%;
+  --input: 0 0% 20%;
+  --ring: 359 72% 47%;
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
 }

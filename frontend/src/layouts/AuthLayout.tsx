@@ -71,21 +71,7 @@ export const AuthLayout: React.FC = () => {
           </div>
         </div>
 
-        {/* Testimonial Quote */}
-        <div className="pt-6 border-t border-border z-10">
-          <blockquote className="text-xs text-muted-foreground italic">
-            "Talk to My Data cut our document research time by 80%. We can search across 5,000+ deployment guides instantly."
-          </blockquote>
-          <div className="flex items-center gap-2.5 mt-3">
-            <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">
-              A
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-foreground">Aravind S.</p>
-              <p className="text-[10px] text-muted-foreground">Lead AI Solutions Engineer</p>
-            </div>
-          </div>
-        </div>
+
       </div>
     </div>
   )

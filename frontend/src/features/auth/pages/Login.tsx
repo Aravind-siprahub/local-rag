@@ -203,10 +203,10 @@ export const Login: React.FC = () => {
     <div className="w-full">
       {/* ── Logo ── */}
       <div className="flex items-center gap-3 mb-8">
-        <div className="w-10 h-10 rounded-xl bg-linear-to-tr from-indigo-500 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/30">
-          <Database className="w-5 h-5 text-white" />
+        <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/25">
+          <Database className="w-5 h-5 text-primary-foreground" />
         </div>
-        <span className="text-xl font-bold tracking-tight text-white font-display">
+        <span className="text-xl font-bold tracking-tight text-foreground font-display">
           Talk to My Data
         </span>
       </div>
@@ -370,7 +370,7 @@ export const Login: React.FC = () => {
         {step === '2fa_verify' && (
           <form onSubmit={handle2FAVerifySubmit} className="space-y-5" noValidate>
             <div className="flex items-center justify-center p-3 rounded-xl bg-primary/10 border border-primary/20 text-primary mb-2">
-              <ShieldCheck className="w-8 h-8 mr-2 text-indigo-400" />
+              <ShieldCheck className="w-8 h-8 mr-2 text-primary" />
               <span className="text-sm font-medium text-foreground">
                 {isBackupCodeMode ? 'Recovery Code Verification' : 'Authenticator App Verification'}
               </span>

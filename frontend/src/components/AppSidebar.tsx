@@ -1,5 +1,6 @@
 import {
   FileTextIcon,
+  LayoutDashboardIcon,
   LogOutIcon,
   MessageSquareIcon,
   SettingsIcon,
@@ -13,24 +14,21 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ROUTES } from '@/routes/paths'
 
-const navItems = [
+const mainNavItems = [
+  { to: ROUTES.dashboard, label: 'Dashboard', icon: LayoutDashboardIcon },
   { to: ROUTES.chat, label: 'Chat', icon: MessageSquareIcon },
-  { to: ROUTES.documents, label: 'Documents', icon: FileTextIcon, adminOnly: true },
-  { to: ROUTES.upload, label: 'Upload', icon: UploadIcon, adminOnly: true },
-  { to: ROUTES.settings, label: 'Settings', icon: SettingsIcon },
+  { to: ROUTES.documents, label: 'Documents', icon: FileTextIcon },
+  { to: ROUTES.upload, label: 'Upload', icon: UploadIcon },
 ] as const
 
 export function AppSidebar() {
   const navigate = useNavigate()
   const { user, logout } = useAuth()
-  const isAdmin = user?.role?.toLowerCase() === 'admin'
 
   const handleLogout = () => {
     logout()
     navigate('/login', { replace: true })
   }
-
-  const visibleNavItems = navItems.filter((item) => !('adminOnly' in item && item.adminOnly) || isAdmin)
 
   return (
     <aside className="glass-panel flex h-full w-full flex-col gap-5 p-4 lg:w-56">
@@ -43,24 +41,45 @@ export function AppSidebar() {
         </h1>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-1">
-        {visibleNavItems.map(({ to, label, icon: Icon }) => (
+      <nav className="flex flex-1 flex-col justify-between gap-1">
+        <div className="flex flex-col gap-1">
+          {mainNavItems.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === ROUTES.dashboard}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 ease-in-out',
+                  isActive
+                    ? 'bg-primary/10 text-primary font-semibold'
+                    : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+                )
+              }
+            >
+              <Icon className="size-4 shrink-0 transition-transform duration-200 group-hover:scale-105" />
+              {label}
+            </NavLink>
+          ))}
+        </div>
+
+        {/* Settings button pinned to the bottom */}
+        <div className="flex flex-col gap-1 pt-2">
           <NavLink
-            key={to}
-            to={to}
+            to={ROUTES.settings}
             className={({ isActive }) =>
               cn(
                 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 ease-in-out',
                 isActive
-                  ? 'bg-primary/10 text-primary'
+                  ? 'bg-primary/10 text-primary font-semibold'
                   : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground',
               )
             }
           >
-            <Icon className="size-4 shrink-0 transition-transform duration-200 group-hover:scale-105" />
-            {label}
+            <SettingsIcon className="size-4 shrink-0 transition-transform duration-200 group-hover:scale-105" />
+            Settings
           </NavLink>
-        ))}
+        </div>
       </nav>
 
       {/* User Profile & Sign Out Section */}

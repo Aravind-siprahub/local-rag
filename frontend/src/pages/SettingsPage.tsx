@@ -31,6 +31,14 @@ export function SettingsPage() {
   const userRole = (authUser?.role || (activeUser?.role as string) || 'member').toLowerCase()
   const isAdmin = userRole === 'admin'
 
+  // Guard: if non-admin lands on an admin-only section, redirect to general
+  useEffect(() => {
+    const adminOnlySections: SettingsSectionId[] = ['ai', 'retrieval', 'embeddings', 'system']
+    if (!isAdmin && adminOnlySections.includes(activeSection)) {
+      setActiveSection('general')
+    }
+  }, [isAdmin, activeSection])
+
   // Top right corner Edit Mode State per section
   const [isEditingSection, setIsEditingSection] = useState<Record<string, boolean>>({})
 
@@ -208,7 +216,7 @@ export function SettingsPage() {
 
       <div className="flex flex-col lg:flex-row gap-8">
         {/* Navigation Sidebar */}
-        <SettingsSidebar activeSection={activeSection} onSelectSection={setActiveSection} />
+        <SettingsSidebar activeSection={activeSection} onSelectSection={setActiveSection} isAdmin={isAdmin} />
 
         {/* Settings Content Area */}
         <main className="flex-1 space-y-8 min-w-0">
@@ -265,17 +273,12 @@ export function SettingsPage() {
                     )
                   }
                 />
-                <InfoRow
-                  label="User ID"
-                  value={displayUser?.id || 'system-admin-uuid'}
-                  copyable={Boolean(displayUser?.id)}
-                />
               </SettingCard>
             </SettingsSection>
           ) : null}
 
           {/* AI SECTION */}
-          {activeSection === 'ai' ? (
+          {activeSection === 'ai' && isAdmin ? (
             <SettingsSection
               id="ai"
               title="AI & LLM Configuration"
@@ -425,7 +428,7 @@ export function SettingsPage() {
           ) : null}
 
           {/* RETRIEVAL SECTION */}
-          {activeSection === 'retrieval' ? (
+          {activeSection === 'retrieval' && isAdmin ? (
             <SettingsSection
               id="retrieval"
               title="Retrieval & Vector Search"
@@ -589,7 +592,7 @@ export function SettingsPage() {
           ) : null}
 
           {/* EMBEDDINGS SECTION */}
-          {activeSection === 'embeddings' ? (
+          {activeSection === 'embeddings' && isAdmin ? (
             <SettingsSection
               id="embeddings"
               title="Embeddings Configuration"
@@ -766,7 +769,7 @@ export function SettingsPage() {
           ) : null}
 
           {/* SYSTEM SECTION */}
-          {activeSection === 'system' ? (
+          {activeSection === 'system' && isAdmin ? (
             <SettingsSection
               id="system"
               title="System & Infrastructure"

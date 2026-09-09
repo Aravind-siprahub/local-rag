@@ -1,5 +1,6 @@
 export const ROUTES = {
   dashboard: '/',
+  dashboardAlias: '/dashboard',
   login: '/login',
   signup: '/signup',
   forgotPassword: '/forgot-password',

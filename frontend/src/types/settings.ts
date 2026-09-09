@@ -27,4 +27,5 @@ export interface SettingsNavItem {
   id: SettingsSectionId
   label: string
   description: string
+  adminOnly?: boolean
 }

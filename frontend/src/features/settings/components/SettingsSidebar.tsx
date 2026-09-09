@@ -22,18 +22,21 @@ export const SETTINGS_NAV_ITEMS: (SettingsNavItem & { icon: React.ComponentType<
     label: 'AI & LLM',
     description: 'Chat model, provider & inference parameters',
     icon: BotIcon,
+    adminOnly: true,
   },
   {
     id: 'retrieval',
     label: 'Retrieval',
     description: 'Vector search strategy, Top-K & chunk sizes',
     icon: SearchIcon,
+    adminOnly: true,
   },
   {
     id: 'embeddings',
     label: 'Embeddings',
     description: 'Embedding model, dimensions & pgvector status',
     icon: LayersIcon,
+    adminOnly: true,
   },
   {
     id: 'appearance',
@@ -46,6 +49,7 @@ export const SETTINGS_NAV_ITEMS: (SettingsNavItem & { icon: React.ComponentType<
     label: 'System & Services',
     description: 'PostgreSQL, Ollama & file storage health',
     icon: ServerIcon,
+    adminOnly: true,
   },
   {
     id: 'about',
@@ -58,9 +62,12 @@ export const SETTINGS_NAV_ITEMS: (SettingsNavItem & { icon: React.ComponentType<
 interface SettingsSidebarProps {
   activeSection: SettingsSectionId
   onSelectSection: (id: SettingsSectionId) => void
+  isAdmin?: boolean
 }
 
-export function SettingsSidebar({ activeSection, onSelectSection }: SettingsSidebarProps) {
+export function SettingsSidebar({ activeSection, onSelectSection, isAdmin = false }: SettingsSidebarProps) {
+  const visibleNavItems = SETTINGS_NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin)
+
   return (
     <nav aria-label="Settings navigation" className="w-full lg:w-64 shrink-0">
       {/* Desktop Vertical Navigation */}
@@ -68,7 +75,7 @@ export function SettingsSidebar({ activeSection, onSelectSection }: SettingsSide
         <h3 className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
           Settings Categories
         </h3>
-        {SETTINGS_NAV_ITEMS.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon
           const isActive = activeSection === item.id
 
@@ -97,7 +104,7 @@ export function SettingsSidebar({ activeSection, onSelectSection }: SettingsSide
 
       {/* Tablet & Mobile Horizontal Tabs */}
       <div className="lg:hidden flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-border/40 scrollbar-none">
-        {SETTINGS_NAV_ITEMS.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon
           const isActive = activeSection === item.id
 

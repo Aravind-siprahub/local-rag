@@ -13,14 +13,10 @@ import {
   DocumentsToolbar,
 } from '@/features/documents/components'
 import { useDocumentsList } from '@/features/documents/hooks'
-import { useAuth } from '@/features/auth/hooks/authHooks'
 import type { DocumentListItem } from '@/types'
 import { filterDocumentsBySearch } from '@/utils'
 
 export function DocumentsPage() {
-  const { user } = useAuth()
-  const isAdmin = user?.role?.toLowerCase() === 'admin'
-
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DocumentListItem | null>(null)
@@ -56,26 +52,6 @@ export function DocumentsPage() {
       setSelectedDocumentId(null)
     }
     void documentsQuery.refetch()
-  }
-
-  if (user && !isAdmin) {
-    return (
-      <div className="space-y-8 max-w-7xl mx-auto pb-12">
-        <TopBar
-          title="Documents"
-          description="Browse uploaded knowledge base files, track processing status, and manage document metadata."
-        />
-        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-8 text-center space-y-3">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-destructive/20 text-destructive text-xl font-bold">
-            !
-          </div>
-          <h2 className="text-xl font-bold text-foreground">Access Restricted</h2>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            You do not have permission to view or manage documents. Only administrators can access document management.
-          </p>
-        </div>
-      </div>
-    )
   }
 
   return (
